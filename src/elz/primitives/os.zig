@@ -14,9 +14,11 @@ pub fn getenv(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 
     const name = name_val.string;
 
-    // Get environment variable using POSIX API
-    const result = std.posix.getenv(name);
-    if (result) |value| {
+    // Get environment variable using cross-platform API
+    var env_map = std.process.getEnvMap(env.allocator) catch return ElzError.OutOfMemory;
+    defer env_map.deinit();
+
+    if (env_map.get(name)) |value| {
         const duped = env.allocator.dupe(u8, value) catch return ElzError.OutOfMemory;
         return core.Value{ .string = duped };
     } else {

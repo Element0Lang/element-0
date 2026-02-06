@@ -36,13 +36,9 @@ jobs:
             artifact_name: elz-linux-aarch64.tar.gz
             can_test: false  # Cross-compiled, can't run on x86_64
           - os: macos-latest
-            target: aarch64-macos
+            target: ""  # Empty = native build (uses system headers)
             artifact_name: elz-macos-aarch64.tar.gz
             can_test: true  # macos-latest is ARM64
-          - os: macos-latest
-            target: x86_64-macos
-            artifact_name: elz-macos-x86_64.tar.gz
-            can_test: false  # Cross-compiled on ARM64 runner
           - os: windows-latest
             target: x86_64-windows-msvc
             artifact_name: elz-windows-x86_64.zip
@@ -64,7 +60,13 @@ jobs:
           version: "0.15.2"
 
       - name: Build the binary
-        run: zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
+          else
+            zig build -Doptimize=ReleaseSmall
+          fi
+        shell: bash
 
       - name: Verify built binary exists (Unix)
         if: runner.os != 'Windows'
@@ -102,7 +104,10 @@ jobs:
       - name: Prepare release artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          RELEASE_DIR="elz-${{ matrix.target }}"
+          # Extract release dir name from artifact name (e.g., elz-linux-x86_64.tar.gz -> elz-linux-x86_64)
+          RELEASE_DIR="${{ matrix.artifact_name }}"
+          RELEASE_DIR="${RELEASE_DIR%.tar.gz}"
+          RELEASE_DIR="${RELEASE_DIR%.zip}"
           mkdir -p "$RELEASE_DIR/bin"
           mkdir -p "$RELEASE_DIR/stdlib"
           mkdir -p "$RELEASE_DIR/examples"
@@ -126,7 +131,8 @@ jobs:
       - name: Prepare release artifact (Windows)
         if: runner.os == 'Windows'
         run: |
-          $RELEASE_DIR = "elz-${{ matrix.target }}"
+          # Extract release dir name from artifact name
+          $RELEASE_DIR = "${{ matrix.artifact_name }}" -replace '\.zip$', '' -replace '\.tar\.gz$', ''
           New-Item -ItemType Directory -Path "$RELEASE_DIR\bin" -Force | Out-Null
           New-Item -ItemType Directory -Path "$RELEASE_DIR\stdlib" -Force | Out-Null
           New-Item -ItemType Directory -Path "$RELEASE_DIR\examples" -Force | Out-Null
