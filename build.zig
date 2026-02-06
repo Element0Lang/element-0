@@ -31,25 +31,29 @@ pub fn build(b: *std.Build) void {
             cflags.append(b.allocator, "-DNDEBUG") catch unreachable;
         }
 
-        // Add base GC source files
+        // Add base GC source files (matching official bdwgc build)
         src_files.appendSlice(b.allocator, &.{
-            "alloc.c",    "reclaim.c", "allchblk.c", "misc.c",     "mach_dep.c", "os_dep.c",
-            "mark_rts.c", "headers.c", "mark.c",     "blacklst.c", "finalize.c", "new_hblk.c",
-            "dbg_mlc.c",  "malloc.c",  "dyn_load.c", "typd_mlc.c", "ptr_chck.c", "mallocx.c",
+            "allchblk.c", "alloc.c",    "blacklst.c", "dbg_mlc.c",  "dyn_load.c",
+            "finalize.c", "headers.c",  "mach_dep.c", "malloc.c",   "mallocx.c",
+            "mark.c",     "mark_rts.c", "misc.c",     "new_hblk.c", "obj_map.c",
+            "os_dep.c",   "ptr_chck.c", "reclaim.c",  "typd_mlc.c",
         }) catch unreachable;
 
         // Add platform-specific source files for threading
-        switch (target.query.os_tag orelse .linux) {
+        // Note: Use target.result.os.tag (resolved target) instead of target.query.os_tag
+        // because query.os_tag is null for native builds
+        const os_tag = target.result.os.tag;
+        switch (os_tag) {
             .windows => {
                 cflags.append(b.allocator, "-D_WIN32") catch unreachable;
-                src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c" }) catch unreachable;
+                src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
                 gc.linkSystemLibrary("user32");
             },
             .macos => {
-                cflags.append(b.allocator, "-D_DARWIN_C_SOURCE") catch unreachable;
-                cflags.append(b.allocator, "-DMISSING_MACH_O_GETSECT_H") catch unreachable;
-                cflags.append(b.allocator, "-DNO_MPROTECT_VDB") catch unreachable;
-                src_files.appendSlice(b.allocator, &.{ "darwin_stop_world.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
+                // Required flags for POSIX/Darwin threading
+                cflags.append(b.allocator, "-D_REENTRANT") catch unreachable;
+                // Add threading source files (matching official bdwgc build)
+                src_files.appendSlice(b.allocator, &.{ "gc_dlopen.c", "pthread_start.c", "pthread_support.c", "darwin_stop_world.c" }) catch unreachable;
             },
             else => { // Assume other POSIX-like systems
                 src_files.appendSlice(b.allocator, &.{ "pthread_stop_world.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;

@@ -11,6 +11,8 @@ const process = @import("./primitives/process.zig");
 const vectors = @import("./primitives/vectors.zig");
 const hashmaps = @import("./primitives/hashmaps.zig");
 const ports = @import("./primitives/ports.zig");
+const os = @import("./primitives/os.zig");
+const datetime = @import("./primitives/datetime.zig");
 const interpreter = @import("interpreter.zig");
 
 /// Populates the interpreter's root environment with mathematical primitive functions.
@@ -156,6 +158,30 @@ pub fn populate_modules(interp: *interpreter.Interpreter) !void {
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_process(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "exit", core.Value{ .procedure = process.exit });
+}
+
+/// Populates the interpreter's root environment with OS/filesystem primitive functions.
+///
+/// Parameters:
+/// - `interp`: A pointer to the interpreter instance.
+pub fn populate_os(interp: *interpreter.Interpreter) !void {
+    try interp.root_env.set(interp, "getenv", core.Value{ .procedure = os.getenv });
+    try interp.root_env.set(interp, "file-exists?", core.Value{ .procedure = os.file_exists });
+    try interp.root_env.set(interp, "delete-file", core.Value{ .procedure = os.delete_file });
+    try interp.root_env.set(interp, "current-directory", core.Value{ .procedure = os.current_directory });
+    try interp.root_env.set(interp, "directory-list", core.Value{ .procedure = os.directory_list });
+    try interp.root_env.set(interp, "rename-file", core.Value{ .procedure = os.rename_file });
+}
+
+/// Populates the interpreter's root environment with date/time primitive functions.
+///
+/// Parameters:
+/// - `interp`: A pointer to the interpreter instance.
+pub fn populate_datetime(interp: *interpreter.Interpreter) !void {
+    try interp.root_env.set(interp, "current-time", core.Value{ .procedure = datetime.current_time });
+    try interp.root_env.set(interp, "current-time-ms", core.Value{ .procedure = datetime.current_time_ms });
+    try interp.root_env.set(interp, "time->components", core.Value{ .procedure = datetime.time_to_components });
+    try interp.root_env.set(interp, "sleep-ms", core.Value{ .procedure = datetime.sleep_ms });
 }
 
 /// Populates the interpreter's root environment with vector manipulation primitive functions.

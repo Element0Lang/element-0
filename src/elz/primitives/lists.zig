@@ -317,56 +317,55 @@ pub fn set_cdr(_: *interpreter.Interpreter, env: *core.Environment, args: core.V
 }
 
 test "list primitives" {
-    const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test list
-    var args = core.ValueList.init(allocator);
-    try args.append(Value{ .number = 1 });
-    try args.append(Value{ .number = 2 });
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .number = 1 });
+    try args.append(interp.allocator, Value{ .number = 2 });
     const list_val = try list(&interp, interp.root_env, args, &fuel);
     try testing.expect(list_val.pair.car == Value{ .number = 1 });
     try testing.expect(list_val.pair.cdr.pair.car == Value{ .number = 2 });
 
     // Test cons
     args.clearRetainingCapacity();
-    try args.append(Value{ .number = 0 });
-    try args.append(list_val);
+    try args.append(interp.allocator, Value{ .number = 0 });
+    try args.append(interp.allocator, list_val);
     const new_list = try cons(&interp, interp.root_env, args, &fuel);
     try testing.expect(new_list.pair.car == Value{ .number = 0 });
 
     // Test car
     args.clearRetainingCapacity();
-    try args.append(new_list);
+    try args.append(interp.allocator, new_list);
     const car_val = try car(&interp, interp.root_env, args, &fuel);
     try testing.expect(car_val == Value{ .number = 0 });
 
     // Test cdr
     args.clearRetainingCapacity();
-    try args.append(new_list);
+    try args.append(interp.allocator, new_list);
     const cdr_val = try cdr(&interp, interp.root_env, args, &fuel);
     try testing.expect(cdr_val.pair.car == Value{ .number = 1 });
 
     // Test list-length
     args.clearRetainingCapacity();
-    try args.append(new_list);
+    try args.append(interp.allocator, new_list);
     const len_val = try list_length(&interp, interp.root_env, args, &fuel);
     try testing.expect(len_val == Value{ .number = 3 });
 
     // Test reverse
     args.clearRetainingCapacity();
-    try args.append(list_val);
+    try args.append(interp.allocator, list_val);
     const reversed_list = try reverse(&interp, interp.root_env, args, &fuel);
     try testing.expect(reversed_list.pair.car == Value{ .number = 2 });
     try testing.expect(reversed_list.pair.cdr.pair.car == Value{ .number = 1 });
 
     // Test append
     args.clearRetainingCapacity();
-    try args.append(list_val);
-    try args.append(reversed_list);
+    try args.append(interp.allocator, list_val);
+    try args.append(interp.allocator, reversed_list);
     const appended_list = try append(&interp, interp.root_env, args, &fuel);
     try testing.expect(appended_list.pair.car == Value{ .number = 1 });
     try testing.expect(appended_list.pair.cdr.pair.car == Value{ .number = 2 });
@@ -377,8 +376,8 @@ test "list primitives" {
     const source = "(lambda (x) (* x 2))";
     const proc_val = try eval.eval(&interp, &try interp.read(source), interp.root_env, &fuel);
     args.clearRetainingCapacity();
-    try args.append(proc_val);
-    try args.append(list_val);
+    try args.append(interp.allocator, proc_val);
+    try args.append(interp.allocator, list_val);
     const mapped_list = try map(&interp, interp.root_env, args, &fuel);
     try testing.expect(mapped_list.pair.car == Value{ .number = 2 });
     try testing.expect(mapped_list.pair.cdr.pair.car == Value{ .number = 4 });

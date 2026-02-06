@@ -167,12 +167,13 @@ pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args:
 test "vector primitives" {
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
+    var fuel: u64 = 1000;
 
     // Test make-vector
     var args = core.ValueList.init(interp.allocator);
     try args.append(interp.allocator, Value{ .number = 3 });
     try args.append(interp.allocator, Value{ .number = 42 });
-    const result = try make_vector(&interp, interp.root_env, args, undefined);
+    const result = try make_vector(&interp, interp.root_env, args, &fuel);
     try std.testing.expect(result == .vector);
     try std.testing.expectEqual(@as(usize, 3), result.vector.items.len);
     try std.testing.expectEqual(@as(f64, 42), result.vector.items[0].number);
@@ -180,7 +181,7 @@ test "vector primitives" {
     // Test vector-length
     args = core.ValueList.init(interp.allocator);
     try args.append(interp.allocator, result);
-    const len_result = try vector_length(&interp, interp.root_env, args, undefined);
+    const len_result = try vector_length(&interp, interp.root_env, args, &fuel);
     try std.testing.expect(len_result == .number);
     try std.testing.expectEqual(@as(f64, 3), len_result.number);
 }

@@ -13,7 +13,7 @@ pub fn open_input_file(_: *interpreter.Interpreter, env: *core.Environment, args
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openInput(filename_val.string) catch return ElzError.FileNotFound;
+    port.* = core.Port.openInput(env.allocator, filename_val.string) catch return ElzError.FileNotFound;
 
     return Value{ .port = port };
 }
@@ -27,7 +27,7 @@ pub fn open_output_file(_: *interpreter.Interpreter, env: *core.Environment, arg
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openOutput(filename_val.string) catch return ElzError.FileNotWritable;
+    port.* = core.Port.openOutput(env.allocator, filename_val.string) catch return ElzError.FileNotWritable;
 
     return Value{ .port = port };
 }
@@ -139,15 +139,13 @@ pub fn eof_object_p(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 
 test "port primitives" {
     const testing = std.testing;
-    const allocator = std.testing.allocator;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test is_port with non-port value
-    var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
-    try args.append(allocator, Value{ .number = 42 });
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .number = 42 });
 
     const is_port_result = try is_port(&interp, interp.root_env, args, &fuel);
     try testing.expect(is_port_result == .boolean);
@@ -155,21 +153,21 @@ test "port primitives" {
 
     // Test eof_object_p with eof symbol
     args.clearRetainingCapacity();
-    try args.append(allocator, Value{ .symbol = "eof" });
+    try args.append(interp.allocator, Value{ .symbol = "eof" });
     const eof_result = try eof_object_p(&interp, interp.root_env, args, &fuel);
     try testing.expect(eof_result == .boolean);
     try testing.expect(eof_result.boolean == true);
 
     // Test eof_object_p with non-eof symbol
     args.clearRetainingCapacity();
-    try args.append(allocator, Value{ .symbol = "other" });
+    try args.append(interp.allocator, Value{ .symbol = "other" });
     const not_eof_result = try eof_object_p(&interp, interp.root_env, args, &fuel);
     try testing.expect(not_eof_result == .boolean);
     try testing.expect(not_eof_result.boolean == false);
 
     // Test is_input_port with non-port
     args.clearRetainingCapacity();
-    try args.append(allocator, Value{ .string = "not a port" });
+    try args.append(interp.allocator, Value{ .string = "not a port" });
     const is_input_result = try is_input_port(&interp, interp.root_env, args, &fuel);
     try testing.expect(is_input_result == .boolean);
     try testing.expect(is_input_result.boolean == false);

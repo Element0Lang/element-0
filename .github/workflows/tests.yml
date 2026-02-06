@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches:
       - main

@@ -236,23 +236,23 @@ pub const Port = struct {
     /// Name of the file (for error messages).
     name: []const u8,
 
-    pub fn openInput(name: []const u8) !Port {
+    pub fn openInput(allocator: std.mem.Allocator, name: []const u8) !Port {
         const file = try std.fs.cwd().openFile(name, .{});
         return .{
             .file = file,
             .is_input = true,
             .is_open = true,
-            .name = name,
+            .name = try allocator.dupe(u8, name), // Clone to own the memory
         };
     }
 
-    pub fn openOutput(name: []const u8) !Port {
+    pub fn openOutput(allocator: std.mem.Allocator, name: []const u8) !Port {
         const file = try std.fs.cwd().createFile(name, .{});
         return .{
             .file = file,
             .is_input = false,
             .is_open = true,
-            .name = name,
+            .name = try allocator.dupe(u8, name), // Clone to own the memory
         };
     }
 

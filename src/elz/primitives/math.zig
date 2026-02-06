@@ -291,6 +291,10 @@ pub fn even_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.Valu
     if (args.items[0] != .number) return ElzError.InvalidArgument;
     const n = args.items[0].number;
     if (@floor(n) != n) return Value{ .boolean = false };
+    // Check for overflow before converting to i64
+    const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
+    const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
+    if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
     const i: i64 = @intFromFloat(n);
     return Value{ .boolean = @mod(i, 2) == 0 };
 }
@@ -301,6 +305,10 @@ pub fn odd_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.Value
     if (args.items[0] != .number) return ElzError.InvalidArgument;
     const n = args.items[0].number;
     if (@floor(n) != n) return Value{ .boolean = false };
+    // Check for overflow before converting to i64
+    const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
+    const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
+    if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
     const i: i64 = @intFromFloat(n);
     return Value{ .boolean = @mod(i, 2) != 0 };
 }

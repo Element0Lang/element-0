@@ -271,54 +271,53 @@ pub fn is_equal(interp: *interpreter.Interpreter, _: *core.Environment, args: co
 }
 
 test "predicate primitives" {
-    const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test is_null
-    var args = core.ValueList.init(allocator);
-    try args.append(Value.nil);
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value.nil);
     var result = try is_null(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
 
     args.clearRetainingCapacity();
-    try args.append(Value{ .number = 0 });
+    try args.append(interp.allocator, Value{ .number = 0 });
     result = try is_null(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = false });
 
     // Test is_boolean
     args.clearRetainingCapacity();
-    try args.append(Value{ .boolean = true });
+    try args.append(interp.allocator, Value{ .boolean = true });
     result = try is_boolean(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
 
     // Test is_eq
     args.clearRetainingCapacity();
-    try args.append(Value{ .number = 1 });
-    try args.append(Value{ .number = 1 });
+    try args.append(interp.allocator, Value{ .number = 1 });
+    try args.append(interp.allocator, Value{ .number = 1 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
 
     args.clearRetainingCapacity();
-    try args.append(Value{ .number = 1 });
-    try args.append(Value{ .number = 2 });
+    try args.append(interp.allocator, Value{ .number = 1 });
+    try args.append(interp.allocator, Value{ .number = 2 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = false });
 
     // Test is_equal
     args.clearRetainingCapacity();
-    const p1 = try allocator.create(core.Pair);
+    const p1 = try interp.allocator.create(core.Pair);
     p1.* = .{ .car = core.Value{ .number = 1 }, .cdr = .nil };
     const list1 = core.Value{ .pair = p1 };
 
-    const p2 = try allocator.create(core.Pair);
+    const p2 = try interp.allocator.create(core.Pair);
     p2.* = .{ .car = core.Value{ .number = 1 }, .cdr = .nil };
     const list2 = core.Value{ .pair = p2 };
 
-    try args.append(list1);
-    try args.append(list2);
+    try args.append(interp.allocator, list1);
+    try args.append(interp.allocator, list2);
     result = try is_equal(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
 }

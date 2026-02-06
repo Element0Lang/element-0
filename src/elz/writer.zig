@@ -33,6 +33,8 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             switch (c) {
                 ' ' => try writer.writeAll("space"),
                 '\n' => try writer.writeAll("newline"),
+                '\t' => try writer.writeAll("tab"),
+                '\r' => try writer.writeAll("return"),
                 else => {
                     if (c > 0x10FFFF) {
                         try writer.writeAll("invalid-char");
@@ -55,7 +57,18 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             }
         },
         .string => |s| {
-            try writer.print("\"{s}\"", .{s});
+            try writer.writeAll("\"");
+            for (s) |c| {
+                switch (c) {
+                    '\\' => try writer.writeAll("\\\\"),
+                    '"' => try writer.writeAll("\\\""),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\t' => try writer.writeAll("\\t"),
+                    '\r' => try writer.writeAll("\\r"),
+                    else => try writer.writeByte(c),
+                }
+            }
+            try writer.writeAll("\"");
         },
         .pair => |p| {
             try writer.writeAll("(");

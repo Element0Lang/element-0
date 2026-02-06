@@ -167,6 +167,8 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         const char_name = token[2..];
         if (std.mem.eql(u8, char_name, "space")) return Value{ .character = ' ' };
         if (std.mem.eql(u8, char_name, "newline")) return Value{ .character = '\n' };
+        if (std.mem.eql(u8, char_name, "tab")) return Value{ .character = '\t' };
+        if (std.mem.eql(u8, char_name, "return")) return Value{ .character = '\r' };
         if (char_name.len == 1) return Value{ .character = char_name[0] };
         return ElzError.InvalidCharacterLiteral;
     }

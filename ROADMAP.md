@@ -23,7 +23,7 @@ It outlines the features to be implemented and their current status.
 
 #### 2.1. Core Data Types and Representation
 
-* [x] Booleans (`#t`, `#f`)
+* [x] Booleans (`#t` and `#f`)
 * [x] Numbers (floating-point)
 * [x] Symbols
 * [x] Pairs and Lists
@@ -104,9 +104,9 @@ It outlines the features to be implemented and their current status.
 * [x] **List Utilities**: `filter`, `fold-left`, `fold-right`, and other common list processing functions.
 * [x] **String Utilities**: `string-append`, `string-ref`, `substring`, `string-split`, `number->string`, `string->number`, `make-string`, `string=?`, `string<?`, `string>?`, `string<=?`, `string>=?`, `gensym` implemented.
 * [ ] **Regular Expressions**: A library for advanced text pattern matching.
-* [ ] **OS and Filesystem**: Procedures for file I/O, directory manipulation, and environment variables.
+* [x] **OS and Filesystem**: `getenv`, `file-exists?`, `delete-file`, `current-directory`, `directory-list`, `rename-file` implemented.
 * [ ] **Advanced I/O**: A `format` procedure and a more comprehensive port system.
-* [ ] **Date and Time**: Utilities for working with dates and times.
+* [x] **Date and Time**: `current-time`, `current-time-ms`, `time->components`, `sleep-ms` implemented.
 
 ### 4. Advanced Language Features (Post-R5RS)
 

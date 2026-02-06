@@ -37,6 +37,8 @@ pub const Interpreter = struct {
     last_error_message: ?[]const u8 = null,
     /// A cache for loaded modules to avoid redundant parsing and evaluation.
     module_cache: std.StringHashMap(*core.Module),
+    /// Counter for generating unique symbols with gensym (thread-safe per interpreter).
+    gensym_counter: u64 = 0,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -92,6 +94,8 @@ pub const Interpreter = struct {
         try env_setup.populate_vectors(&self);
         try env_setup.populate_hashmaps(&self);
         try env_setup.populate_ports(&self);
+        try env_setup.populate_os(&self);
+        try env_setup.populate_datetime(&self);
 
         const std_lib_source = @embedFile("../stdlib/std.elz");
         var std_lib_forms = try parser.readAll(std_lib_source, allocator);

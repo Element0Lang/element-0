@@ -131,11 +131,11 @@
           #t))
 ;; --- Hash Map Tests ---
 (test-case "make-hash-map" (hash-map? (make-hash-map)))
-(test-case "hash-map-set! and ref" 
+(test-case "hash-map-set! and ref"
   (let ((h (make-hash-map)))
     (hash-map-set! h "key" 42)
     (equal? (hash-map-ref h "key") 42)))
-(test-case "hash-map-contains?" 
+(test-case "hash-map-contains?"
   (let ((h (make-hash-map)))
     (hash-map-set! h "x" 1)
     (and (hash-map-contains? h "x") (not (hash-map-contains? h "y")))))
@@ -160,7 +160,7 @@
 
 ;; --- Gensym Tests ---
 (test-case "gensym creates symbol" (symbol? (gensym)))
-(test-case "gensym with prefix" 
+(test-case "gensym with prefix"
   (let ((s (gensym "test")))
     (symbol? s)))
 
