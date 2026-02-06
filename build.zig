@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
             "alloc.c",    "reclaim.c", "allchblk.c", "misc.c",     "mach_dep.c", "os_dep.c",
             "mark_rts.c", "headers.c", "mark.c",     "blacklst.c", "finalize.c", "new_hblk.c",
             "dbg_mlc.c",  "malloc.c",  "dyn_load.c", "typd_mlc.c", "ptr_chck.c", "mallocx.c",
+            "obj_map.c",
         }) catch unreachable;
 
         // Add platform-specific source files for threading
