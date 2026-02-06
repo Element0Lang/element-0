@@ -229,7 +229,7 @@
   (= (apply (lambda (a b) (+ a b)) '(10 20)) 30))
 
 ;;; ============================================
-;;; CONDITIONAL EDGE CASES  
+;;; CONDITIONAL EDGE CASES
 ;;; ============================================
 
 ;; Truthy/falsy values
@@ -367,22 +367,22 @@
 ;;; ============================================
 
 (test-case "try/catch multiple body expressions"
-  (= (try 
+  (= (try
        (define x 1)
        (+ x 41)
-       (catch err 0)) 
+       (catch err 0))
      42))
 
 (test-case "try/catch error in catch is caught"
   (= (try
-       (try 
+       (try
          (/ 1 0)
          (catch err (/ 2 0)))
        (catch err2 99))
      99))
 
 (test-case "nested try success"
-  (= (try 
+  (= (try
        (try (+ 1 1) (catch e1 0))
        (catch e2 -1))
      2))

@@ -181,12 +181,17 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 
     if (start_idx > end_idx) return ElzError.InvalidArgument;
 
+    // Handle special case: empty substring from start
+    if (start_idx == 0 and end_idx == 0) {
+        return Value{ .string = try env.allocator.dupe(u8, "") };
+    }
+
     // Find byte offsets for the character indices
     var it = std.unicode.Utf8View.initUnchecked(str.string).iterator();
     var current_idx: usize = 0;
     var start_byte: usize = 0;
     var end_byte: usize = str.string.len;
-    var found_start = false;
+    var found_start = start_idx == 0; // start_idx 0 is always at byte 0
     var found_end = false;
 
     var byte_offset: usize = 0;
@@ -210,11 +215,10 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
         found_end = true;
     }
 
-    if (!found_start or (end_idx > 0 and !found_end and end_idx != current_idx + 1)) {
+    if (!found_start or !found_end) {
         return ElzError.InvalidArgument;
     }
 
-    if (start_idx == 0) found_start = true;
     if (start_byte > end_byte) return ElzError.InvalidArgument;
 
     const result = try env.allocator.dupe(u8, str.string[start_byte..end_byte]);
@@ -305,17 +309,34 @@ pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
     if (k < 0 or @floor(k) != k) return ElzError.InvalidArgument;
 
     const length: usize = @intFromFloat(k);
-    const fill_char: u8 = if (args.items.len == 2) blk: {
+
+    if (args.items.len == 2) {
         const char_val = args.items[1];
         if (char_val != .character) return ElzError.InvalidArgument;
-        if (char_val.character > 127) return ElzError.InvalidArgument; // ASCII only for simplicity
-        break :blk @intCast(char_val.character);
-    } else ' ';
 
-    const result = try env.allocator.alloc(u8, length);
-    @memset(result, fill_char);
+        const codepoint = char_val.character;
+        if (codepoint > 0x10FFFF) return ElzError.InvalidArgument;
 
-    return Value{ .string = result };
+        const cp: u21 = @intCast(codepoint);
+        if (!std.unicode.utf8ValidCodepoint(cp)) return ElzError.InvalidArgument;
+
+        // Encode the codepoint to UTF-8
+        var char_buf: [4]u8 = undefined;
+        const char_len = std.unicode.utf8Encode(cp, &char_buf) catch return ElzError.InvalidArgument;
+
+        // Allocate result string (length * char_len bytes)
+        const result = try env.allocator.alloc(u8, length * char_len);
+        var i: usize = 0;
+        while (i < length) : (i += 1) {
+            @memcpy(result[i * char_len .. (i + 1) * char_len], char_buf[0..char_len]);
+        }
+        return Value{ .string = result };
+    } else {
+        // Default fill is space
+        const result = try env.allocator.alloc(u8, length);
+        @memset(result, ' ');
+        return Value{ .string = result };
+    }
 }
 
 /// `string_eq` checks if two strings are equal.
@@ -372,54 +393,50 @@ pub fn string_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     return Value{ .boolean = order != .lt };
 }
 
-/// Counter for gensym
-var gensym_counter: u64 = 0;
-
 /// `gensym` generates a unique symbol.
 /// Syntax: (gensym) or (gensym prefix)
-pub fn gensym(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const prefix = if (args.items.len >= 1) blk: {
         const p = args.items[0];
         if (p != .string and p != .symbol) return ElzError.InvalidArgument;
         break :blk if (p == .string) p.string else p.symbol;
     } else "g";
 
-    gensym_counter += 1;
+    interp.gensym_counter += 1;
     var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, gensym_counter }) catch return ElzError.OutOfMemory;
+    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.gensym_counter }) catch return ElzError.OutOfMemory;
 
     return Value{ .symbol = try env.allocator.dupe(u8, formatted) };
 }
 
 test "string primitives" {
-    const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test symbol->string
-    var args = core.ValueList.init(allocator);
-    try args.append(Value{ .symbol = "foo" });
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .symbol = "foo" });
     var result = try symbol_to_string(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .string = "foo" });
 
     // Test string->symbol
     args.clearRetainingCapacity();
-    try args.append(Value{ .string = "bar" });
+    try args.append(interp.allocator, Value{ .string = "bar" });
     result = try string_to_symbol(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .symbol = "bar" });
 
     // Test string-length
     args.clearRetainingCapacity();
-    try args.append(Value{ .string = "hello" });
+    try args.append(interp.allocator, Value{ .string = "hello" });
     result = try string_length(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .number = 5 });
 
     // Test char=?
     args.clearRetainingCapacity();
-    try args.append(Value{ .character = 'a' });
-    try args.append(Value{ .character = 'a' });
+    try args.append(interp.allocator, Value{ .character = 'a' });
+    try args.append(interp.allocator, Value{ .character = 'a' });
     result = try char_eq(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
 }

@@ -118,7 +118,9 @@ pub fn GcArrayList(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.allocator.free(self.items);
+            if (self.capacity > 0) {
+                self.allocator.free(self.items.ptr[0..self.capacity]);
+            }
         }
     };
 }

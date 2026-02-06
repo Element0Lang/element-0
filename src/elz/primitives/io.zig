@@ -142,27 +142,25 @@ pub fn read_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
 }
 
 test "io primitives" {
-    const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
 
     var fuel: u64 = 1000;
 
     // Test load
     const filename = "test_load.elz";
-    var file = try std.fs.cwd().createFile(filename, .{});
+    var file = std.fs.cwd().createFile(filename, .{}) catch unreachable;
     defer file.close();
-    _ = try file.writeAll("(define x 42)");
+    _ = file.writeAll("(define x 42)") catch unreachable;
 
-    var args = core.ValueList.init(allocator);
-    try args.append(Value{ .string = filename });
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .string = filename });
 
     _ = try load(&interp, interp.root_env, args, &fuel);
 
     const x = try interp.root_env.get("x", &interp);
     try testing.expect(x == Value{ .number = 42 });
 
-    const file_to_delete = std.fs.cwd().deleteFile(filename) catch {};
-    _ = file_to_delete;
+    std.fs.cwd().deleteFile(filename) catch {};
 }

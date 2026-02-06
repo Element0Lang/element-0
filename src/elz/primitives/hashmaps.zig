@@ -116,30 +116,28 @@ fn getKeyString(val: Value) ?[]const u8 {
 }
 
 test "hash_map primitives" {
-    const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test make_hash_map
-    var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
+    var args = core.ValueList.init(interp.allocator);
 
     const hm_val = try make_hash_map(&interp, interp.root_env, args, &fuel);
     try testing.expect(hm_val == .hash_map);
 
     // Test hash_map_set and hash_map_get
     args.clearRetainingCapacity();
-    try args.append(allocator, hm_val);
-    try args.append(allocator, Value{ .string = "key1" });
-    try args.append(allocator, Value{ .number = 42 });
+    try args.append(interp.allocator, hm_val);
+    try args.append(interp.allocator, Value{ .string = "key1" });
+    try args.append(interp.allocator, Value{ .number = 42 });
     _ = try hash_map_set(&interp, interp.root_env, args, &fuel);
 
     // Test hash_map_get
     args.clearRetainingCapacity();
-    try args.append(allocator, hm_val);
-    try args.append(allocator, Value{ .string = "key1" });
+    try args.append(interp.allocator, hm_val);
+    try args.append(interp.allocator, Value{ .string = "key1" });
     const get_result = try hash_map_get(&interp, interp.root_env, args, &fuel);
     try testing.expect(get_result == .number);
     try testing.expectEqual(get_result.number, 42);
@@ -151,7 +149,7 @@ test "hash_map primitives" {
 
     // Test hash_map_count
     args.clearRetainingCapacity();
-    try args.append(allocator, hm_val);
+    try args.append(interp.allocator, hm_val);
     const count_result = try hash_map_count(&interp, interp.root_env, args, &fuel);
     try testing.expect(count_result == .number);
     try testing.expectEqual(count_result.number, 1);
@@ -163,13 +161,9 @@ test "hash_map primitives" {
 
     // Test hash_map_remove
     args.clearRetainingCapacity();
-    try args.append(allocator, hm_val);
-    try args.append(allocator, Value{ .string = "key1" });
+    try args.append(interp.allocator, hm_val);
+    try args.append(interp.allocator, Value{ .string = "key1" });
     const remove_result = try hash_map_remove(&interp, interp.root_env, args, &fuel);
     try testing.expect(remove_result == .boolean);
     try testing.expect(remove_result.boolean == true);
-
-    // Verify it's gone
-    const count_after = try hash_map_count(&interp, interp.root_env, core.ValueList.init(allocator), &fuel);
-    _ = count_after;
 }
