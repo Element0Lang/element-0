@@ -17,60 +17,10 @@ jobs:
   call_tests:
     uses: ./.github/workflows/tests.yml
 
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-
-    # Try to publish only if the tests pass
+  build-and-release:
+    name: Build and Release
     needs: call_tests
     if: success()
-
-    permissions:
-      contents: write
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create temporary tag for draft
-        # Only create a temporary tag when triggered by a push (don't create tags for manual workflow_dispatch runs)
-        if: github.event_name == 'push' && github.ref_type != 'tag'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          TAG_NAME="draft-${{ github.ref_name }}-$(date +%s)"
-          echo "DRAFT_TAG=$TAG_NAME" >> $GITHUB_ENV
-          git tag $TAG_NAME
-          git push origin $TAG_NAME
-
-      - name: Set release tag name
-        run: |
-          # Prefer an existing tag if this run was for a tag. If we created a DRAFT_TAG (on push), use it.
-          # For manual runs (workflow_dispatch) we intentionally do NOT create a git tag; instead use
-          # a synthetic tag name based on the workflow run id so the release has a stable name.
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
-          elif [ -n "${{ env.DRAFT_TAG }}" ]; then
-            echo "RELEASE_TAG=${{ env.DRAFT_TAG }}" >> $GITHUB_ENV
-          else
-            echo "RELEASE_TAG=manual-${{ github.run_id }}" >> $GITHUB_ENV
-          fi
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          release_name: Release ${{ env.RELEASE_TAG }}
-          draft: ${{ github.ref_type != 'tag' }}
-          prerelease: true
-
-  build-and-upload:
-    name: Build and Upload
-    needs: create-release
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -79,28 +29,28 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-linux-gnu
-            artifact_name: elz-repl-linux-x86_64.zip
-            asset_content_type: application/zip
+            artifact_name: elz-linux-x86_64.tar.gz
+            can_test: true
           - os: ubuntu-latest
             target: aarch64-linux-gnu
-            artifact_name: elz-repl-linux-aarch64.zip
-            asset_content_type: application/zip
+            artifact_name: elz-linux-aarch64.tar.gz
+            can_test: false  # Cross-compiled, can't run on x86_64
           - os: macos-latest
-            target: aarch64-macos # Apple Silicon (ARM64)
-            artifact_name: elz-repl-macos-aarch64.zip
-            asset_content_type: application/zip
+            target: aarch64-macos
+            artifact_name: elz-macos-aarch64.tar.gz
+            can_test: true  # macos-latest is ARM64
           - os: macos-latest
-            target: x86_64-macos # Intel
-            artifact_name: elz-repl-macos-x86_64.zip
-            asset_content_type: application/zip
+            target: x86_64-macos
+            artifact_name: elz-macos-x86_64.tar.gz
+            can_test: false  # Cross-compiled on ARM64 runner
           - os: windows-latest
             target: x86_64-windows-msvc
-            artifact_name: elz-repl-windows-x86_64.zip
-            asset_content_type: application/zip
+            artifact_name: elz-windows-x86_64.zip
+            can_test: true
           - os: windows-latest
             target: aarch64-windows-msvc
-            artifact_name: elz-repl-windows-aarch64.zip
-            asset_content_type: application/zip
+            artifact_name: elz-windows-aarch64.zip
+            can_test: false  # Cross-compiled, can't run on x86_64
 
     steps:
       - name: Checkout repository
@@ -128,35 +78,116 @@ jobs:
       - name: Verify built binary exists (Windows)
         if: runner.os == 'Windows'
         run: |
-          if (!(Test-Path "zig-out\\bin\\elz-repl.exe")) {
-            Write-Host 'ERROR: built binary zig-out\\bin\\elz-repl.exe not found'
-            dir zig-out\\bin
+          if (!(Test-Path "zig-out\bin\elz-repl.exe")) {
+            Write-Host 'ERROR: built binary zig-out\bin\elz-repl.exe not found'
+            dir zig-out\bin
             exit 1
           }
 
-      - name: Prepare artifact for Linux/macOS
+      - name: Smoke test - run a simple example (Unix)
+        if: runner.os != 'Windows' && matrix.can_test
+        run: |
+          echo "Running smoke test..."
+          echo '(+ 1 2 3)' | ./zig-out/bin/elz-repl --eval '(+ 1 2 3)' || \
+            ./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+          echo "Smoke test passed!"
+
+      - name: Smoke test - run a simple example (Windows)
+        if: runner.os == 'Windows' && matrix.can_test
+        run: |
+          Write-Host "Running smoke test..."
+          .\zig-out\bin\elz-repl.exe --file examples\elz\e13-hello-world.elz
+          Write-Host "Smoke test passed!"
+
+      - name: Prepare release artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          RELEASE_DIR="release-${{ matrix.target }}-${{ github.run_id }}"
-          mkdir -p "$RELEASE_DIR"
-          mv zig-out/bin/elz-repl "$RELEASE_DIR"/
-          # Create a zip of the release contents (avoid nesting an extra top-level directory)
-          (cd "$RELEASE_DIR" && zip -r "../${{ matrix.artifact_name }}" .)
+          RELEASE_DIR="elz-${{ matrix.target }}"
+          mkdir -p "$RELEASE_DIR/bin"
+          mkdir -p "$RELEASE_DIR/stdlib"
+          mkdir -p "$RELEASE_DIR/examples"
 
-      - name: Prepare artifact for Windows
+          # Copy binary
+          cp zig-out/bin/elz-repl "$RELEASE_DIR/bin/"
+
+          # Copy stdlib (required for REPL)
+          cp -r stdlib/* "$RELEASE_DIR/stdlib/" 2>/dev/null || true
+
+          # Copy examples
+          cp -r examples/elz/* "$RELEASE_DIR/examples/" 2>/dev/null || true
+
+          # Copy docs
+          cp README.md "$RELEASE_DIR/" 2>/dev/null || true
+          cp LICENSE "$RELEASE_DIR/" 2>/dev/null || true
+
+          # Create tarball
+          tar -czvf "${{ matrix.artifact_name }}" "$RELEASE_DIR"
+
+      - name: Prepare release artifact (Windows)
         if: runner.os == 'Windows'
         run: |
-          $env:RELEASE_DIR = "release-${{ matrix.target }}-${{ github.run_id }}"
-          New-Item -ItemType Directory -Path $env:RELEASE_DIR -Force | Out-Null
-          Move-Item zig-out\bin\elz-repl.exe $env:RELEASE_DIR\
-          Compress-Archive -Path "$env:RELEASE_DIR\*" -DestinationPath ${{ matrix.artifact_name }}
+          $RELEASE_DIR = "elz-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "$RELEASE_DIR\bin" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$RELEASE_DIR\stdlib" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$RELEASE_DIR\examples" -Force | Out-Null
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Copy binary
+          Copy-Item zig-out\bin\elz-repl.exe "$RELEASE_DIR\bin\"
+
+          # Copy stdlib (required for REPL)
+          if (Test-Path stdlib) {
+            Copy-Item -Recurse stdlib\* "$RELEASE_DIR\stdlib\" -ErrorAction SilentlyContinue
+          }
+
+          # Copy examples
+          if (Test-Path examples\elz) {
+            Copy-Item -Recurse examples\elz\* "$RELEASE_DIR\examples\" -ErrorAction SilentlyContinue
+          }
+
+          # Copy docs
+          if (Test-Path README.md) { Copy-Item README.md "$RELEASE_DIR\" }
+          if (Test-Path LICENSE) { Copy-Item LICENSE "$RELEASE_DIR\" }
+
+          # Create zip
+          Compress-Archive -Path "$RELEASE_DIR\*" -DestinationPath "${{ matrix.artifact_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}
-          asset_name: ${{ matrix.artifact_name }}
-          asset_content_type: ${{ matrix.asset_content_type }}
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 7
+
+  publish-release:
+    name: Publish Release
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "tag=nightly-$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          prerelease: ${{ steps.tag.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
