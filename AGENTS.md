@@ -70,7 +70,7 @@ Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. 
 Managed via Zig's package manager (`build.zig.zon`):
 
 - Chilli: CLI framework for the REPL.
-- Bdwgc (v8.2.12): Garbage collector.
+- BDWGC (v8.2.12): Garbage collector.
 - Linenoise (v2.0): Line editing for the REPL (POSIX only).
 
 ## Zig Conventions
