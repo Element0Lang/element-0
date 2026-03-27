@@ -72,23 +72,27 @@ Managed via Zig's package manager (`build.zig.zon`):
 - Chilli: CLI framework for the REPL.
 - BDWGC (v8.2.12): Garbage collector.
 - Linenoise (v2.0): Line editing for the REPL (POSIX only).
+- Minish: Property-based testing framework.
 
 ## Zig Conventions
 
-- **Zig version**: 0.15.2.
+- Zig version: 0.15.2.
 - Formatting is enforced by `zig fmt`. Run `make format` before committing.
 - Naming: `snake_case` for functions and variables, `PascalCase` for types and structs.
 - Element 0 symbols use `kebab-case` (e.g., `zig-mul`, `string-length`).
 
 ## Required Validation
 
-Run both test suites for any change:
+Run all test suites for any change:
 
-| Target          | Command          | What It Runs                                     |
-|-----------------|------------------|--------------------------------------------------|
-| Zig unit tests  | `make test`      | Inline `test` blocks in `src/**/*.zig`           |
-| Language tests  | `make test-elz`  | Element 0 test files in `tests/*.elz`            |
-| Lint            | `make lint`      | Checks Zig formatting with `zig fmt --check`     |
+| Target              | Command            | What It Runs                                                 |
+|---------------------|--------------------|--------------------------------------------------------------|
+| Zig unit tests      | `make test`        | Inline `test` blocks in `src/**/*.zig`                       |
+| Property tests      | `make test-prop`   | Property-based tests in `tests/*_prop_test.zig` (Minish)     |
+| Integration tests   | `make test-integ`  | Integration tests in `tests/*_integ_test.zig`                |
+| Language tests      | `make test-elz`    | Element 0 test files in `tests/test_*.elz`                   |
+| All tests           | `make test-all`    | Runs all of the above                                        |
+| Lint                | `make lint`        | Checks Zig formatting with `zig fmt --check`                 |
 
 For interactive exploration: `make repl`.
 
@@ -97,7 +101,7 @@ For interactive exploration: `make repl`.
 1. Read the relevant source module under `src/elz/`.
 2. Implement the smallest possible change.
 3. Add or update inline `test` blocks in the changed Zig module. Add Element 0 tests in `tests/` if language behavior changed.
-4. Run `make test && make test-elz`.
+4. Run `make test-all`.
 5. Verify interactively with `make repl` if needed.
 
 Good first tasks:
@@ -109,8 +113,10 @@ Good first tasks:
 
 ## Testing Expectations
 
-- Zig unit tests live as inline `test` blocks in the module they cover (`src/elz/*.zig` and `src/elz/primitives/*.zig`).
-- Language-level tests live in `tests/*.elz` and are run by the interpreter itself via `make test-elz`.
+- Unit and regression tests live as inline `test` blocks in the module they cover (`src/elz/*.zig` and `src/elz/primitives/*.zig`).
+- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties, and crash resistance.
+- Integration tests live in `tests/*_integ_test.zig` and test the public embedding API (init, evalString, FFI, error propagation, sandboxing).
+- Language-level tests live in `tests/test_*.elz` and are run by the interpreter itself via `make test-elz`.
 - No language-facing change is complete without an Element 0 test.
 
 ## Change Design Checklist
