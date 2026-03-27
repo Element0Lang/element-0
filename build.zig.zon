@@ -16,6 +16,10 @@
             .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
             .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
         },
+        .minish = .{
+            .url = "https://github.com/CogitatorTech/minish/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "minish-0.1.0-SQtSTWHkAQACfz3xGuWHU8zbx320vK_47r2yto3Pq0Rf",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },
 }
