@@ -56,4 +56,8 @@ pub const ElzError = error{
     FileNotWritable,
     /// An I/O operation failed.
     IOError,
+    /// The execution time limit was exceeded.
+    TimeLimitExceeded,
+    /// An escape continuation was invoked (internal, caught by call/ec).
+    EscapeContinuationInvoked,
 };

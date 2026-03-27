@@ -710,6 +710,51 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
     }
 }
 
+/// Evaluates a macro expansion.
+/// The macro's unevaluated arguments are bound to its parameters, the body is evaluated
+/// to produce an expansion form, and that expansion is then evaluated in the calling environment.
+fn evalMacroExpansion(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
+    // Collect unevaluated args from the rest list
+    var unevaluated_args = std.ArrayListUnmanaged(Value){};
+    defer unevaluated_args.deinit(env.allocator);
+    var current_node = rest;
+    while (current_node != .nil) {
+        const pair = switch (current_node) {
+            .pair => |p| p,
+            else => break,
+        };
+        try unevaluated_args.append(env.allocator, pair.car);
+        current_node = pair.cdr;
+    }
+
+    // Check arg count
+    if (unevaluated_args.items.len != m.params.items.len) return ElzError.WrongArgumentCount;
+
+    // Create a new environment with unevaluated args bound to macro params
+    const macro_env = try Environment.init(env.allocator, m.env);
+    for (m.params.items, unevaluated_args.items) |param, arg| {
+        try macro_env.set(interp, param.symbol, arg);
+    }
+
+    // Evaluate the macro body to produce the expansion
+    var body_node = m.body;
+    var expansion: Value = .unspecified;
+    while (body_node != .nil) {
+        const pair = switch (body_node) {
+            .pair => |p| p,
+            else => break,
+        };
+        expansion = try eval(interp, &pair.car, macro_env, fuel);
+        body_node = pair.cdr;
+    }
+
+    // Now evaluate the expansion in the calling environment via the trampoline
+    const stored = try env.allocator.create(Value);
+    stored.* = expansion;
+    current_ast.* = stored;
+    return .unspecified;
+}
+
 /// Evaluates a procedure application.
 fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) !Value {
     const proc_val = try eval(interp, &first, env, fuel);
@@ -820,6 +865,19 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
         if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
         fuel.* -= 1;
 
+        // Check time limit every 256 steps to minimize syscall overhead
+        if (interp.time_limit_ms) |limit_ms| {
+            interp.time_check_counter +%= 1;
+            if (interp.time_check_counter & 0xFF == 0) {
+                if (interp.eval_start_ms) |start_ms| {
+                    const now = std.time.milliTimestamp();
+                    if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
+                        return ElzError.TimeLimitExceeded;
+                    }
+                }
+            }
+        }
+
         const ast = current_ast;
         const env = current_env;
 
@@ -832,7 +890,13 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
                 const first = p.car;
                 const rest = p.cdr;
 
-                const result = try if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
+                // Check if first is a macro name before falling through to evalApplication
+                const maybe_macro: ?*core.Macro = if (first == .symbol) blk: {
+                    const looked_up = env.get(first.symbol, interp) catch break :blk null;
+                    break :blk if (looked_up == .macro) looked_up.macro else null;
+                } else null;
+
+                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
 
                 if (result == .unspecified) {
                     if (current_ast != original_ast_ptr) {

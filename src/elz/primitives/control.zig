@@ -76,6 +76,50 @@ pub fn eval_proc(interp: *interpreter.Interpreter, env: *core.Environment, args:
     return eval.eval(interp, &expr, eval_env, fuel);
 }
 
+/// `call-with-escape-continuation` creates an escape continuation and passes it to the
+/// given procedure. When the escape continuation is invoked with a value, it immediately
+/// returns that value from the `call/ec` form. This is an upward-only (escape) continuation.
+///
+/// Syntax: (call/ec (lambda (k) ...))
+///
+/// Inside the lambda, calling (k value) immediately returns value from the call/ec form.
+/// If the lambda returns normally, its return value is the result of call/ec.
+pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+
+    const proc = args.items[0];
+    if (proc != .closure) return ElzError.InvalidArgument;
+
+    // The escape function: when called, stores its argument on the interpreter
+    // and signals EscapeContinuationInvoked. Since there's only one interpreter,
+    // and escape continuations unwind the stack, this is safe.
+    const escape_fn = struct {
+        pub fn invoke(i: *interpreter.Interpreter, _: *core.Environment, a: core.ValueList, _: *u64) ElzError!core.Value {
+            if (a.items.len != 1) return ElzError.WrongArgumentCount;
+            i.escape_value = a.items[0];
+            return ElzError.EscapeContinuationInvoked;
+        }
+    }.invoke;
+
+    // Build args for the procedure: pass the escape function
+    var call_args = core.ValueList.init(env.allocator);
+    try call_args.append(core.Value{ .procedure = escape_fn });
+
+    // Call the procedure with the escape continuation
+    const result = eval.eval_proc(interp, proc, call_args, env, fuel);
+
+    if (result) |val| {
+        return val;
+    } else |err| {
+        if (err == ElzError.EscapeContinuationInvoked) {
+            const escaped_val = interp.escape_value orelse core.Value.unspecified;
+            interp.escape_value = null;
+            return escaped_val;
+        }
+        return err;
+    }
+}
+
 test "control primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;

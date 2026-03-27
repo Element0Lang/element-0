@@ -1,0 +1,90 @@
+;; Tests for JSON serialization/deserialization
+
+(define *tests-run* 0)
+(define *tests-failed* 0)
+
+(define (test-case name test-expr)
+  (set! *tests-run* (+ *tests-run* 1))
+  (if (not (try test-expr (catch err #f)))
+      (begin
+        (set! *tests-failed* (+ *tests-failed* 1))
+        (display "[FAILED]: ") (display name) (newline))
+      (begin
+        (display "[PASSED]: ") (display name) (newline))))
+
+(define (report-summary)
+  (newline)
+  (display "--------------------") (newline)
+  (display "Tests Finished.") (newline)
+  (display "Total run: ") (display *tests-run*) (newline)
+  (display "Passed: ") (display (- *tests-run* *tests-failed*)) (newline)
+  (display "Failed: ") (display *tests-failed*) (newline)
+  (newline)
+  (if (= *tests-failed* 0)
+      (begin (display "RESULT: PASSED") (newline))
+      (begin (display "RESULT: FAILED") (newline) (exit 1))))
+
+;; json-serialize
+(test-case "serialize number"
+  (equal? (json-serialize 42) "42"))
+
+(test-case "serialize string"
+  (equal? (json-serialize "hello") "\"hello\""))
+
+(test-case "serialize true"
+  (equal? (json-serialize #t) "true"))
+
+(test-case "serialize false"
+  (equal? (json-serialize #f) "false"))
+
+(test-case "serialize nil"
+  (equal? (json-serialize '()) "null"))
+
+(test-case "serialize list"
+  (equal? (json-serialize '(1 2 3)) "[1,2,3]"))
+
+(test-case "serialize nested list"
+  (equal? (json-serialize '(1 (2 3))) "[1,[2,3]]"))
+
+(test-case "serialize vector"
+  (equal? (json-serialize (vector 1 2 3)) "[1,2,3]"))
+
+;; json-deserialize
+(test-case "deserialize number"
+  (= (json-deserialize "42") 42))
+
+(test-case "deserialize negative number"
+  (= (json-deserialize "-5") -5))
+
+(test-case "deserialize string"
+  (equal? (json-deserialize "\"hello\"") "hello"))
+
+(test-case "deserialize true"
+  (equal? (json-deserialize "true") #t))
+
+(test-case "deserialize false"
+  (equal? (json-deserialize "false") #f))
+
+(test-case "deserialize null"
+  (null? (json-deserialize "null")))
+
+(test-case "deserialize array"
+  (equal? (json-deserialize "[1,2,3]") '(1 2 3)))
+
+(test-case "deserialize empty array"
+  (null? (json-deserialize "[]")))
+
+;; Roundtrip tests
+(test-case "roundtrip number"
+  (= (json-deserialize (json-serialize 42)) 42))
+
+(test-case "roundtrip string"
+  (equal? (json-deserialize (json-serialize "hello world")) "hello world"))
+
+(test-case "roundtrip boolean"
+  (equal? (json-deserialize (json-serialize #t)) #t))
+
+(test-case "roundtrip list"
+  (equal? (json-deserialize (json-serialize '(1 2 3))) '(1 2 3)))
+
+(report-summary)

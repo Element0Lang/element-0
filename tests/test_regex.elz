@@ -1,0 +1,82 @@
+;; Tests for regular expression primitives
+
+(define *tests-run* 0)
+(define *tests-failed* 0)
+
+(define (test-case name test-expr)
+  (set! *tests-run* (+ *tests-run* 1))
+  (if (not (try test-expr (catch err #f)))
+      (begin
+        (set! *tests-failed* (+ *tests-failed* 1))
+        (display "[FAILED]: ") (display name) (newline))
+      (begin
+        (display "[PASSED]: ") (display name) (newline))))
+
+(define (report-summary)
+  (newline)
+  (display "--------------------") (newline)
+  (display "Tests Finished.") (newline)
+  (display "Total run: ") (display *tests-run*) (newline)
+  (display "Passed: ") (display (- *tests-run* *tests-failed*)) (newline)
+  (display "Failed: ") (display *tests-failed*) (newline)
+  (newline)
+  (if (= *tests-failed* 0)
+      (begin (display "RESULT: PASSED") (newline))
+      (begin (display "RESULT: FAILED") (newline) (exit 1))))
+
+;; regex-match?
+(test-case "match literal"
+  (regex-match? "hello" "hello"))
+
+(test-case "no match literal"
+  (not (regex-match? "hello" "world")))
+
+(test-case "match dot"
+  (regex-match? "h.llo" "hello"))
+
+(test-case "match star"
+  (regex-match? "ab*c" "ac"))
+
+(test-case "match star multiple"
+  (regex-match? "ab*c" "abbbbc"))
+
+(test-case "match plus"
+  (regex-match? "ab+c" "abc"))
+
+(test-case "no match plus zero"
+  (not (regex-match? "ab+c" "ac")))
+
+(test-case "match question"
+  (regex-match? "ab?c" "ac"))
+
+(test-case "match question with char"
+  (regex-match? "ab?c" "abc"))
+
+(test-case "match char class"
+  (regex-match? "[abc]" "b"))
+
+(test-case "match char range"
+  (regex-match? "[a-z]+" "hello"))
+
+(test-case "no match char range"
+  (not (regex-match? "[0-9]+" "hello")))
+
+;; regex-search
+(test-case "search finds match"
+  (equal? (regex-search "[0-9]+" "abc123def") "123"))
+
+(test-case "search no match"
+  (equal? (regex-search "[0-9]+" "abcdef") #f))
+
+;; regex-replace
+(test-case "replace all occurrences"
+  (equal? (regex-replace "[0-9]+" "NUM" "abc123def456") "abcNUMdefNUM"))
+
+;; regex-split
+(test-case "split by comma"
+  (equal? (car (regex-split "," "a,b,c")) "a"))
+
+(test-case "split count"
+  (= (length (regex-split "," "a,b,c")) 3))
+
+(report-summary)

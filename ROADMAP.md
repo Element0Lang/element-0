@@ -103,9 +103,9 @@ It outlines the features to be implemented and their current status.
 * [x] **Math Library**: More common mathematical functions (like trigonometric and logarithmic functions).
 * [x] **List Utilities**: `filter`, `fold-left`, `fold-right`, and other common list processing functions.
 * [x] **String Utilities**: `string-append`, `string-ref`, `substring`, `string-split`, `number->string`, `string->number`, `make-string`, `string=?`, `string<?`, `string>?`, `string<=?`, `string>=?`, `gensym` implemented.
-* [ ] **Regular Expressions**: A library for advanced text pattern matching.
+* [x] **Regular Expressions**: `regex-match?`, `regex-search`, `regex-replace`, `regex-split` implemented with NFA-based engine supporting literals, `.`, `*`, `+`, `?`, character classes, and anchors.
 * [x] **OS and Filesystem**: `getenv`, `file-exists?`, `delete-file`, `current-directory`, `directory-list`, `rename-file` implemented.
-* [ ] **Advanced I/O**: A `format` procedure and a more comprehensive port system.
+* [x] **Advanced I/O**: `format` procedure with `~a`, `~s`, `~%`, `~~` directives, and `value->string` implemented.
 * [x] **Date and Time**: `current-time`, `current-time-ms`, `time->components`, `sleep-ms` implemented.
 
 ### 4. Advanced Language Features (Post-R5RS)
@@ -114,16 +114,17 @@ It outlines the features to be implemented and their current status.
 * [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
 * [x] `define-macro` (simple procedural macros)
 * [ ] `syntax-rules` (hygienic macros) or similar system for compile-time metaprogramming.
-* [ ] `call-with-current-continuation` (`call/cc`): Support for first-class continuations.
+* [x] `call-with-escape-continuation` (`call/ec`): Escape-only continuations for early returns. Full `call/cc` deferred pending CPS rewrite.
 
 ### 5. Better Host Integration and Embeddability
 
-* [ ] **Advanced FFI**
+* **Advanced FFI**
     * [ ] Support for passing complex Zig structs.
     * [ ] Ability to pass Elz closures to Zig as callbacks.
-    * [ ] Automatic type conversions for more data types.
-* [ ] **Sandboxing and Security**
+    * [x] Automatic type conversions for `bool`, `[]const u8`, and `?T` (optional) types.
+* **Sandboxing and Security**
     * [x] A sandboxed mode to restrict access to I/O and other sensitive operations.
-    * [ ] Host-level controls for memory and execution time limits.
-* [ ] **Serialization**
-    * [ ] Built-in procedures to serialize and deserialize Elz objects (for example, to JSON or S-expressions).
+    * [x] Host-level controls for execution time limits (`time_limit_ms` in `SandboxFlags`).
+* **Serialization**
+    * [x] `json-serialize` and `json-deserialize` for JSON round-tripping.
+    * [x] `value->string` for S-expression serialization.

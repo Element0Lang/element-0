@@ -24,6 +24,8 @@ pub const SandboxFlags = struct {
     enable_strings: bool = true,
     /// Enables or disables I/O functions (e.g., `display`, `load`).
     enable_io: bool = true,
+    /// Maximum wall-clock execution time in milliseconds. Null means no limit.
+    time_limit_ms: ?u64 = null,
 };
 
 /// `Interpreter` is the main struct for the Elz interpreter.
@@ -39,6 +41,18 @@ pub const Interpreter = struct {
     module_cache: std.StringHashMap(*core.Module),
     /// Counter for generating unique symbols with gensym (thread-safe per interpreter).
     gensym_counter: u64 = 0,
+    /// Maximum wall-clock execution time in milliseconds (null = no limit).
+    time_limit_ms: ?u64 = null,
+    /// Timestamp (ms) when the current evaluation started.
+    eval_start_ms: ?i64 = null,
+    /// Step counter for throttling time checks (check every N steps).
+    time_check_counter: u64 = 0,
+    /// Value carried by an escape continuation invocation.
+    escape_value: ?core.Value = null,
+    /// ID of the active escape continuation (for matching).
+    escape_id: u64 = 0,
+    /// Counter for generating unique escape continuation IDs.
+    escape_id_counter: u64 = 0,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -59,6 +73,7 @@ pub const Interpreter = struct {
             .root_env = undefined,
             .last_error_message = null,
             .module_cache = std.StringHashMap(*core.Module).init(allocator),
+            .time_limit_ms = flags.time_limit_ms,
         };
 
         const root_env = try allocator.create(core.Environment);
@@ -96,6 +111,9 @@ pub const Interpreter = struct {
         try env_setup.populate_ports(&self);
         try env_setup.populate_os(&self);
         try env_setup.populate_datetime(&self);
+        try env_setup.populate_format(&self);
+        try env_setup.populate_json(&self);
+        try env_setup.populate_regex(&self);
 
         const std_lib_source = @embedFile("../stdlib/std.elz");
         var std_lib_forms = try parser.readAll(std_lib_source, allocator);
@@ -125,6 +143,12 @@ pub const Interpreter = struct {
     pub fn evalString(self: *Interpreter, source: []const u8, fuel: *u64) !core.Value {
         var forms = try parser.readAll(source, self.allocator);
         defer forms.deinit(self.allocator);
+
+        // Set the eval start time for time-limited execution
+        if (self.time_limit_ms != null) {
+            self.eval_start_ms = std.time.milliTimestamp();
+            self.time_check_counter = 0;
+        }
 
         var result: core.Value = .unspecified;
         for (forms.items) |form| {

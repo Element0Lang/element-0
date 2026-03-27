@@ -143,7 +143,7 @@ pub fn build(b: *std.Build) void {
     });
     docs_step.dependOn(&gen_docs_cmd.step);
 
-    // --- Test Setup ---
+    // --- Unit Test Setup ---
     const test_module = b.createModule(.{
         .root_source_file = lib_source,
         .target = target,
@@ -161,6 +161,57 @@ pub fn build(b: *std.Build) void {
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+
+    // --- Property-Based and Integration Test Setup ---
+    const test_prop_step = b.step("test-prop", "Run property-based tests");
+    const test_integ_step = b.step("test-integ", "Run integration tests");
+    const minish_dep = b.dependency("minish", .{});
+
+    {
+        const tests_path = "tests";
+        var tests_dir = fs.cwd().openDir(tests_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) {
+                @panic("Can't open 'tests' directory");
+            }
+            @panic("Can't open 'tests' directory");
+        };
+        defer tests_dir.close();
+
+        var test_iter = tests_dir.iterate();
+        while (test_iter.next() catch @panic("Failed to iterate tests")) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+
+            const is_prop_test = std.mem.endsWith(u8, entry.name, "_prop_test.zig");
+            const is_integ_test = std.mem.endsWith(u8, entry.name, "_integ_test.zig");
+
+            if (!is_prop_test and !is_integ_test) continue;
+
+            const test_path = b.fmt("{s}/{s}", .{ tests_path, entry.name });
+
+            const t_module = b.createModule(.{
+                .root_source_file = b.path(test_path),
+                .target = target,
+                .optimize = optimize,
+            });
+            t_module.addImport("elz", lib_module);
+
+            if (is_prop_test) {
+                t_module.addImport("minish", minish_dep.module("minish"));
+            }
+
+            const t = b.addTest(.{ .root_module = t_module });
+            const bdwgc_dep_t = b.dependency("bdwgc", .{});
+            t.addIncludePath(bdwgc_dep_t.path("include"));
+            t.linkLibrary(gc);
+
+            const run_t = b.addRunArtifact(t);
+            if (is_prop_test) {
+                test_prop_step.dependOn(&run_t.step);
+            } else {
+                test_integ_step.dependOn(&run_t.step);
+            }
+        }
+    }
 
     // --- Example Setup ---
     const examples_path = "examples/zig";
@@ -198,10 +249,34 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    // --- Run Element 0 Standard Library Tests ---
+    // --- Run Element 0 Language Tests ---
     const test_elz_step = b.step("test-elz", "Run the Element 0 language tests");
-    const run_elz_tests_cmd = b.addRunArtifact(repl_exe);
-    run_elz_tests_cmd.addArg("--file");
-    run_elz_tests_cmd.addArg("tests/test_stdlib.elz");
-    test_elz_step.dependOn(&run_elz_tests_cmd.step);
+    {
+        const tests_path = "tests";
+        var tests_dir = fs.cwd().openDir(tests_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) {
+                @panic("Can't open 'tests' directory");
+            }
+            @panic("Can't open 'tests' directory");
+        };
+        defer tests_dir.close();
+
+        var test_iter = tests_dir.iterate();
+        while (test_iter.next() catch @panic("Failed to iterate tests")) |entry| {
+            if (!std.mem.startsWith(u8, entry.name, "test_")) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
+
+            const run_elz_test_cmd = b.addRunArtifact(repl_exe);
+            run_elz_test_cmd.addArg("--file");
+            run_elz_test_cmd.addArg(b.fmt("{s}/{s}", .{ tests_path, entry.name }));
+            test_elz_step.dependOn(&run_elz_test_cmd.step);
+        }
+    }
+
+    // --- Run All Tests ---
+    const test_all_step = b.step("test-all", "Run all tests");
+    test_all_step.dependOn(&run_lib_unit_tests.step);
+    test_all_step.dependOn(test_prop_step);
+    test_all_step.dependOn(test_integ_step);
+    test_all_step.dependOn(test_elz_step);
 }

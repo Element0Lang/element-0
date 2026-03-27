@@ -29,33 +29,46 @@ pub fn Caster(comptime T: type) type {
                 },
                 .int => |int_info| switch (v) {
                     .number => |n| {
-                        // Check for NaN or Infinity
                         if (std.math.isNan(n) or std.math.isInf(n)) {
                             return ElzError.InvalidArgument;
                         }
-
-                        // Check for fractional part
                         if (@floor(n) != n) {
                             return ElzError.InvalidArgument;
                         }
-
-                        // Calculate min/max for the target integer type
                         const min_val: f64 = if (int_info.signedness == .signed)
                             -@as(f64, @floatFromInt(@as(i128, 1) << int_info.bits - 1))
                         else
                             0;
                         const max_val: f64 = @floatFromInt((@as(u128, 1) << int_info.bits) - 1);
-
-                        // Check bounds
                         if (n < min_val or n > max_val) {
                             return ElzError.InvalidArgument;
                         }
-
                         return @intFromFloat(n);
                     },
                     else => ElzError.InvalidArgument,
                 },
-                else => @compileError("Unsupported type for FFI casting"),
+                .bool => switch (v) {
+                    .boolean => |b| b,
+                    else => ElzError.InvalidArgument,
+                },
+                .pointer => |ptr_info| {
+                    if (ptr_info.size == .Slice and ptr_info.child == u8) {
+                        // []const u8 - extract from string value
+                        return switch (v) {
+                            .string => |s| s,
+                            .symbol => |s| s,
+                            else => ElzError.InvalidArgument,
+                        };
+                    } else {
+                        @compileError("Unsupported pointer type for FFI casting: " ++ @typeName(T));
+                    }
+                },
+                .optional => |opt_info| {
+                    if (v == .nil) return null;
+                    const InnerCaster = Caster(opt_info.child);
+                    return InnerCaster.cast(v) catch return ElzError.InvalidArgument;
+                },
+                else => @compileError("Unsupported type for FFI casting: " ++ @typeName(T)),
             };
         }
     };
@@ -197,15 +210,27 @@ fn ffi_wrap_variadic(comptime F: anytype, comptime FInfo: std.builtin.Type.Fn) *
 /// - `value`: The native Zig value to convert.
 /// - `return`: The converted `core.Value`.
 fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
-    _ = allocator;
     const T = @TypeOf(value);
     return switch (@typeInfo(T)) {
         .void => core.Value.nil,
         .float, .comptime_float => core.Value{ .number = @floatCast(value) },
         .int, .comptime_int => core.Value{ .number = @floatFromInt(value) },
         .bool => core.Value{ .boolean = value },
-        .@"union" => |u| {
-            _ = u;
+        .pointer => |ptr_info| {
+            if (ptr_info.size == .Slice and ptr_info.child == u8) {
+                return core.Value{ .string = allocator.dupe(u8, value) catch return core.Value.nil };
+            } else {
+                @compileError("Unsupported pointer return type for FFI: " ++ @typeName(T));
+            }
+        },
+        .optional => {
+            if (value) |v| {
+                return valueFromNative(allocator, v);
+            } else {
+                return core.Value.nil;
+            }
+        },
+        .@"union" => {
             if (T == core.Value) {
                 return value;
             } else {
@@ -300,6 +325,66 @@ test "makeForeignFunc with 2-arg function" {
 
 fn testSquare(x: f64) f64 {
     return x * x;
+}
+
+test "Caster bool from boolean" {
+    const result = try Caster(bool).cast(core.Value{ .boolean = true });
+    try std.testing.expect(result == true);
+
+    const result2 = try Caster(bool).cast(core.Value{ .boolean = false });
+    try std.testing.expect(result2 == false);
+}
+
+test "Caster bool from non-boolean" {
+    const result = Caster(bool).cast(core.Value{ .number = 1 });
+    try std.testing.expectError(ElzError.InvalidArgument, result);
+}
+
+test "Caster string from string value" {
+    const result = try Caster([]const u8).cast(core.Value{ .string = "hello" });
+    try std.testing.expectEqualStrings("hello", result);
+}
+
+test "Caster string from symbol value" {
+    const result = try Caster([]const u8).cast(core.Value{ .symbol = "foo" });
+    try std.testing.expectEqualStrings("foo", result);
+}
+
+test "Caster string from non-string" {
+    const result = Caster([]const u8).cast(core.Value{ .number = 42 });
+    try std.testing.expectError(ElzError.InvalidArgument, result);
+}
+
+test "Caster optional from value" {
+    const result = try Caster(?f64).cast(core.Value{ .number = 42 });
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(f64, 42), result.?);
+}
+
+test "Caster optional from nil" {
+    const result = try Caster(?f64).cast(core.Value.nil);
+    try std.testing.expect(result == null);
+}
+
+test "valueFromNative string" {
+    const allocator = std.testing.allocator;
+    const result = valueFromNative(allocator, @as([]const u8, "hello"));
+    try std.testing.expect(result == .string);
+    try std.testing.expectEqualStrings("hello", result.string);
+    allocator.free(result.string);
+}
+
+test "valueFromNative optional some" {
+    const allocator = std.testing.allocator;
+    const result = valueFromNative(allocator, @as(?f64, 42.0));
+    try std.testing.expect(result == .number);
+    try std.testing.expectEqual(@as(f64, 42), result.number);
+}
+
+test "valueFromNative optional null" {
+    const allocator = std.testing.allocator;
+    const result = valueFromNative(allocator, @as(?f64, null));
+    try std.testing.expect(result == .nil);
 }
 
 test "makeForeignFunc with 1-arg function" {

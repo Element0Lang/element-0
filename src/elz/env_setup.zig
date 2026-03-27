@@ -13,6 +13,9 @@ const hashmaps = @import("./primitives/hashmaps.zig");
 const ports = @import("./primitives/ports.zig");
 const os = @import("./primitives/os.zig");
 const datetime = @import("./primitives/datetime.zig");
+const format_mod = @import("./primitives/format.zig");
+const json_mod = @import("./primitives/json.zig");
+const regex_mod = @import("./primitives/regex.zig");
 const interpreter = @import("interpreter.zig");
 
 /// Populates the interpreter's root environment with mathematical primitive functions.
@@ -130,6 +133,8 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
 pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "apply", core.Value{ .procedure = control.apply });
     try interp.root_env.set(interp, "eval", core.Value{ .procedure = control.eval_proc });
+    try interp.root_env.set(interp, "call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
+    try interp.root_env.set(interp, "call/ec", core.Value{ .procedure = control.call_with_escape_continuation });
 }
 
 /// Populates the interpreter's root environment with I/O primitive functions.
@@ -211,6 +216,29 @@ pub fn populate_hashmaps(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "hash-map-contains?", core.Value{ .procedure = hashmaps.hash_map_contains });
     try interp.root_env.set(interp, "hash-map-count", core.Value{ .procedure = hashmaps.hash_map_count });
     try interp.root_env.set(interp, "hash-map?", core.Value{ .procedure = hashmaps.is_hash_map });
+}
+
+/// Populates the interpreter's root environment with formatting primitive functions.
+///
+/// Parameters:
+/// - `interp`: A pointer to the interpreter instance.
+pub fn populate_format(interp: *interpreter.Interpreter) !void {
+    try interp.root_env.set(interp, "format", core.Value{ .procedure = format_mod.format });
+    try interp.root_env.set(interp, "value->string", core.Value{ .procedure = format_mod.value_to_string });
+}
+
+/// Populates the interpreter's root environment with JSON serialization primitive functions.
+pub fn populate_json(interp: *interpreter.Interpreter) !void {
+    try interp.root_env.set(interp, "json-serialize", core.Value{ .procedure = json_mod.json_serialize });
+    try interp.root_env.set(interp, "json-deserialize", core.Value{ .procedure = json_mod.json_deserialize });
+}
+
+/// Populates the interpreter's root environment with regex primitive functions.
+pub fn populate_regex(interp: *interpreter.Interpreter) !void {
+    try interp.root_env.set(interp, "regex-match?", core.Value{ .procedure = regex_mod.regex_match });
+    try interp.root_env.set(interp, "regex-search", core.Value{ .procedure = regex_mod.regex_search });
+    try interp.root_env.set(interp, "regex-replace", core.Value{ .procedure = regex_mod.regex_replace });
+    try interp.root_env.set(interp, "regex-split", core.Value{ .procedure = regex_mod.regex_split });
 }
 
 /// Populates the interpreter's root environment with all primitive functions.
