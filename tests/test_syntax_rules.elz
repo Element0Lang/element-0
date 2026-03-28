@@ -1,0 +1,68 @@
+;; Tests for macro system (define-macro and macro invocation)
+
+(define *tests-run* 0)
+(define *tests-failed* 0)
+
+(define (test-case name test-expr)
+  (set! *tests-run* (+ *tests-run* 1))
+  (if (not (try test-expr (catch err #f)))
+      (begin
+        (set! *tests-failed* (+ *tests-failed* 1))
+        (display "[FAILED]: ") (display name) (newline))
+      (begin
+        (display "[PASSED]: ") (display name) (newline))))
+
+(define (report-summary)
+  (newline)
+  (display "--------------------") (newline)
+  (display "Tests Finished.") (newline)
+  (display "Total run: ") (display *tests-run*) (newline)
+  (display "Passed: ") (display (- *tests-run* *tests-failed*)) (newline)
+  (display "Failed: ") (display *tests-failed*) (newline)
+  (newline)
+  (if (= *tests-failed* 0)
+      (begin (display "RESULT: PASSED") (newline))
+      (begin (display "RESULT: FAILED") (newline) (exit 1))))
+
+;; Basic define-macro
+(define-macro (when condition body)
+  (list 'if condition body #f))
+
+(test-case "when macro true"
+  (= (when #t 42) 42))
+
+(test-case "when macro false"
+  (equal? (when #f 42) #f))
+
+;; unless macro
+(define-macro (unless condition body)
+  (list 'if condition #f body))
+
+(test-case "unless macro true"
+  (equal? (unless #t 42) #f))
+
+(test-case "unless macro false"
+  (= (unless #f 42) 42))
+
+;; swap macro (using begin)
+(define-macro (my-and a b)
+  (list 'if a b #f))
+
+(test-case "my-and both true"
+  (= (my-and #t 42) 42))
+
+(test-case "my-and first false"
+  (equal? (my-and #f 42) #f))
+
+;; Macro that generates a lambda
+(define-macro (thunk body)
+  (list 'lambda '() body))
+
+(test-case "thunk macro"
+  (= ((thunk 42)) 42))
+
+;; Nested macro usage
+(test-case "nested when"
+  (= (when #t (when #t 99)) 99))
+
+(report-summary)

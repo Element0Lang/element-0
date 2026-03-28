@@ -191,7 +191,7 @@ Result of (zig-mul 7 6) is: 42
 
 ### Documentation
 
-You can find the full API documentation for the latest release of Elz [here](https://Element0Lang.github.io/element-0/).
+You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 
 Alternatively, you can use the `make docs` command to generate the API documentation for the current version of
 Elz from the source code.

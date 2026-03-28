@@ -27,7 +27,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz test test-elz release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz test test-elz test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -43,13 +43,13 @@ init: ## Initialize a new Zig project
 	@echo "Initializing a new Zig project..."
 	@$(ZIG) init
 
-build: ## Build project (e.g. 'make build BUILD_TYPE=ReleaseSafe')
+build: ## Build project (like 'make build BUILD_TYPE=ReleaseSafe')
 	@echo "Building project in $(BUILD_TYPE) mode with $(JOBS) concurrent jobs..."
 	@$(ZIG) build $(BUILD_OPTS) -j$(JOBS)
 
 rebuild: clean build  ## clean and build
 
-run: ## Run a Zig example (e.g. 'make run EXAMPLE=e1_ffi_1')
+run: ## Run a Zig example (like 'make run EXAMPLE=e1_ffi_1')
 	@if [ "$(EXAMPLE)" = "all" ]; then \
 	   echo "--> Running all Zig examples..."; \
 	   fail=0; \
@@ -64,7 +64,7 @@ run: ## Run a Zig example (e.g. 'make run EXAMPLE=e1_ffi_1')
 	   $(ZIG) build run-$(EXAMPLE) $(BUILD_OPTS); \
 	fi
 
-run-elz: build ## Run a Lisp example (e.g. 'make run-elz ELZ_EXAMPLE=e1-cons-car-cdr')
+run-elz: build ## Run a Lisp example (like 'make run-elz ELZ_EXAMPLE=e1-cons-car-cdr')
 	@if [ "$(ELZ_EXAMPLE)" = "all" ]; then \
 	   echo "--> Running all Lisp examples..."; \
 	   fail=0; \
@@ -90,6 +90,18 @@ test: ## Run tests
 test-elz: ## Run Element 0 standard library tests
 	@echo "Running Element 0 standard library tests..."
 	@$(ZIG) build test-elz $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
+
+test-prop: ## Run property-based tests
+	@echo "Running property-based tests..."
+	@$(ZIG) build test-prop $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
+
+test-integ: ## Run integration tests
+	@echo "Running integration tests..."
+	@$(ZIG) build test-integ $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
+
+test-all: ## Run all tests (unit, property, integration, and elz)
+	@echo "Running all tests..."
+	@$(ZIG) build test-all $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
 
 release: ## Build in Release mode
 	@echo "Building the project in Release mode..."
