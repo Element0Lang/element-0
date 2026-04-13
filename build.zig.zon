@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .chilli = .{
-            .url = "https://github.com/CogitatorTech/chilli/archive/v0.2.2.tar.gz",
-            .hash = "chilli-0.2.2-c19PrvIyAQAgsL0VkYCKq0DuxU7rZUpRuH991zsyOkYQ",
+            .url = "https://github.com/CogitatorTech/chilli/archive/refs/tags/v0.2.3.tar.gz",
+            .hash = "chilli-0.2.3-c19PrtRWAQCRWybB_q8jDmrDy1GevS8i1bafOp5ToetM",
         },
         .bdwgc = .{
             .url = "https://github.com/bdwgc/bdwgc/archive/refs/tags/v8.2.12.tar.gz",
