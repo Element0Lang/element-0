@@ -17,7 +17,7 @@ const ElzError = @import("errors.zig").ElzError;
 /// Returns:
 /// An `ArrayList` of tokens, or an error if tokenization fails.
 fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]const u8) {
-    var tokens = std.ArrayListUnmanaged([]const u8){};
+    var tokens = std.ArrayListUnmanaged([]const u8).empty;
     errdefer tokens.deinit(allocator);
     var i: usize = 0;
     while (i < source.len) {
@@ -84,7 +84,7 @@ const Parser = struct {
             return Value{ .pair = p2 };
         }
         if (std.mem.eql(u8, token, "(")) {
-            var values = std.ArrayListUnmanaged(Value){};
+            var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
                 if (self.position >= self.tokens.items.len) {
@@ -140,7 +140,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
     if (std.mem.eql(u8, token, "#t")) return Value{ .boolean = true };
     if (std.mem.eql(u8, token, "#f")) return Value{ .boolean = false };
     if (token.len >= 2 and token[0] == '"' and token[token.len - 1] == '"') {
-        var unescaped = std.ArrayListUnmanaged(u8){};
+        var unescaped = std.ArrayListUnmanaged(u8).empty;
         defer unescaped.deinit(allocator);
         var i: usize = 1;
         while (i < token.len - 1) {
@@ -215,7 +215,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         return err;
     };
     defer tokens.deinit(allocator);
-    if (tokens.items.len == 0) return .{};
+    if (tokens.items.len == 0) return .empty;
 
     var parser = Parser{
         .tokens = tokens,
@@ -223,7 +223,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         .allocator = allocator,
     };
 
-    var forms = std.ArrayListUnmanaged(Value){};
+    var forms = std.ArrayListUnmanaged(Value).empty;
     while (parser.position < parser.tokens.items.len) {
         try forms.append(allocator, try parser.parse_form());
     }

@@ -6,28 +6,28 @@ const interpreter = @import("../interpreter.zig");
 
 /// `open_input_file` opens a file for reading.
 /// Syntax: (open-input-file filename)
-pub fn open_input_file(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn open_input_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const filename_val = args.items[0];
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openInput(env.allocator, filename_val.string) catch return ElzError.FileNotFound;
+    port.* = core.Port.openInput(env.allocator, interp.io, filename_val.string) catch return ElzError.FileNotFound;
 
     return Value{ .port = port };
 }
 
 /// `open_output_file` opens a file for writing.
 /// Syntax: (open-output-file filename)
-pub fn open_output_file(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn open_output_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const filename_val = args.items[0];
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openOutput(env.allocator, filename_val.string) catch return ElzError.FileNotWritable;
+    port.* = core.Port.openOutput(env.allocator, interp.io, filename_val.string) catch return ElzError.FileNotWritable;
 
     return Value{ .port = port };
 }

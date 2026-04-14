@@ -16,11 +16,11 @@ const interpreter = @import("../interpreter.zig");
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn display(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn display(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interp.io, &buffer);
     const aw = &stdout_writer.interface;
     const value = args.items[0];
 
@@ -54,11 +54,11 @@ pub fn display(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn write_proc(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn write_proc(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interp.io, &buffer);
     const aw = &stdout_writer.interface;
     writer.write(args.items[0], aw) catch return ElzError.ForeignFunctionError;
     aw.flush() catch return ElzError.ForeignFunctionError;
@@ -73,11 +73,11 @@ pub fn write_proc(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn newline(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn newline(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
     var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interp.io, &buffer);
     const aw = &stdout_writer.interface;
     aw.writeAll("\n") catch return ElzError.ForeignFunctionError;
     aw.flush() catch return ElzError.ForeignFunctionError;
@@ -101,13 +101,10 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const filename = filename_val.string;
-    const file = std.fs.cwd().openFile(filename, .{}) catch |err| {
+    const source = std.Io.Dir.cwd().readFileAlloc(interp.io, filename, env.allocator, .limited(1 * 1024 * 1024)) catch |err| {
         interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to load file '{s}': {s}", .{ filename, @errorName(err) }) catch null;
         return ElzError.ForeignFunctionError;
     };
-    defer file.close();
-
-    const source = file.readToEndAlloc(env.allocator, 1 * 1024 * 1024) catch return ElzError.OutOfMemory;
     defer env.allocator.free(source);
 
     var forms = parser.readAll(source, env.allocator) catch |e| return e;
@@ -150,9 +147,9 @@ test "io primitives" {
 
     // Test load
     const filename = "test_load.elz";
-    var file = std.fs.cwd().createFile(filename, .{}) catch unreachable;
-    defer file.close();
-    _ = file.writeAll("(define x 42)") catch unreachable;
+    var file = std.Io.Dir.cwd().createFile(interp.io, filename, .{}) catch unreachable;
+    defer file.close(interp.io);
+    file.writeStreamingAll(interp.io, "(define x 42)") catch unreachable;
 
     var args = core.ValueList.init(interp.allocator);
     try args.append(interp.allocator, Value{ .string = filename });
@@ -162,5 +159,5 @@ test "io primitives" {
     const x = try interp.root_env.get("x", &interp);
     try testing.expect(x == Value{ .number = 42 });
 
-    std.fs.cwd().deleteFile(filename) catch {};
+    std.Io.Dir.cwd().deleteFile(interp.io, filename) catch {};
 }

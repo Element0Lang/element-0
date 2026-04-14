@@ -9,8 +9,9 @@ const interpreter = @import("../interpreter.zig");
 pub fn current_time(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
 
-    const timestamp = std.time.timestamp();
-    return core.Value{ .number = @floatFromInt(timestamp) };
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return core.Value{ .number = @floatFromInt(ts.sec) };
 }
 
 /// `current_time_ms` returns the current time in milliseconds since epoch.
@@ -19,8 +20,9 @@ pub fn current_time(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 pub fn current_time_ms(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
 
-    const timestamp_ns = std.time.nanoTimestamp();
-    const timestamp_ms = @divFloor(timestamp_ns, 1_000_000);
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    const timestamp_ms = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
     return core.Value{ .number = @floatFromInt(timestamp_ms) };
 }
 
@@ -86,7 +88,11 @@ pub fn sleep_ms(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
     if (ms < 0 or @floor(ms) != ms) return ElzError.InvalidArgument;
 
     const ns: u64 = @intFromFloat(ms * 1_000_000);
-    std.Thread.sleep(ns);
+    const req: std.c.timespec = .{
+        .sec = @intCast(ns / 1_000_000_000),
+        .nsec = @intCast(ns % 1_000_000_000),
+    };
+    _ = std.c.nanosleep(&req, null);
 
     return core.Value.unspecified;
 }

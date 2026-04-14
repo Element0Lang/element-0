@@ -204,7 +204,7 @@ fn evalImport(
         return core.Value{ .module = cached_mod_ptr };
     }
 
-    const source_bytes = std.fs.cwd().readFileAlloc(interp.allocator, path_str, 1024 * 1024) catch {
+    const source_bytes = std.Io.Dir.cwd().readFileAlloc(interp.io, path_str, interp.allocator, .limited(1024 * 1024)) catch {
         interp.last_error_message = "Failed to read module file.";
         return ElzError.InvalidArgument;
     };
@@ -229,7 +229,7 @@ fn evalImport(
         .exports = std.StringHashMap(core.Value).init(interp.allocator),
     };
 
-    var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }){};
+    var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }).empty;
     defer temp.deinit(interp.allocator);
 
     {
@@ -645,7 +645,7 @@ fn evalLet(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *En
 
 /// Evaluates a `try` special form.
 fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
-    var try_body_forms = std.ArrayListUnmanaged(core.Value){};
+    var try_body_forms = std.ArrayListUnmanaged(core.Value).empty;
     defer try_body_forms.deinit(env.allocator);
     var catch_clause: ?core.Value = null;
     var current_node = rest;
@@ -715,7 +715,7 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
 /// to produce an expansion form, and that expansion is then evaluated in the calling environment.
 fn evalMacroExpansion(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
     // Collect unevaluated args from the rest list
-    var unevaluated_args = std.ArrayListUnmanaged(Value){};
+    var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
     defer unevaluated_args.deinit(env.allocator);
     var current_node = rest;
     while (current_node != .nil) {
@@ -870,7 +870,9 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
             interp.time_check_counter +%= 1;
             if (interp.time_check_counter & 0xFF == 0) {
                 if (interp.eval_start_ms) |start_ms| {
-                    const now = std.time.milliTimestamp();
+                    var ts: std.c.timespec = undefined;
+                    _ = std.c.clock_gettime(.REALTIME, &ts);
+                    const now = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
                     if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
                         return ElzError.TimeLimitExceeded;
                     }

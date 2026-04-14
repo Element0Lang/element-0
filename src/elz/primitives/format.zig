@@ -39,9 +39,10 @@ pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
     if (template_val != .string) return ElzError.InvalidArgument;
     const template = template_val.string;
 
-    var result = std.ArrayListUnmanaged(u8){};
     const allocator = env.allocator;
-    errdefer result.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const w = &aw.writer;
 
     var arg_idx: usize = 1;
     var i: usize = 0;
@@ -52,34 +53,33 @@ pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
             switch (directive) {
                 'a' => {
                     if (arg_idx >= args.items.len) return ElzError.WrongArgumentCount;
-                    writeDisplay(args.items[arg_idx], result.writer(allocator)) catch return ElzError.OutOfMemory;
+                    writeDisplay(args.items[arg_idx], w) catch return ElzError.OutOfMemory;
                     arg_idx += 1;
                 },
                 's' => {
                     if (arg_idx >= args.items.len) return ElzError.WrongArgumentCount;
-                    writer_mod.write(args.items[arg_idx], result.writer(allocator)) catch return ElzError.OutOfMemory;
+                    writer_mod.write(args.items[arg_idx], w) catch return ElzError.OutOfMemory;
                     arg_idx += 1;
                 },
                 '%' => {
-                    result.append(allocator, '\n') catch return ElzError.OutOfMemory;
+                    w.writeByte('\n') catch return ElzError.OutOfMemory;
                 },
                 '~' => {
-                    result.append(allocator, '~') catch return ElzError.OutOfMemory;
+                    w.writeByte('~') catch return ElzError.OutOfMemory;
                 },
                 else => {
-                    // Unknown directive, output as-is
-                    result.append(allocator, '~') catch return ElzError.OutOfMemory;
-                    result.append(allocator, directive) catch return ElzError.OutOfMemory;
+                    w.writeByte('~') catch return ElzError.OutOfMemory;
+                    w.writeByte(directive) catch return ElzError.OutOfMemory;
                 },
             }
             i += 2;
         } else {
-            result.append(allocator, template[i]) catch return ElzError.OutOfMemory;
+            w.writeByte(template[i]) catch return ElzError.OutOfMemory;
             i += 1;
         }
     }
 
-    return Value{ .string = result.toOwnedSlice(allocator) catch return ElzError.OutOfMemory };
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
 }
 
 /// `value->string` converts any value to its string representation (write mode).
@@ -90,12 +90,12 @@ pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 pub fn value_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
-    var buf = std.ArrayListUnmanaged(u8){};
     const allocator = env.allocator;
-    errdefer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
 
-    writer_mod.write(args.items[0], buf.writer(allocator)) catch return ElzError.OutOfMemory;
-    return Value{ .string = buf.toOwnedSlice(allocator) catch return ElzError.OutOfMemory };
+    writer_mod.write(args.items[0], &aw.writer) catch return ElzError.OutOfMemory;
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
 }
 
 test "format basic substitution" {

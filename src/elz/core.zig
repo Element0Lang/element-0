@@ -228,7 +228,9 @@ pub const HashMap = struct {
 /// Ports can be input (for reading) or output (for writing).
 pub const Port = struct {
     /// The underlying file handle.
-    file: std.fs.File,
+    file: std.Io.File,
+    /// The I/O implementation.
+    io: std.Io,
     /// Whether this is an input port (true) or output port (false).
     is_input: bool,
     /// Whether the port is open.
@@ -236,29 +238,31 @@ pub const Port = struct {
     /// Name of the file (for error messages).
     name: []const u8,
 
-    pub fn openInput(allocator: std.mem.Allocator, name: []const u8) !Port {
-        const file = try std.fs.cwd().openFile(name, .{});
+    pub fn openInput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
+        const file = try std.Io.Dir.cwd().openFile(io, name, .{});
         return .{
             .file = file,
+            .io = io,
             .is_input = true,
             .is_open = true,
-            .name = try allocator.dupe(u8, name), // Clone to own the memory
+            .name = try allocator.dupe(u8, name),
         };
     }
 
-    pub fn openOutput(allocator: std.mem.Allocator, name: []const u8) !Port {
-        const file = try std.fs.cwd().createFile(name, .{});
+    pub fn openOutput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
+        const file = try std.Io.Dir.cwd().createFile(io, name, .{});
         return .{
             .file = file,
+            .io = io,
             .is_input = false,
             .is_open = true,
-            .name = try allocator.dupe(u8, name), // Clone to own the memory
+            .name = try allocator.dupe(u8, name),
         };
     }
 
     pub fn close(self: *Port) void {
         if (self.is_open) {
-            self.file.close();
+            self.file.close(self.io);
             self.is_open = false;
         }
     }
@@ -270,9 +274,11 @@ pub const Port = struct {
         var len: usize = 0;
 
         while (len < buf.len - 1) {
-            const bytes_read = self.file.read(&read_buf) catch return null;
+            const bytes_read = self.file.readStreaming(self.io, &.{&read_buf}) catch |err| switch (err) {
+                error.EndOfStream => 0,
+                else => return null,
+            };
             if (bytes_read == 0) {
-                // EOF
                 if (len == 0) return null;
                 break;
             }
@@ -288,14 +294,17 @@ pub const Port = struct {
     pub fn readChar(self: *Port) !?u8 {
         if (!self.is_input or !self.is_open) return null;
         var buf: [1]u8 = undefined;
-        const bytes_read = self.file.read(&buf) catch return null;
+        const bytes_read = self.file.readStreaming(self.io, &.{&buf}) catch |err| switch (err) {
+            error.EndOfStream => return null,
+            else => return null,
+        };
         if (bytes_read == 0) return null;
         return buf[0];
     }
 
     pub fn writeString(self: *Port, str: []const u8) !void {
         if (self.is_input or !self.is_open) return error.InvalidPort;
-        _ = try self.file.write(str);
+        try self.file.writeStreamingAll(self.io, str);
     }
 };
 

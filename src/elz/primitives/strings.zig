@@ -45,7 +45,7 @@ pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
 /// Parameters:
 /// - `args`: A `ValueList` of strings to be appended.
 pub fn string_append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    var buffer = std.ArrayListUnmanaged(u8){};
+    var buffer = std.ArrayListUnmanaged(u8).empty;
     defer buffer.deinit(env.allocator);
 
     for (args.items) |arg| {
@@ -274,7 +274,7 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
 
     // Build a list of substrings
     var result: Value = Value.nil;
-    var temp_parts = std.ArrayListUnmanaged([]const u8){};
+    var temp_parts = std.ArrayListUnmanaged([]const u8).empty;
     defer temp_parts.deinit(env.allocator);
 
     var it = std.mem.splitSequence(u8, str, delim);

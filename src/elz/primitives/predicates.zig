@@ -16,7 +16,7 @@ fn isProperList(v: Value) bool {
 /// An iterative implementation of `equal?` that is not vulnerable to stack
 /// overflow attacks.
 fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
-    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }){};
+    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }).empty;
     defer stack.deinit(allocator);
     try stack.append(allocator, .{ .a = val1, .b = val2 });
 
