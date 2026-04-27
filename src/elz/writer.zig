@@ -192,33 +192,38 @@ test "write deeply nested list - regression for stack overflow" {
     var buf: [8192]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
 
-    // Create a deeply nested list: (1 (2 (3 (4 ... ))))
-    var current: Value = Value.nil;
-    var depth: usize = 0;
+    // Build a deeply nested list `(1 (2 (3 (4 ... (500)))))`. The innermost level is the
+    // one-element list `(500)`. Each outer level wraps the previous list with one extra
+    // pair so the writer's recursive `car` walk reaches the configured depth.
+    var allocated_pairs: std.ArrayListUnmanaged(*core.Pair) = .empty;
+    defer allocated_pairs.deinit(allocator);
 
-    // Create 500 levels of nesting (well below the 1000 limit)
+    const innermost = try allocator.create(core.Pair);
+    try allocated_pairs.append(allocator, innermost);
+    innermost.* = .{ .car = Value{ .number = 500 }, .cdr = Value.nil };
+    var current: Value = Value{ .pair = innermost };
+
+    var depth: usize = 1;
     while (depth < 500) : (depth += 1) {
-        const p = try allocator.create(core.Pair);
-        p.* = .{
-            .car = Value{ .number = @floatFromInt(500 - depth) },
-            .cdr = current,
-        };
-        current = Value{ .pair = p };
-    }
-    defer {
-        var temp = current;
-        while (temp != .nil) {
-            const p = temp.pair;
-            temp = p.cdr;
-            allocator.destroy(p);
-        }
-    }
+        const wrapper = try allocator.create(core.Pair);
+        try allocated_pairs.append(allocator, wrapper);
+        wrapper.* = .{ .car = current, .cdr = Value.nil };
 
-    // This should not stack overflow
+        const outer = try allocator.create(core.Pair);
+        try allocated_pairs.append(allocator, outer);
+        outer.* = .{
+            .car = Value{ .number = @floatFromInt(500 - depth) },
+            .cdr = Value{ .pair = wrapper },
+        };
+        current = Value{ .pair = outer };
+    }
+    defer for (allocated_pairs.items) |p| allocator.destroy(p);
+
+    // This should not stack overflow.
     try write(current, &w);
     const output = w.buffered();
 
-    // Verify it starts correctly
+    // Verify it starts correctly.
     try testing.expect(std.mem.startsWith(u8, output, "(1 (2 (3"));
 }
 

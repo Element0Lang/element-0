@@ -25,8 +25,8 @@ pub const parser = @import("elz/parser.zig");
 pub const eval = @import("elz/eval.zig");
 
 // Inline `test` blocks across `src/elz/**` are intentionally not pulled into `make test`
-// yet. After resolving 0.16 migration drift, 111 unit tests compile and run, but 6 of
-// them leak under `std.testing.allocator` (107 leaks in one regression test alone) and
-// one writer test fails on a 500-level nested list. Reviving inline test discovery is
-// tracked as a separate slice so that surfacing those issues does not block the rest of
-// `make test`.
+// yet. After resolving 0.16 migration drift, 112 unit tests compile and pass, but 153
+// leaks under `std.testing.allocator` remain across `core`, `math`, `control`,
+// `modules`, and `parser` (107 in one regression test alone). Reviving inline test
+// discovery is tracked as a separate slice so that surfacing those leaks does not block
+// `make test` from passing.
