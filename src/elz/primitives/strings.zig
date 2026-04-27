@@ -106,6 +106,102 @@ pub fn char_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     return Value{ .boolean = a.character >= b.character };
 }
 
+/// Folds an ASCII letter to lowercase. Non-ASCII code points pass through unchanged.
+fn ascii_fold_lower(c: u32) u32 {
+    if (c >= 'A' and c <= 'Z') return c + 32;
+    return c;
+}
+
+fn char_ci_compare(args: core.ValueList) ElzError!struct { a: u32, b: u32 } {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return .{ .a = ascii_fold_lower(a.character), .b = ascii_fold_lower(b.character) };
+}
+
+/// `char_ci_eq` checks two characters for equality, case-insensitive over ASCII.
+pub fn char_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a == pair.b };
+}
+
+/// `char_ci_lt` is the case-insensitive less-than comparison.
+pub fn char_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a < pair.b };
+}
+
+/// `char_ci_gt` is the case-insensitive greater-than comparison.
+pub fn char_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a > pair.b };
+}
+
+/// `char_ci_le` is the case-insensitive less-than-or-equal comparison.
+pub fn char_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a <= pair.b };
+}
+
+/// `char_ci_ge` is the case-insensitive greater-than-or-equal comparison.
+pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a >= pair.b };
+}
+
+fn char_arg(args: core.ValueList) ElzError!u32 {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const c = args.items[0];
+    if (c != .character) return ElzError.InvalidArgument;
+    return c.character;
+}
+
+/// `char_alphabetic_p` returns `#t` for ASCII letters.
+pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const is_alpha = (cp >= 'A' and cp <= 'Z') or (cp >= 'a' and cp <= 'z');
+    return Value{ .boolean = is_alpha };
+}
+
+/// `char_numeric_p` returns `#t` for ASCII decimal digits.
+pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= '0' and cp <= '9' };
+}
+
+/// `char_whitespace_p` returns `#t` for ASCII whitespace.
+pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const is_ws = cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0B or cp == 0x0C;
+    return Value{ .boolean = is_ws };
+}
+
+/// `char_upper_case_p` returns `#t` for ASCII uppercase letters.
+pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= 'A' and cp <= 'Z' };
+}
+
+/// `char_lower_case_p` returns `#t` for ASCII lowercase letters.
+pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= 'a' and cp <= 'z' };
+}
+
+/// `char_upcase` returns the ASCII uppercase form of a character. Non-letters pass through.
+pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const folded: u32 = if (cp >= 'a' and cp <= 'z') cp - 32 else cp;
+    return Value{ .character = folded };
+}
+
+/// `char_downcase` returns the ASCII lowercase form of a character. Non-letters pass through.
+pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .character = ascii_fold_lower(cp) };
+}
+
 /// `char_to_integer` converts a character to its Unicode code point.
 pub fn char_to_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
@@ -439,4 +535,71 @@ test "string primitives" {
     try args.append(interp.allocator, Value{ .character = 'a' });
     result = try char_eq(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == Value{ .boolean = true });
+}
+
+test "char-ci comparisons" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .character = 'A' });
+    try args.append(interp.allocator, Value{ .character = 'a' });
+    try testing.expect((try char_ci_eq(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_le(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_ge(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_ci_gt(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(interp.allocator, Value{ .character = 'a' });
+    try args.append(interp.allocator, Value{ .character = 'B' });
+    try testing.expect((try char_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == true);
+}
+
+test "char predicates" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .character = 'A' });
+    try testing.expect((try char_alphabetic_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_upper_case_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_lower_case_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_numeric_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_whitespace_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(interp.allocator, Value{ .character = '7' });
+    try testing.expect((try char_numeric_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_alphabetic_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(interp.allocator, Value{ .character = ' ' });
+    try testing.expect((try char_whitespace_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+}
+
+test "char case conversion" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(interp.allocator, Value{ .character = 'a' });
+    try testing.expect((try char_upcase(&interp, interp.root_env, args, &fuel)).character == 'A');
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == 'a');
+
+    args.clearRetainingCapacity();
+    try args.append(interp.allocator, Value{ .character = 'Z' });
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == 'z');
+
+    // Non-letters pass through.
+    args.clearRetainingCapacity();
+    try args.append(interp.allocator, Value{ .character = '5' });
+    try testing.expect((try char_upcase(&interp, interp.root_env, args, &fuel)).character == '5');
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == '5');
 }

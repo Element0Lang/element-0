@@ -110,6 +110,18 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "char>?", core.Value{ .procedure = strings.char_gt });
     try interp.root_env.set(interp, "char<=?", core.Value{ .procedure = strings.char_le });
     try interp.root_env.set(interp, "char>=?", core.Value{ .procedure = strings.char_ge });
+    try interp.root_env.set(interp, "char-ci=?", core.Value{ .procedure = strings.char_ci_eq });
+    try interp.root_env.set(interp, "char-ci<?", core.Value{ .procedure = strings.char_ci_lt });
+    try interp.root_env.set(interp, "char-ci>?", core.Value{ .procedure = strings.char_ci_gt });
+    try interp.root_env.set(interp, "char-ci<=?", core.Value{ .procedure = strings.char_ci_le });
+    try interp.root_env.set(interp, "char-ci>=?", core.Value{ .procedure = strings.char_ci_ge });
+    try interp.root_env.set(interp, "char-alphabetic?", core.Value{ .procedure = strings.char_alphabetic_p });
+    try interp.root_env.set(interp, "char-numeric?", core.Value{ .procedure = strings.char_numeric_p });
+    try interp.root_env.set(interp, "char-whitespace?", core.Value{ .procedure = strings.char_whitespace_p });
+    try interp.root_env.set(interp, "char-upper-case?", core.Value{ .procedure = strings.char_upper_case_p });
+    try interp.root_env.set(interp, "char-lower-case?", core.Value{ .procedure = strings.char_lower_case_p });
+    try interp.root_env.set(interp, "char-upcase", core.Value{ .procedure = strings.char_upcase });
+    try interp.root_env.set(interp, "char-downcase", core.Value{ .procedure = strings.char_downcase });
     try interp.root_env.set(interp, "char->integer", core.Value{ .procedure = strings.char_to_integer });
     try interp.root_env.set(interp, "integer->char", core.Value{ .procedure = strings.integer_to_char });
     try interp.root_env.set(interp, "string-ref", core.Value{ .procedure = strings.string_ref });
