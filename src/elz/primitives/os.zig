@@ -146,7 +146,7 @@ test "getenv returns value or false" {
 
     // Test getting a known env var (PATH should always exist)
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .string = "PATH" });
+    try args.append(core.Value{ .string = "PATH" });
 
     const result = try getenv(&interp, interp.root_env, args, undefined);
     // PATH should return a string
@@ -160,7 +160,7 @@ test "file_exists returns boolean" {
 
     // Test with existing file
     var args1 = core.ValueList.init(interp.allocator);
-    try args1.append(interp.allocator, core.Value{ .string = "build.zig" });
+    try args1.append(core.Value{ .string = "build.zig" });
 
     const result1 = try file_exists(&interp, interp.root_env, args1, undefined);
     try testing.expect(result1 == .boolean);
@@ -168,7 +168,7 @@ test "file_exists returns boolean" {
 
     // Test with non-existing file
     var args2 = core.ValueList.init(interp.allocator);
-    try args2.append(interp.allocator, core.Value{ .string = "nonexistent_file_12345.xyz" });
+    try args2.append(core.Value{ .string = "nonexistent_file_12345.xyz" });
 
     const result2 = try file_exists(&interp, interp.root_env, args2, undefined);
     try testing.expect(result2 == .boolean);
@@ -193,7 +193,7 @@ test "directory_list returns list" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .string = "." });
+    try args.append(core.Value{ .string = "." });
 
     const result = try directory_list(&interp, interp.root_env, args, undefined);
 

@@ -45,6 +45,114 @@ pub fn apply(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     return eval.eval_proc(interp, proc, final_args, env, fuel);
 }
 
+/// `values` packages its arguments as a multi-values envelope. With one argument it
+/// returns the argument itself. With zero or more than one argument it returns a
+/// `MultiValues` value that only `call-with-values` will unpack.
+/// Syntax: (values obj ...)
+pub fn values(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len == 1) return args.items[0];
+
+    const items = env.allocator.alloc(core.Value, args.items.len) catch return ElzError.OutOfMemory;
+    for (args.items, 0..) |v, i| {
+        items[i] = v;
+    }
+    const mv = env.allocator.create(core.MultiValues) catch return ElzError.OutOfMemory;
+    mv.* = .{ .items = items };
+    return core.Value{ .multi_values = mv };
+}
+
+/// `call_with_values` calls `producer` with no arguments and applies `consumer` to
+/// the values produced. If the producer returns a `MultiValues`, its items become the
+/// consumer arguments; any other value is passed as a single argument.
+/// Syntax: (call-with-values producer consumer)
+pub fn call_with_values(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const producer = args.items[0];
+    const consumer = args.items[1];
+
+    var producer_args = core.ValueList.init(env.allocator);
+    defer producer_args.deinit();
+    const produced = try eval.eval_proc(interp, producer, producer_args, env, fuel);
+
+    var consumer_args = core.ValueList.init(env.allocator);
+    defer consumer_args.deinit();
+    if (produced == .multi_values) {
+        for (produced.multi_values.items) |v| {
+            try consumer_args.append(v);
+        }
+    } else {
+        try consumer_args.append(produced);
+    }
+    return eval.eval_proc(interp, consumer, consumer_args, env, fuel);
+}
+
+/// `with_input_from_file` opens `path` for reading, redirects the interpreter's current
+/// input port to the resulting port, calls `thunk`, then restores the previous current
+/// input port and closes the file. Returns the value the thunk produced.
+/// Syntax: (with-input-from-file path thunk)
+pub fn with_input_from_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const path_val = args.items[0];
+    const thunk = args.items[1];
+    if (path_val != .string) return ElzError.InvalidArgument;
+
+    const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    new_port.* = core.Port.openInput(env.allocator, interp.io, path_val.string) catch return ElzError.FileNotFound;
+
+    const saved = interp.stdin_port;
+    interp.stdin_port = new_port;
+
+    var thunk_args = core.ValueList.init(env.allocator);
+    defer thunk_args.deinit();
+    const result = eval.eval_proc(interp, thunk, thunk_args, env, fuel);
+
+    interp.stdin_port = saved;
+    new_port.close();
+    return result;
+}
+
+/// `with_output_to_file` is the output counterpart to `with_input_from_file`. Display,
+/// write, and newline calls inside `thunk` go to the file instead of standard output.
+/// Syntax: (with-output-to-file path thunk)
+pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const path_val = args.items[0];
+    const thunk = args.items[1];
+    if (path_val != .string) return ElzError.InvalidArgument;
+
+    const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    new_port.* = core.Port.openOutput(env.allocator, interp.io, path_val.string) catch return ElzError.FileNotWritable;
+
+    const saved = interp.stdout_port;
+    interp.stdout_port = new_port;
+
+    var thunk_args = core.ValueList.init(env.allocator);
+    defer thunk_args.deinit();
+    const result = eval.eval_proc(interp, thunk, thunk_args, env, fuel);
+
+    interp.stdout_port = saved;
+    new_port.close();
+    return result;
+}
+
+/// `force` evaluates a delayed promise and memoizes the result. Subsequent calls return
+/// the cached value. A non-promise argument is returned unchanged.
+/// Syntax: (force promise)
+pub fn force(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const arg = args.items[0];
+    if (arg != .promise) return arg;
+
+    const pr = arg.promise;
+    if (pr.forced) return pr.result;
+
+    var expr = pr.expr;
+    const result = try eval.eval(interp, &expr, pr.env, fuel);
+    pr.result = result;
+    pr.forced = true;
+    return result;
+}
+
 /// `eval_proc` is the implementation of the `eval` primitive function.
 /// It evaluates an expression in a given environment.
 ///
@@ -130,7 +238,7 @@ test "control primitives" {
 
     // Test apply with basic lambda
     const source = "(lambda (x y) (+ x y))";
-    const forms = try @import("../parser.zig").readAll(source, allocator);
+    var forms = try @import("../parser.zig").readAll(source, allocator);
     defer forms.deinit(allocator);
     const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
 
@@ -158,7 +266,7 @@ test "apply with empty list" {
 
     // Create a lambda that takes no arguments
     const source = "(lambda () 42)";
-    const forms = try @import("../parser.zig").readAll(source, allocator);
+    var forms = try @import("../parser.zig").readAll(source, allocator);
     defer forms.deinit(allocator);
     const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
 
@@ -182,7 +290,7 @@ test "apply memory leak regression" {
 
     // Create a simple lambda
     const source = "(lambda (x) x)";
-    const forms = try @import("../parser.zig").readAll(source, allocator);
+    var forms = try @import("../parser.zig").readAll(source, allocator);
     defer forms.deinit(allocator);
     const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
 

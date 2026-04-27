@@ -1,6 +1,6 @@
 const std = @import("std");
 const errors = @import("errors.zig");
-const ElzError = errors.ElzError;
+pub const ElzError = errors.ElzError;
 const interpreter = @import("interpreter.zig");
 
 const gc = @import("gc.zig");
@@ -162,6 +162,27 @@ pub const Macro = struct {
     env: *Environment,
 };
 
+/// One pattern/template pair from a `syntax-rules` form. The pattern starts with the
+/// macro keyword (or `_`) by R5RS convention.
+pub const SyntaxRule = struct {
+    pattern: Value,
+    template: Value,
+};
+
+/// Represents a `syntax-rules` macro transformer. Pattern matching uses literal
+/// identifiers for exact-name matching and binds remaining identifiers as pattern
+/// variables.
+pub const SyntaxRulesMacro = struct {
+    /// The macro name (for error messages).
+    name: []const u8,
+    /// Identifier names listed as literals in `(syntax-rules (literal ...) ...)`.
+    literals: [][]const u8,
+    /// Pattern/template rules, tried top-to-bottom.
+    rules: []SyntaxRule,
+    /// The environment captured at definition time. Used for hygiene in later slices.
+    env: *Environment,
+};
+
 /// A pointer to a native Zig function that can be called from Elz.
 pub const PrimitiveFn = *const fn (interp: *interpreter.Interpreter, env: *Environment, args: ValueList, fuel: *u64) ElzError!Value;
 
@@ -237,6 +258,24 @@ pub const Port = struct {
     is_open: bool,
     /// Name of the file (for error messages).
     name: []const u8,
+    /// One-byte lookahead buffer used by `peekChar`. Empty when no char has been peeked.
+    peek_buffer: ?u8 = null,
+    /// True when `close` should not invoke the underlying file's close. Used for stdin
+    /// and stdout ports that share a file handle with the host process.
+    persistent: bool = false,
+
+    /// Wraps an already-open file as a port without taking ownership of the close.
+    pub fn fromStandard(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File, is_input: bool, name: []const u8) !Port {
+        return .{
+            .file = file,
+            .io = io,
+            .is_input = is_input,
+            .is_open = true,
+            .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
+            .persistent = true,
+        };
+    }
 
     pub fn openInput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
         const file = try std.Io.Dir.cwd().openFile(io, name, .{});
@@ -246,6 +285,7 @@ pub const Port = struct {
             .is_input = true,
             .is_open = true,
             .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
         };
     }
 
@@ -257,33 +297,31 @@ pub const Port = struct {
             .is_input = false,
             .is_open = true,
             .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
         };
     }
 
     pub fn close(self: *Port) void {
-        if (self.is_open) {
+        if (self.is_open and !self.persistent) {
             self.file.close(self.io);
-            self.is_open = false;
         }
+        self.is_open = false;
     }
 
     pub fn readLine(self: *Port, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.is_input or !self.is_open) return null;
         var buf: [4096]u8 = undefined;
-        var read_buf: [1]u8 = undefined;
         var len: usize = 0;
 
         while (len < buf.len - 1) {
-            const bytes_read = self.file.readStreaming(self.io, &.{&read_buf}) catch |err| switch (err) {
-                error.EndOfStream => 0,
-                else => return null,
-            };
-            if (bytes_read == 0) {
+            const c_opt = try self.readChar();
+            if (c_opt == null) {
                 if (len == 0) return null;
                 break;
             }
-            if (read_buf[0] == '\n') break;
-            buf[len] = read_buf[0];
+            const c = c_opt.?;
+            if (c == '\n') break;
+            buf[len] = c;
             len += 1;
         }
 
@@ -293,6 +331,10 @@ pub const Port = struct {
 
     pub fn readChar(self: *Port) !?u8 {
         if (!self.is_input or !self.is_open) return null;
+        if (self.peek_buffer) |c| {
+            self.peek_buffer = null;
+            return c;
+        }
         var buf: [1]u8 = undefined;
         const bytes_read = self.file.readStreaming(self.io, &.{&buf}) catch |err| switch (err) {
             error.EndOfStream => return null,
@@ -302,10 +344,40 @@ pub const Port = struct {
         return buf[0];
     }
 
+    pub fn peekChar(self: *Port) !?u8 {
+        if (!self.is_input or !self.is_open) return null;
+        if (self.peek_buffer) |c| return c;
+        const c_opt = try self.readChar();
+        if (c_opt) |c| {
+            self.peek_buffer = c;
+            return c;
+        }
+        return null;
+    }
+
     pub fn writeString(self: *Port, str: []const u8) !void {
         if (self.is_input or !self.is_open) return error.InvalidPort;
         try self.file.writeStreamingAll(self.io, str);
     }
+};
+
+/// Represents zero or more return values produced by `values`. A continuation expecting
+/// a single value but receiving a `MultiValues` is an error in standard Scheme.
+pub const MultiValues = struct {
+    items: []Value,
+};
+
+/// Represents a delayed (lazy) computation. A promise is created by `delay` and forced
+/// by `force`. The result is memoized after the first force.
+pub const Promise = struct {
+    /// The thunk expression to evaluate. Unused once the promise is forced.
+    expr: Value,
+    /// The environment captured at `delay` time.
+    env: *Environment,
+    /// True once the promise has been forced and `result` is populated.
+    forced: bool,
+    /// The cached result, valid only when `forced` is true.
+    result: Value,
 };
 
 /// `Value` is the core data type in the Elz interpreter.
@@ -343,6 +415,12 @@ pub const Value = union(enum) {
     hash_map: *HashMap,
     /// A port (file I/O stream).
     port: *Port,
+    /// A delayed computation produced by `delay`.
+    promise: *Promise,
+    /// Zero or more return values produced by `values`.
+    multi_values: *MultiValues,
+    /// A `syntax-rules` based macro transformer.
+    syntax_rules: *SyntaxRulesMacro,
     /// The `nil` or empty list value.
     nil,
     /// An unspecified or void value.
@@ -376,7 +454,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .boolean, .character, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .nil, .unspecified => self,
+            .number, .boolean, .character, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .string => |s| Value{ .string = try allocator.dupe(u8, s) },
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
@@ -432,6 +510,7 @@ test "core environment" {
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
         .allocator = allocator,
+        .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,
         .last_error_message = null,
         .module_cache = undefined,
@@ -441,19 +520,20 @@ test "core environment" {
     var env = try Environment.init(allocator, null);
     try env.set(&interp_stub, "x", Value{ .number = 42 });
     var value = try env.get("x", &interp_stub);
-    try testing.expect(value == Value{ .number = 42 });
+    try testing.expect(value == .number);
+    try testing.expectEqual(@as(f64, 42), value.number);
 
     // Test get from outer environment
     var outer_env = try Environment.init(allocator, null);
     try outer_env.set(&interp_stub, "y", Value{ .string = "hello" });
     var inner_env = try Environment.init(allocator, outer_env);
     value = try inner_env.get("y", &interp_stub);
-    try testing.expect(value == Value{ .string = "hello" });
+    try testing.expectEqualStrings("hello", value.string);
 
     // Test update on outer environment
     try inner_env.update(&interp_stub, "y", Value{ .string = "world" });
     value = try outer_env.get("y", &interp_stub);
-    try testing.expect(value == Value{ .string = "world" });
+    try testing.expectEqualStrings("world", value.string);
 
     // Test update on symbol not found
     const err = inner_env.update(&interp_stub, "z", Value{ .number = 0 });

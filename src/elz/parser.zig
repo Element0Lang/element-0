@@ -236,7 +236,8 @@ test "parser" {
 
     // Test parsing a number
     var value = try read("42", allocator);
-    try testing.expect(value == Value{ .number = 42 });
+    try testing.expect(value == .number);
+    try testing.expectEqual(@as(f64, 42), value.number);
 
     // Test parsing a symbol
     value = try read("foo", allocator);
@@ -244,40 +245,32 @@ test "parser" {
 
     // Test parsing a string
     value = try read("\"hello world\"", allocator);
-    try testing.expect(value == Value{ .string = "hello world" });
+    try testing.expect(value == .string);
+    try testing.expectEqualStrings("hello world", value.string);
 
     // Test parsing a list
     value = try read("(+ 1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     var p = value.pair;
     try testing.expect(p.car.is_symbol("+"));
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .number and p.car.number == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .number and p.car.number == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test parsing a quoted expression
     value = try read("'(1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     p = value.pair;
     try testing.expect(p.car.is_symbol("quote"));
     p = p.cdr.pair;
     const inner_list = p.car;
-    if (inner_list != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{inner_list});
-        return error.TestExpectedPair;
-    }
+    if (inner_list != .pair) return error.TestExpectedPair;
     p = inner_list.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .number and p.car.number == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .number and p.car.number == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test unterminated string error

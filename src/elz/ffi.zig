@@ -52,7 +52,7 @@ pub fn Caster(comptime T: type) type {
                     else => ElzError.InvalidArgument,
                 },
                 .pointer => |ptr_info| {
-                    if (ptr_info.size == .Slice and ptr_info.child == u8) {
+                    if (ptr_info.size == .slice and ptr_info.child == u8) {
                         // []const u8 - extract from string value
                         return switch (v) {
                             .string => |s| s,
@@ -217,7 +217,7 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
         .int, .comptime_int => core.Value{ .number = @floatFromInt(value) },
         .bool => core.Value{ .boolean = value },
         .pointer => |ptr_info| {
-            if (ptr_info.size == .Slice and ptr_info.child == u8) {
+            if (ptr_info.size == .slice and ptr_info.child == u8) {
                 return core.Value{ .string = allocator.dupe(u8, value) catch return core.Value.nil };
             } else {
                 @compileError("Unsupported pointer return type for FFI: " ++ @typeName(T));
@@ -314,9 +314,9 @@ test "makeForeignFunc with 2-arg function" {
 
     // Create args list
     var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
-    try args.append(allocator, core.Value{ .number = 3 });
-    try args.append(allocator, core.Value{ .number = 4 });
+    defer args.deinit();
+    try args.append(core.Value{ .number = 3 });
+    try args.append(core.Value{ .number = 4 });
 
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);
@@ -401,8 +401,8 @@ test "makeForeignFunc with 1-arg function" {
     defer env.bindings.deinit();
 
     var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
-    try args.append(allocator, core.Value{ .number = 5 });
+    defer args.deinit();
+    try args.append(core.Value{ .number = 5 });
 
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);

@@ -42,7 +42,7 @@ pub fn module_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: 
 test "module primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
@@ -56,7 +56,7 @@ test "module primitives" {
     try args.append(Value{ .symbol = "x" });
 
     const result = try module_ref(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .number = 42 });
+    try testing.expectEqual(@as(f64, 42), result.number);
 
     // Test symbol not found
     args.clearRetainingCapacity();

@@ -131,7 +131,7 @@ test "time_to_components returns list" {
     // Test with a known timestamp: 2024-01-15 12:30:45 UTC
     // Unix timestamp for this is approximately 1705321845
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = 1705321845 });
+    try args.append(core.Value{ .number = 1705321845 });
 
     const result = try time_to_components(&interp, interp.root_env, args, undefined);
 

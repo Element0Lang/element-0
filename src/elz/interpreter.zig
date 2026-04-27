@@ -57,6 +57,10 @@ pub const Interpreter = struct {
     escape_id: u64 = 0,
     /// Counter for generating unique escape continuation IDs.
     escape_id_counter: u64 = 0,
+    /// The current input port. Populated lazily on first reference.
+    stdin_port: ?*core.Port = null,
+    /// The current output port. Populated lazily on first reference.
+    stdout_port: ?*core.Port = null,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -170,6 +174,24 @@ pub const Interpreter = struct {
     /// but this ensures proper cleanup of the module cache.
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard input stream.
+    pub fn currentInputPort(self: *Interpreter) !*core.Port {
+        if (self.stdin_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdin(), true, "<stdin>");
+        self.stdin_port = port;
+        return port;
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard output stream.
+    pub fn currentOutputPort(self: *Interpreter) !*core.Port {
+        if (self.stdout_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
+        self.stdout_port = port;
+        return port;
     }
 };
 

@@ -173,6 +173,113 @@ pub fn tan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
     return Value{ .number = std.math.tan(args.items[0].number) };
 }
 
+/// `asin` returns the arc sine of its argument, in radians.
+pub fn asin(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number) return ElzError.InvalidArgument;
+    return Value{ .number = std.math.asin(args.items[0].number) };
+}
+
+/// `acos` returns the arc cosine of its argument, in radians.
+pub fn acos(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number) return ElzError.InvalidArgument;
+    return Value{ .number = std.math.acos(args.items[0].number) };
+}
+
+/// `atan` returns the arc tangent. With one argument it returns `atan(z)` in `[-pi/2, pi/2]`.
+/// With two arguments `(atan y x)` it returns the angle of the point `(x, y)` in `[-pi, pi]`.
+pub fn atan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len == 1) {
+        if (args.items[0] != .number) return ElzError.InvalidArgument;
+        return Value{ .number = std.math.atan(args.items[0].number) };
+    }
+    if (args.items.len == 2) {
+        if (args.items[0] != .number or args.items[1] != .number) return ElzError.InvalidArgument;
+        return Value{ .number = std.math.atan2(args.items[0].number, args.items[1].number) };
+    }
+    return ElzError.WrongArgumentCount;
+}
+
+/// Validates that `n` is a finite, integer-valued `f64` and converts it to `i64`.
+fn require_integer(n: f64) ElzError!i64 {
+    if (!std.math.isFinite(n) or @floor(n) != n) return ElzError.InvalidArgument;
+    const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
+    const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
+    if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
+    return @intFromFloat(n);
+}
+
+/// `quotient` returns integer division of the first argument by the second, truncated toward zero.
+pub fn quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number or args.items[1] != .number) return ElzError.InvalidArgument;
+    const a = try require_integer(args.items[0].number);
+    const b = try require_integer(args.items[1].number);
+    if (b == 0) return ElzError.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return ElzError.InvalidArgument;
+    return Value{ .number = @floatFromInt(@divTrunc(a, b)) };
+}
+
+/// `remainder` returns the remainder of `a / b`, with the sign of `a` (R5RS).
+pub fn remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number or args.items[1] != .number) return ElzError.InvalidArgument;
+    const a = try require_integer(args.items[0].number);
+    const b = try require_integer(args.items[1].number);
+    if (b == 0) return ElzError.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return Value{ .number = 0 };
+    return Value{ .number = @floatFromInt(@rem(a, b)) };
+}
+
+/// `modulo` returns the remainder of `a / b`, with the sign of `b` (R5RS).
+pub fn modulo(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number or args.items[1] != .number) return ElzError.InvalidArgument;
+    const a = try require_integer(args.items[0].number);
+    const b = try require_integer(args.items[1].number);
+    if (b == 0) return ElzError.DivisionByZero;
+    if (a == std.math.minInt(i64) and b == -1) return Value{ .number = 0 };
+    return Value{ .number = @floatFromInt(@mod(a, b)) };
+}
+
+fn gcd_pair(a: i64, b: i64) i64 {
+    var x: i64 = if (a < 0) -a else a;
+    var y: i64 = if (b < 0) -b else b;
+    while (y != 0) {
+        const tmp = @mod(x, y);
+        x = y;
+        y = tmp;
+    }
+    return x;
+}
+
+/// `gcd` returns the greatest common divisor of its arguments. With no arguments it returns 0.
+pub fn gcd(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    var acc: i64 = 0;
+    for (args.items) |arg| {
+        if (arg != .number) return ElzError.InvalidArgument;
+        const n = try require_integer(arg.number);
+        acc = gcd_pair(acc, n);
+    }
+    return Value{ .number = @floatFromInt(acc) };
+}
+
+/// `lcm` returns the least common multiple of its arguments. With no arguments it returns 1.
+pub fn lcm(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len == 0) return Value{ .number = 1 };
+    var acc: i64 = 1;
+    for (args.items) |arg| {
+        if (arg != .number) return ElzError.InvalidArgument;
+        const n = try require_integer(arg.number);
+        if (n == 0) return Value{ .number = 0 };
+        const g = gcd_pair(acc, n);
+        const abs_n: i64 = if (n < 0) -n else n;
+        acc = @divExact(acc, g) * abs_n;
+    }
+    return Value{ .number = @floatFromInt(if (acc < 0) -acc else acc) };
+}
+
 /// `log` is the implementation of the `log` primitive function.
 /// It returns the natural logarithm of its argument.
 ///
@@ -334,11 +441,63 @@ pub fn negative_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     return Value{ .boolean = args.items[0].number < 0 };
 }
 
+/// `complex_p` reports whether the argument lies in the complex domain. Since Element 0
+/// has only real numbers, this is equivalent to `number?`.
+pub fn complex_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .number };
+}
+
+/// `real_p` reports whether the argument is a real number. Equivalent to `number?` here.
+pub fn real_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .number };
+}
+
+/// `rational_p` reports whether the argument is rational. Element 0 represents numbers as
+/// f64, so finite values are reported as rational and infinities and NaN are not.
+pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (v != .number) return Value{ .boolean = false };
+    return Value{ .boolean = std.math.isFinite(v.number) };
+}
+
+/// `exact_p` reports whether the argument is an exact number. Element 0 has only
+/// inexact f64 values, so this always returns #f for numbers.
+pub fn exact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    _ = args.items[0];
+    return Value{ .boolean = false };
+}
+
+/// `inexact_p` reports whether the argument is an inexact number.
+pub fn inexact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .number };
+}
+
+/// `exact_to_inexact` is the identity for f64 values. A non-number argument is rejected.
+pub fn exact_to_inexact(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number) return ElzError.InvalidArgument;
+    return args.items[0];
+}
+
+/// `inexact_to_exact` is the identity for f64 values. The result is still an f64 because
+/// Element 0 has no exact integer or rational type.
+pub fn inexact_to_exact(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .number) return ElzError.InvalidArgument;
+    return args.items[0];
+}
+
 test "math primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
         .allocator = allocator,
+        .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,
         .last_error_message = null,
         .module_cache = undefined,
@@ -351,28 +510,28 @@ test "math primitives" {
     try args.append(Value{ .number = 1 });
     try args.append(Value{ .number = 2 });
     var result = try add(&interp_stub, env_stub, args, &fuel);
-    try testing.expect(result == Value{ .number = 3 });
+    try testing.expectEqual(@as(f64, 3), result.number);
 
     // Test sub
     args.clearRetainingCapacity();
     try args.append(Value{ .number = 5 });
     try args.append(Value{ .number = 2 });
     result = try sub(&interp_stub, env_stub, args, &fuel);
-    try testing.expect(result == Value{ .number = 3 });
+    try testing.expectEqual(@as(f64, 3), result.number);
 
     // Test mul
     args.clearRetainingCapacity();
     try args.append(Value{ .number = 2 });
     try args.append(Value{ .number = 3 });
     result = try mul(&interp_stub, env_stub, args, &fuel);
-    try testing.expect(result == Value{ .number = 6 });
+    try testing.expect(result == .number and result.number == 6);
 
     // Test div
     args.clearRetainingCapacity();
     try args.append(Value{ .number = 6 });
     try args.append(Value{ .number = 2 });
     result = try div(&interp_stub, env_stub, args, &fuel);
-    try testing.expect(result == Value{ .number = 3 });
+    try testing.expect(result == .number and result.number == 3);
 
     // Test div by zero
     args.clearRetainingCapacity();
@@ -380,4 +539,85 @@ test "math primitives" {
     try args.append(Value{ .number = 0 });
     const err = div(&interp_stub, env_stub, args, &fuel);
     try testing.expectError(ElzError.DivisionByZero, err);
+}
+
+test "trig inverse" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .number = 0 });
+    try testing.expectApproxEqAbs(@as(f64, 0), (try asin(&interp, interp.root_env, args, &fuel)).number, 1e-9);
+    try testing.expectApproxEqAbs(std.math.pi / 2.0, (try acos(&interp, interp.root_env, args, &fuel)).number, 1e-9);
+    try testing.expectApproxEqAbs(@as(f64, 0), (try atan(&interp, interp.root_env, args, &fuel)).number, 1e-9);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = 1 });
+    try args.append(Value{ .number = 1 });
+    try testing.expectApproxEqAbs(std.math.pi / 4.0, (try atan(&interp, interp.root_env, args, &fuel)).number, 1e-9);
+}
+
+test "integer division operations" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .number = 13 });
+    try args.append(Value{ .number = 4 });
+    try testing.expectEqual(@as(f64, 3), (try quotient(&interp, interp.root_env, args, &fuel)).number);
+    try testing.expectEqual(@as(f64, 1), (try remainder(&interp, interp.root_env, args, &fuel)).number);
+    try testing.expectEqual(@as(f64, 1), (try modulo(&interp, interp.root_env, args, &fuel)).number);
+
+    // Negative dividend: remainder follows dividend sign, modulo follows divisor sign.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = -13 });
+    try args.append(Value{ .number = 4 });
+    try testing.expectEqual(@as(f64, -1), (try remainder(&interp, interp.root_env, args, &fuel)).number);
+    try testing.expectEqual(@as(f64, 3), (try modulo(&interp, interp.root_env, args, &fuel)).number);
+
+    // Non-integer argument is rejected.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = 1.5 });
+    try args.append(Value{ .number = 2 });
+    try testing.expectError(ElzError.InvalidArgument, quotient(&interp, interp.root_env, args, &fuel));
+
+    // Division by zero.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = 4 });
+    try args.append(Value{ .number = 0 });
+    try testing.expectError(ElzError.DivisionByZero, quotient(&interp, interp.root_env, args, &fuel));
+}
+
+test "gcd and lcm" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try testing.expectEqual(@as(f64, 0), (try gcd(&interp, interp.root_env, args, &fuel)).number);
+    try testing.expectEqual(@as(f64, 1), (try lcm(&interp, interp.root_env, args, &fuel)).number);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = 12 });
+    try args.append(Value{ .number = 18 });
+    try testing.expectEqual(@as(f64, 6), (try gcd(&interp, interp.root_env, args, &fuel)).number);
+    try testing.expectEqual(@as(f64, 36), (try lcm(&interp, interp.root_env, args, &fuel)).number);
+
+    // Variadic with negatives.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = -12 });
+    try args.append(Value{ .number = 18 });
+    try args.append(Value{ .number = 30 });
+    try testing.expectEqual(@as(f64, 6), (try gcd(&interp, interp.root_env, args, &fuel)).number);
+
+    // lcm with a zero argument is 0.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .number = 4 });
+    try args.append(Value{ .number = 0 });
+    try testing.expectEqual(@as(f64, 0), (try lcm(&interp, interp.root_env, args, &fuel)).number);
 }

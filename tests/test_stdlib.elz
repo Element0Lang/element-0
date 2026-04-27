@@ -180,6 +180,25 @@
 (test-case "zero?" (and (zero? 0) (not (zero? 1))))
 (test-case "positive?" (and (positive? 5) (not (positive? -1))))
 (test-case "negative?" (and (negative? -5) (not (negative? 1))))
+(test-case "asin zero" (= (asin 0) 0))
+(test-case "acos one" (= (acos 1) 0))
+(test-case "atan zero" (= (atan 0) 0))
+(test-case "atan two-arg" (< (- (atan 1 1) 0.7853981633974483) 0.0000001))
+(test-case "quotient positive" (= (quotient 13 4) 3))
+(test-case "quotient negative dividend" (= (quotient -13 4) -3))
+(test-case "quotient negative divisor" (= (quotient 13 -4) -3))
+(test-case "remainder positive" (= (remainder 13 4) 1))
+(test-case "remainder negative dividend" (= (remainder -13 4) -1))
+(test-case "modulo positive" (= (modulo 13 4) 1))
+(test-case "modulo negative dividend" (= (modulo -13 4) 3))
+(test-case "modulo negative divisor" (= (modulo 13 -4) -3))
+(test-case "gcd no args" (= (gcd) 0))
+(test-case "gcd two args" (= (gcd 12 18) 6))
+(test-case "gcd three args" (= (gcd 12 18 30) 6))
+(test-case "gcd negative" (= (gcd -12 18) 6))
+(test-case "lcm no args" (= (lcm) 1))
+(test-case "lcm two args" (= (lcm 4 6) 12))
+(test-case "lcm with zero" (= (lcm 4 0) 0))
 
 ;; --- List Function Tests ---
 (test-case "list-ref" (equal? (list-ref '(a b c d) 2) 'c))
@@ -187,6 +206,16 @@
 (test-case "memq" (equal? (memq 'b '(a b c)) '(b c)))
 (test-case "memq not found" (equal? (memq 'z '(a b c)) #f))
 (test-case "assq" (equal? (assq 'b '((a 1) (b 2) (c 3))) '(b 2)))
+(test-case "memv number" (equal? (memv 2 '(1 2 3)) '(2 3)))
+(test-case "memv not found" (equal? (memv 9 '(1 2 3)) #f))
+(test-case "member equal?" (equal? (member '(a) '((b) (a) (c))) '((a) (c))))
+(test-case "assv number" (equal? (assv 2 '((1 one) (2 two) (3 three))) '(2 two)))
+(test-case "assoc list key" (equal? (assoc '(a) '(((a) 1) ((b) 2))) '((a) 1)))
+(test-case "caaar" (= (caaar '(((1 2) 3) 4)) 1))
+(test-case "cadar" (= (cadar '((1 2 3) 4)) 2))
+(test-case "cdadr" (equal? (cdadr '(1 (2 3 4) 5)) '(3 4)))
+(test-case "cadddr" (= (cadddr '(1 2 3 4 5)) 4))
+(test-case "cddddr" (equal? (cddddr '(1 2 3 4 5 6)) '(5 6)))
 
 ;; --- Character Function Tests ---
 (test-case "char<?" (char<? #\a #\b))
@@ -213,6 +242,383 @@
 (test-case "char-upcase non-letter" (char=? (char-upcase #\5) #\5))
 (test-case "char-downcase letter" (char=? (char-downcase #\Z) #\z))
 (test-case "char-downcase non-letter" (char=? (char-downcase #\!) #\!))
+
+;; --- String Procedure Tests ---
+(test-case "string-ci=? equal up to case" (string-ci=? "Hello" "hello"))
+(test-case "string-ci=? unequal" (not (string-ci=? "Hello" "World")))
+(test-case "string-ci<? case-insensitive" (string-ci<? "abc" "ABD"))
+(test-case "string-ci<=?" (string-ci<=? "abc" "ABC"))
+(test-case "string-ci>=?" (string-ci>=? "abc" "ABC"))
+(test-case "string from chars" (string=? (string #\a #\b #\c) "abc"))
+(test-case "string with no args" (string=? (string) ""))
+(test-case "string-copy roundtrip" (string=? (string-copy "hello") "hello"))
+(test-case "string->list" (equal? (string->list "abc") (list #\a #\b #\c)))
+(test-case "list->string" (string=? (list->string (list #\f #\o #\o)) "foo"))
+(test-case "string list roundtrip"
+  (string=? (list->string (string->list "round-trip")) "round-trip"))
+(test-case "string-set! ASCII updates one character"
+  (let ((s (make-string 5 #\a)))
+    (string-set! s 2 #\Z)
+    (string=? s "aaZaa")))
+(test-case "string-set! out of range raises error"
+  (try
+    (begin
+      (let ((s (make-string 3 #\x)))
+        (string-set! s 5 #\Y))
+      #f)
+    (catch err #t)))
+(test-case "string-fill! ASCII rewrites every byte"
+  (let ((s (make-string 4 #\a)))
+    (string-fill! s #\?)
+    (string=? s "????")))
+
+;; --- syntax-rules Tests ---
+(define-syntax my-when
+  (syntax-rules ()
+    ((_ test body) (if test body #f))))
+(test-case "define-syntax with no literals expands a simple form"
+  (= 7 (my-when #t 7)))
+(test-case "define-syntax falsy guard returns #f"
+  (eq? #f (my-when #f 7)))
+
+(define-syntax my-or2
+  (syntax-rules ()
+    ((_ a b) (if a a b))))
+(test-case "syntax-rules expansion with two pattern variables"
+  (= 5 (my-or2 #f 5)))
+(test-case "syntax-rules first match wins" (= 3 (my-or2 3 99)))
+
+(define-syntax describe
+  (syntax-rules (zero one)
+    ((_ zero) "got zero")
+    ((_ one) "got one")
+    ((_ x) "got something else")))
+(test-case "syntax-rules literal identifier matches by name"
+  (string=? (describe zero) "got zero"))
+(test-case "syntax-rules literal versus pattern variable"
+  (string=? (describe one) "got one"))
+(test-case "syntax-rules pattern variable matches arbitrary input"
+  (string=? (describe banana) "got something else"))
+
+(define-syntax my-when-many
+  (syntax-rules ()
+    ((_ test body ...) (if test (begin body ...) #f))))
+(test-case "syntax-rules ellipsis: empty body"
+  (eq? #f (my-when-many #f)))
+(test-case "syntax-rules ellipsis: single body form"
+  (= 1 (my-when-many #t 1)))
+(test-case "syntax-rules ellipsis: multiple body forms"
+  (= 6 (my-when-many #t 1 2 3 (+ 1 2 3))))
+
+(define-syntax my-list
+  (syntax-rules ()
+    ((_ x ...) (list x ...))))
+(test-case "syntax-rules ellipsis: zero arguments"
+  (equal? '() (my-list)))
+(test-case "syntax-rules ellipsis: many arguments"
+  (equal? '(1 2 3 4) (my-list 1 2 3 4)))
+
+(define-syntax my-let
+  (syntax-rules ()
+    ((_ ((name init) ...) body ...)
+     ((lambda (name ...) body ...) init ...))))
+(test-case "syntax-rules expanding to lambda application"
+  (= 30 (my-let ((x 10) (y 20)) (+ x y))))
+
+(define-syntax swap!
+  (syntax-rules ()
+    ((_ a b)
+     (let ((tmp a))
+       (set! a b)
+       (set! b tmp)))))
+(test-case "syntax-rules hygiene: introduced binding does not capture caller's name"
+  (let ((tmp 1) (other 2))
+    (swap! tmp other)
+    (and (= tmp 2) (= other 1))))
+
+(define-syntax my-or
+  (syntax-rules ()
+    ((_) #f)
+    ((_ a) a)
+    ((_ a b ...) (let ((x a)) (if x x (my-or b ...))))))
+(test-case "syntax-rules hygiene: my-or evaluates to first truthy"
+  (= 7 (my-or #f #f 7 99)))
+(test-case "syntax-rules hygiene: my-or returns #f when all falsy"
+  (eq? #f (my-or #f #f)))
+(test-case "syntax-rules hygiene: my-or with caller's x not captured"
+  (let ((x 42))
+    (= 42 (my-or #f #f x))))
+
+(test-case "let-syntax binds a transformer locally"
+  (= 7
+     (let-syntax ((twice (syntax-rules ()
+                           ((_ e) (+ e e)))))
+       (twice 3) ; 6
+       (+ (twice 3) 1))))
+(test-case "let-syntax does not leak outside its body"
+  (let ((reached #t))
+    (let-syntax ((local-only (syntax-rules ()
+                               ((_ x) x))))
+      (local-only 1))
+    (try
+      (begin
+        (local-only 2)
+        (set! reached #f))
+      (catch err #t))
+    reached))
+(test-case "letrec-syntax binds transformers"
+  (= 16
+     (letrec-syntax ((quad (syntax-rules ()
+                              ((_ e) (* e e e e)))))
+       (quad 2))))
+
+;; --- I/O Tests ---
+(test-case "call-with-output-file then call-with-input-file roundtrips bytes"
+  (let ((path "/tmp/elz-iotest.txt"))
+    (call-with-output-file path
+      (lambda (port)
+        (write-port "hello" port)))
+    (let ((content (call-with-input-file path
+                     (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? content "hello"))))
+(test-case "peek-char does not consume"
+  (let ((path "/tmp/elz-peek.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "abc" port)))
+    (let ((result (call-with-input-file path
+                    (lambda (port)
+                      (let ((peeked (peek-char port))
+                            (read-1 (read-char port))
+                            (read-2 (read-char port)))
+                        (and (char=? peeked #\a)
+                             (char=? read-1 #\a)
+                             (char=? read-2 #\b)))))))
+      (delete-file path)
+      result)))
+(test-case "char-ready? on open input port"
+  (let ((path "/tmp/elz-ready.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "x" port)))
+    (let ((result (call-with-input-file path
+                    (lambda (port) (char-ready? port)))))
+      (delete-file path)
+      result)))
+(test-case "write-char writes a single byte"
+  (let ((path "/tmp/elz-wc.txt"))
+    (call-with-output-file path
+      (lambda (port)
+        (write-char #\Z port)
+        (write-char #\! port)))
+    (let ((content (call-with-input-file path
+                     (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? content "Z!"))))
+(test-case "display with port writes display form"
+  (let ((path "/tmp/elz-disp.txt"))
+    (call-with-output-file path
+      (lambda (port)
+        (display "no quotes" port)))
+    (let ((content (call-with-input-file path
+                     (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? content "no quotes"))))
+(test-case "write with port writes machine-readable form"
+  (let ((path "/tmp/elz-wr.txt"))
+    (call-with-output-file path
+      (lambda (port)
+        (write "with quotes" port)))
+    (let ((content (call-with-input-file path
+                     (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? content "\"with quotes\""))))
+(test-case "newline with port appends newline"
+  (let ((path "/tmp/elz-nl.txt"))
+    (call-with-output-file path
+      (lambda (port)
+        (display "line" port)
+        (newline port)
+        (display "two" port)))
+    (let ((first (call-with-input-file path
+                   (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? first "line"))))
+(test-case "current-output-port returns an output port"
+  (output-port? (current-output-port)))
+(test-case "current-input-port returns an input port"
+  (input-port? (current-input-port)))
+(test-case "current-output-port returns the same port across calls"
+  (eq? (current-output-port) (current-output-port)))
+(test-case "with-output-to-file redirects display"
+  (let ((path "/tmp/elz-redir-out.txt"))
+    (with-output-to-file path
+      (lambda () (display "redirected")))
+    (let ((content (call-with-input-file path
+                     (lambda (port) (read-line port)))))
+      (delete-file path)
+      (string=? content "redirected"))))
+(test-case "with-output-to-file restores previous output port"
+  (let ((path "/tmp/elz-redir-restore.txt"))
+    (with-output-to-file path
+      (lambda () (display "scratch")))
+    (let ((restored (output-port? (current-output-port))))
+      (delete-file path)
+      restored)))
+(test-case "with-input-from-file feeds read-line"
+  (let ((path "/tmp/elz-redir-in.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "from-file" port)))
+    (let ((line (with-input-from-file path
+                  (lambda () (read-line (current-input-port))))))
+      (delete-file path)
+      (string=? line "from-file"))))
+(test-case "read returns a single datum"
+  (let ((path "/tmp/elz-read.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "(1 2 3)" port)))
+    (let ((datum (call-with-input-file path
+                   (lambda (port) (read port)))))
+      (delete-file path)
+      (equal? datum '(1 2 3)))))
+(test-case "read returns eof at end of file"
+  (let ((path "/tmp/elz-read-eof.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "" port)))
+    (let ((datum (call-with-input-file path
+                   (lambda (port) (read port)))))
+      (delete-file path)
+      (eof-object? datum))))
+(test-case "read returns successive datums on repeated calls"
+  (let ((path "/tmp/elz-read-multi.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "alpha 42 (beta gamma)" port)))
+    (let ((result (call-with-input-file path
+                    (lambda (port)
+                      (let ((d1 (read port))
+                            (d2 (read port))
+                            (d3 (read port)))
+                        (list d1 d2 d3))))))
+      (delete-file path)
+      (equal? result '(alpha 42 (beta gamma))))))
+(test-case "read skips line comments"
+  (let ((path "/tmp/elz-read-comment.txt"))
+    (call-with-output-file path
+      (lambda (port) (write-port "; comment\nhello" port)))
+    (let ((datum (call-with-input-file path
+                   (lambda (port) (read port)))))
+      (delete-file path)
+      (equal? datum 'hello))))
+
+;; --- Numeric Tower Predicate Tests ---
+(test-case "complex? on number" (complex? 3.5))
+(test-case "complex? on non-number" (not (complex? "hi")))
+(test-case "real? on number" (real? 3.5))
+(test-case "real? on non-number" (not (real? 'a)))
+(test-case "rational? on finite" (rational? 1.5))
+(test-case "rational? on non-number" (not (rational? "x")))
+(test-case "exact? always #f for f64-only impl" (not (exact? 1)))
+(test-case "inexact? on number" (inexact? 1))
+(test-case "exact->inexact identity" (= (exact->inexact 5) 5))
+(test-case "inexact->exact identity" (= (inexact->exact 5) 5))
+
+;; --- Symbol Identity Tests ---
+(test-case "eq? on same-name symbols from literals" (eq? 'foo 'foo))
+(test-case "eq? on different-name symbols" (not (eq? 'foo 'bar)))
+(test-case "eq? on symbol from string->symbol matches literal"
+  (eq? 'banana (string->symbol "banana")))
+(test-case "eqv? on same-name symbols" (eqv? 'baz 'baz))
+
+;; --- Multiple Values Tests ---
+(test-case "values single arg returns the arg"
+  (= 42 (values 42)))
+(test-case "call-with-values with single value"
+  (= 7 (call-with-values (lambda () 7) (lambda (x) x))))
+(test-case "call-with-values with multiple values"
+  (= 30
+     (call-with-values
+       (lambda () (values 10 20))
+       (lambda (a b) (+ a b)))))
+(test-case "call-with-values with no values"
+  (= 0
+     (call-with-values
+       (lambda () (values))
+       (lambda () 0))))
+
+;; --- Internal Definition Tests ---
+(test-case "internal define is visible in following body forms"
+  (= 12
+     ((lambda ()
+        (define a 4)
+        (define b (* a 3))
+        b))))
+(test-case "internal define supports mutual recursion through closures"
+  ((lambda ()
+     (define (my-even? n) (if (= n 0) #t (my-odd? (- n 1))))
+     (define (my-odd? n) (if (= n 0) #f (my-even? (- n 1))))
+     (my-even? 6))))
+(test-case "internal define inside let body"
+  (= 9
+     (let ((x 3))
+       (define y (* x x))
+       y)))
+
+;; --- Promise (delay/force) Tests ---
+(test-case "force of delay returns expression value"
+  (= 7 (force (delay (+ 3 4)))))
+(test-case "force memoizes (side-effect runs once)"
+  (let ((counter 0))
+    (let ((p (delay (begin (set! counter (+ counter 1)) counter))))
+      (force p)
+      (force p)
+      (force p)
+      (= counter 1))))
+(test-case "force of non-promise returns argument"
+  (= 5 (force 5)))
+(test-case "delay captures lexical environment"
+  (let ((x 10))
+    (let ((p (delay x)))
+      (set! x 99)
+      (= (force p) 99))))
+
+;; --- Iteration Form Tests ---
+(test-case "do counts down to zero"
+  (= 0
+     (do ((i 5 (- i 1)))
+         ((= i 0) i))))
+(test-case "do accumulates a sum"
+  (= 15
+     (do ((i 1 (+ i 1))
+          (sum 0 (+ sum i)))
+         ((> i 5) sum))))
+(test-case "do binding without step keeps value"
+  (= 7
+     (do ((i 0 (+ i 1))
+          (k 7))
+         ((= i 3) k))))
+(test-case "do with empty result returns unspecified-shaped value"
+  (let ((reached #f))
+    (do ((i 0 (+ i 1)))
+        ((= i 3))
+      (set! reached #t))
+    reached))
+(test-case "do body sees current bindings"
+  (let ((trace '()))
+    (do ((i 0 (+ i 1)))
+        ((= i 3))
+      (set! trace (cons i trace)))
+    (equal? trace '(2 1 0))))
+
+;; --- Vector Function Tests ---
+(test-case "vector-fill! sets every slot"
+  (let ((v (make-vector 3 0)))
+    (vector-fill! v 9)
+    (and (= (vector-ref v 0) 9)
+         (= (vector-ref v 1) 9)
+         (= (vector-ref v 2) 9))))
+(test-case "vector-fill! returns unspecified-compatible value"
+  (let ((v (make-vector 1 0)))
+    (vector-fill! v 1)
+    (= (vector-ref v 0) 1)))
 
 ;; --- Run Summary ---
 (report-summary)
