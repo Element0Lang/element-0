@@ -160,7 +160,6 @@ test "write simple values" {
     const testing = std.testing;
     var buf: [1024]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Test number
     try write(Value{ .number = 42 }, &w);
@@ -192,7 +191,6 @@ test "write deeply nested list - regression for stack overflow" {
     const allocator = testing.allocator;
     var buf: [8192]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Create a deeply nested list: (1 (2 (3 (4 ... ))))
     var current: Value = Value.nil;
@@ -229,7 +227,6 @@ test "write extremely deeply nested list - triggers depth limit" {
     const allocator = testing.allocator;
     var buf: [16384]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Create a list deeper than MAX_PRINT_DEPTH (1000)
     var current: Value = Value.nil;
@@ -266,7 +263,6 @@ test "write long flat list - regression for list depth limit" {
     const allocator = testing.allocator;
     var buf: [32768]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Create a very long flat list: (1 2 3 4 ... 1200)
     var current: Value = Value.nil;
@@ -302,7 +298,6 @@ test "write dotted pair" {
     const allocator = testing.allocator;
     var buf: [1024]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Create (1 . 2)
     const p = try allocator.create(core.Pair);
@@ -320,7 +315,6 @@ test "write character special cases" {
     const testing = std.testing;
     var buf: [1024]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    
 
     // Test space
     try write(Value{ .character = ' ' }, &w);
