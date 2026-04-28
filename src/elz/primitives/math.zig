@@ -503,10 +503,15 @@ test "math primitives" {
         .module_cache = undefined,
     };
     const env_stub = try core.Environment.init(allocator, null);
+    defer {
+        env_stub.bindings.deinit();
+        allocator.destroy(env_stub);
+    }
     var fuel: u64 = 1000;
 
     // Test add
     var args = core.ValueList.init(allocator);
+    defer args.deinit();
     try args.append(Value{ .number = 1 });
     try args.append(Value{ .number = 2 });
     var result = try add(&interp_stub, env_stub, args, &fuel);
