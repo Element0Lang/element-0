@@ -157,8 +157,12 @@ pub const Environment = struct {
 
 /// Represents a user-defined procedure (lambda) in Elz.
 pub const UserDefinedProc = struct {
-    /// A list of parameter names (as `Value.symbol`).
+    /// Fixed parameter names (as `Value.symbol`). For variadic forms this is the prefix
+    /// before the rest parameter.
     params: ValueList,
+    /// Optional rest-parameter name. Set for `(lambda args body)` (with `params` empty)
+    /// and `(lambda (a b . rest) body)` (with `params` holding the prefix).
+    rest_param: ?[]const u8,
     /// The body of the procedure, which is a single `Value` (typically a list of expressions).
     body: Value,
     /// The environment in which the procedure was created, which provides its lexical scope.

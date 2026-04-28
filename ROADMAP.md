@@ -41,7 +41,7 @@ It outlines the features to be implemented and their current status.
 * [x] `if`
 * [x] `define`
 * [x] `set!`
-* [x] `lambda`
+* [x] `lambda` (fixed, all-variadic `(lambda args body)`, and dotted-rest `(lambda (a . rest) body)`)
 * [x] `begin`
 * [x] `let`, `let*`, `letrec`
 * [x] `cond`

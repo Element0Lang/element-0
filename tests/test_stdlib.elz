@@ -400,6 +400,36 @@
     (vector-set! w 0 42)
     (= (vector-ref v 0) 42)))
 
+;; --- Variadic Lambda Tests ---
+(test-case "(lambda args body) collects all arguments into a list"
+  (let ((f (lambda args args)))
+    (equal? (f 1 2 3) '(1 2 3))))
+(test-case "(lambda args body) with no arguments yields empty list"
+  (let ((f (lambda args args)))
+    (null? (f))))
+(test-case "(lambda (a b . rest) body) splits fixed and rest arguments"
+  (let ((f (lambda (a b . rest) (list a b rest))))
+    (equal? (f 1 2 3 4 5) '(1 2 (3 4 5)))))
+(test-case "(lambda (a b . rest) body) with no extra args has empty rest"
+  (let ((f (lambda (a b . rest) rest)))
+    (null? (f 1 2))))
+(test-case "(lambda (a . rest) body) with single fixed arg"
+  (let ((f (lambda (a . rest) (cons a rest))))
+    (equal? (f 'x 'y 'z) '(x y z))))
+(test-case "variadic too-few-args is an error"
+  (try
+    (begin ((lambda (a b . rest) a) 1) #f)
+    (catch err #t)))
+(test-case "(define (f . args) ...) defines a variadic procedure"
+  (begin
+    (define (sum-all . xs)
+      (if (null? xs) 0 (+ (car xs) (apply sum-all (cdr xs)))))
+    (= (sum-all 1 2 3 4) 10)))
+(test-case "(define (f a . rest) ...) supports prefix + rest"
+  (begin
+    (define (first-and-rest a . rest) (cons a rest))
+    (equal? (first-and-rest 1 2 3) '(1 2 3))))
+
 (test-case "let-syntax binds a transformer locally"
   (= 7
      (let-syntax ((twice (syntax-rules ()

@@ -473,18 +473,30 @@ fn evalDefine(interp: *interpreter.Interpreter, rest: Value, env: *Environment, 
             const fn_name = if (fn_name_val == .symbol) fn_name_val.symbol else return ElzError.DefineInvalidSymbol;
             const params = sig_pair.cdr;
             var params_list_gc = core.ValueList.init(env.allocator);
+            var rest_param_name: ?[]const u8 = null;
             var current_param = params;
-            while (current_param != .nil) {
-                const param_p = switch (current_param) {
-                    .pair => |pp| pp,
+            walk: while (true) {
+                switch (current_param) {
+                    .pair => |pp| {
+                        if (pp.car != .symbol) return ElzError.LambdaInvalidParams;
+                        try params_list_gc.append(pp.car);
+                        current_param = pp.cdr;
+                    },
+                    .nil => break :walk,
+                    .symbol => |s| {
+                        rest_param_name = try env.allocator.dupe(u8, s);
+                        break :walk;
+                    },
                     else => return ElzError.LambdaInvalidParams,
-                };
-                if (param_p.car != .symbol) return ElzError.LambdaInvalidParams;
-                try params_list_gc.append(param_p.car);
-                current_param = param_p.cdr;
+                }
             }
             const proc = try env.allocator.create(UserDefinedProc);
-            proc.* = .{ .params = params_list_gc, .body = try body.deep_clone(env.allocator), .env = env };
+            proc.* = .{
+                .params = params_list_gc,
+                .rest_param = rest_param_name,
+                .body = try body.deep_clone(env.allocator),
+                .env = env,
+            };
             const closure = Value{ .closure = proc };
             try env.set(interp, fn_name, closure);
             return closure;
@@ -570,19 +582,46 @@ fn evalLambda(rest: Value, env: *Environment) !Value {
     const params_list = p_formals.car;
     const body = p_formals.cdr;
     if (body == .nil) return ElzError.LambdaInvalidArguments;
+
     var params_list_gc = core.ValueList.init(env.allocator);
-    var current_param = params_list;
-    while (current_param != .nil) {
-        const param_p = switch (current_param) {
-            .pair => |pp| pp,
-            else => return ElzError.LambdaInvalidParams,
-        };
-        if (param_p.car != .symbol) return ElzError.LambdaInvalidParams;
-        try params_list_gc.append(param_p.car);
-        current_param = param_p.cdr;
+    var rest_param_name: ?[]const u8 = null;
+
+    switch (params_list) {
+        // `(lambda args body)` — variadic, no fixed parameters.
+        .symbol => |s| {
+            rest_param_name = try env.allocator.dupe(u8, s);
+        },
+        .nil => {},
+        // Walk a (possibly improper) list, accumulating fixed parameters and noting a
+        // dotted rest parameter when present.
+        .pair => {
+            var current_param = params_list;
+            while (true) {
+                switch (current_param) {
+                    .pair => |pp| {
+                        if (pp.car != .symbol) return ElzError.LambdaInvalidParams;
+                        try params_list_gc.append(pp.car);
+                        current_param = pp.cdr;
+                    },
+                    .nil => break,
+                    .symbol => |s| {
+                        rest_param_name = try env.allocator.dupe(u8, s);
+                        break;
+                    },
+                    else => return ElzError.LambdaInvalidParams,
+                }
+            }
+        },
+        else => return ElzError.LambdaInvalidParams,
     }
+
     const proc = try env.allocator.create(UserDefinedProc);
-    proc.* = .{ .params = params_list_gc, .body = try body.deep_clone(env.allocator), .env = env };
+    proc.* = .{
+        .params = params_list_gc,
+        .rest_param = rest_param_name,
+        .body = try body.deep_clone(env.allocator),
+        .env = env,
+    };
     return Value{ .closure = proc };
 }
 
@@ -1404,6 +1443,42 @@ fn evalMacroExpansion(interp: *interpreter.Interpreter, m: *core.Macro, rest: Va
     return .unspecified;
 }
 
+/// Builds a fresh activation frame for a closure call and binds the arguments. Handles
+/// fixed, all-variadic (`(lambda args body)`), and mixed (`(lambda (a . rest) body)`)
+/// parameter lists.
+fn bindClosureArgs(
+    interp: *interpreter.Interpreter,
+    c: *UserDefinedProc,
+    arg_vals: core.ValueList,
+    env: *Environment,
+) ElzError!*Environment {
+    const fixed_count = c.params.items.len;
+    if (c.rest_param == null) {
+        if (fixed_count != arg_vals.items.len) return ElzError.WrongArgumentCount;
+    } else {
+        if (arg_vals.items.len < fixed_count) return ElzError.WrongArgumentCount;
+    }
+
+    // R5RS §4.1.4 requires each lambda invocation to introduce a fresh activation frame,
+    // including for zero-parameter closures, so internal definitions are scoped per call.
+    const call_env = try Environment.init(env.allocator, c.env);
+    for (c.params.items, 0..) |param, i| {
+        try call_env.set(interp, param.symbol, arg_vals.items[i]);
+    }
+    if (c.rest_param) |rest_name| {
+        var rest_list: Value = .nil;
+        var i: usize = arg_vals.items.len;
+        while (i > fixed_count) {
+            i -= 1;
+            const pair = try env.allocator.create(core.Pair);
+            pair.* = .{ .car = arg_vals.items[i], .cdr = rest_list };
+            rest_list = Value{ .pair = pair };
+        }
+        try call_env.set(interp, rest_name, rest_list);
+    }
+    return call_env;
+}
+
 /// Evaluates a procedure application.
 fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) !Value {
     const proc_val = try eval(interp, &first, env, fuel);
@@ -1411,16 +1486,7 @@ fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, 
 
     switch (proc_val) {
         .closure => |c| {
-            if (c.params.items.len != arg_vals.items.len) return ElzError.WrongArgumentCount;
-
-            // R5RS §4.1.4 requires each lambda invocation to create a fresh activation
-            // frame, including for zero-argument closures. Without this, an internal
-            // `define` inside a zero-argument body would mutate the closure's captured
-            // environment instead of a per-call scope.
-            const call_env = try Environment.init(env.allocator, c.env);
-            for (c.params.items, arg_vals.items) |param, arg| {
-                try call_env.set(interp, param.symbol, arg);
-            }
+            const call_env = try bindClosureArgs(interp, c, arg_vals, env);
 
             var body_node = c.body;
             if (body_node == .nil) return .nil;
@@ -1461,11 +1527,7 @@ fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, 
 pub fn eval_proc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, fuel: *u64) ElzError!Value {
     switch (proc) {
         .closure => |c| {
-            if (c.params.items.len != args.items.len) return ElzError.WrongArgumentCount;
-            const new_env = try Environment.init(env.allocator, c.env);
-            for (c.params.items, args.items) |param, arg| {
-                try new_env.set(interp, param.symbol, arg);
-            }
+            const new_env = try bindClosureArgs(interp, c, args, env);
             var result: Value = .nil;
             var current_node = c.body;
             while (current_node != .nil) {
