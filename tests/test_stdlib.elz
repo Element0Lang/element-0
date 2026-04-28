@@ -430,6 +430,24 @@
     (define (first-and-rest a . rest) (cons a rest))
     (equal? (first-and-rest 1 2 3) '(1 2 3))))
 
+;; --- Regression: tail-call positions in letrec and do result ---
+;; Iteration counts are kept within the shared per-test-file fuel budget. A larger
+;; harness can stress-test deeper recursion to confirm absence of stack growth.
+(test-case "letrec body's last expression evaluates correctly across many iterations"
+  (= 5000
+     (letrec ((loop (lambda (n)
+                      (if (= n 5000) n (loop (+ n 1))))))
+       (loop 0))))
+(test-case "do result clause's last expression evaluates correctly"
+  (= 1000
+     (letrec ((deep (lambda (n) (if (= n 1000) n (deep (+ n 1))))))
+       (do ((i 0 (+ i 1)))
+           ((= i 1) (deep 0))))))
+(test-case "letrec result respects internal define semantics"
+  (= 7
+     (letrec ((f (lambda () (define x 7) x)))
+       (f))))
+
 (test-case "let-syntax binds a transformer locally"
   (= 7
      (let-syntax ((twice (syntax-rules ()

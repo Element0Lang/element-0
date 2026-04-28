@@ -24,7 +24,7 @@ fn eval_expr_list(interp: *interpreter.Interpreter, list: Value, env: *Environme
 }
 
 /// Evaluates a `letrec` special form.
-fn evalLetRec(interp: *interpreter.Interpreter, ast: Value, env: *Environment, fuel: *u64) ElzError!Value {
+fn evalLetRec(interp: *interpreter.Interpreter, ast: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) ElzError!Value {
     if (ast != .pair) return ElzError.InvalidArgument;
     const top = ast.pair;
     const rest = top.cdr;
@@ -69,19 +69,17 @@ fn evalLetRec(interp: *interpreter.Interpreter, ast: Value, env: *Environment, f
 
     if (body_list == .nil) return Value.nil;
 
+    // R5RS §4.2.2: the last body form is in tail position. Evaluate the leading forms
+    // for their effect and hand the trailing one back to the trampoline.
     var body_node = body_list;
-    var last: Value = Value.unspecified;
-    while (true) {
-        if (body_node != .pair) return ElzError.InvalidArgument;
-        const bpair = body_node.pair;
-        var expr = bpair.car;
-        last = try eval(interp, &expr, new_env, fuel);
-        if (bpair.cdr == .nil) break;
-        body_node = bpair.cdr;
+    while (body_node.pair.cdr != .nil) {
+        _ = try eval(interp, &body_node.pair.car, new_env, fuel);
+        body_node = body_node.pair.cdr;
     }
-
     std.mem.doNotOptimizeAway(&new_env);
-    return last;
+    current_ast.* = &body_node.pair.car;
+    current_env.* = new_env;
+    return .unspecified;
 }
 
 /// Evaluates a `quote` special form.
@@ -1231,7 +1229,7 @@ fn evalDelay(env: *Environment, rest: Value) ElzError!Value {
 /// Evaluates a `do` special form.
 /// Syntax: (do ((var init step) ...) (test result ...) body ...)
 /// Each binding may be `(var init)` (no step) or `(var init step)`.
-fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
+fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) ElzError!Value {
     if (rest != .pair) return ElzError.InvalidArgument;
     const bindings_pair = rest.pair;
     const bindings_list = bindings_pair.car;
@@ -1294,14 +1292,16 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
         const truthy = !(test_result == .boolean and test_result.boolean == false);
         if (truthy) {
             if (result_exprs == .nil) return Value.unspecified;
+            // R5RS §4.2.4: the last result expression of `do` is in tail position.
             var node = result_exprs;
-            var last: Value = .unspecified;
-            while (node != .nil) {
+            while (node.pair.cdr != .nil) {
                 if (node != .pair) return ElzError.InvalidArgument;
-                last = try eval(interp, &node.pair.car, loop_env, fuel);
+                _ = try eval(interp, &node.pair.car, loop_env, fuel);
                 node = node.pair.cdr;
             }
-            return last;
+            current_ast.* = &node.pair.car;
+            current_env.* = loop_env;
+            return .unspecified;
         }
 
         // Body for side effects.
@@ -1614,7 +1614,7 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
                     break :blk if (looked_up == .syntax_rules) looked_up.syntax_rules else null;
                 } else null;
 
-                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (maybe_syntax) |s| expandSyntaxRules(interp, s, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("define-syntax")) evalDefineSyntax(interp, rest, env) else if (first.is_symbol("let-syntax") or first.is_symbol("letrec-syntax")) evalLetSyntax(interp, rest, env, fuel) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel) else if (first.is_symbol("delay")) evalDelay(env, rest) else if (first.is_symbol("do")) evalDo(interp, rest, env, fuel) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
+                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (maybe_syntax) |s| expandSyntaxRules(interp, s, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("define-syntax")) evalDefineSyntax(interp, rest, env) else if (first.is_symbol("let-syntax") or first.is_symbol("letrec-syntax")) evalLetSyntax(interp, rest, env, fuel) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel, &current_ast, &current_env) else if (first.is_symbol("delay")) evalDelay(env, rest) else if (first.is_symbol("do")) evalDo(interp, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
 
                 if (result == .unspecified) {
                     if (current_ast != original_ast_ptr) {
