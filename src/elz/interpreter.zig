@@ -5,10 +5,12 @@ const eval = @import("./eval.zig");
 const parser = @import("./parser.zig");
 const gc = @import("gc.zig");
 
-var gc_once = std.once(init_gc);
+var gc_initialized = std.atomic.Value(bool).init(false);
 
-fn init_gc() void {
-    gc.init();
+fn ensureGcInitialized() void {
+    if (gc_initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
+        gc.init();
+    }
 }
 
 /// `SandboxFlags` is a struct that defines the features to be enabled in the Elz interpreter.
@@ -33,6 +35,8 @@ pub const SandboxFlags = struct {
 pub const Interpreter = struct {
     /// The memory allocator used by the interpreter.
     allocator: std.mem.Allocator,
+    /// The I/O implementation used for file operations, sleeping, etc.
+    io: std.Io,
     /// The root environment of the interpreter, containing the built-in functions and variables.
     root_env: *core.Environment,
     /// A message describing the last error that occurred, if any.
@@ -53,6 +57,10 @@ pub const Interpreter = struct {
     escape_id: u64 = 0,
     /// Counter for generating unique escape continuation IDs.
     escape_id_counter: u64 = 0,
+    /// The current input port. Populated lazily on first reference.
+    stdin_port: ?*core.Port = null,
+    /// The current output port. Populated lazily on first reference.
+    stdout_port: ?*core.Port = null,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -65,11 +73,12 @@ pub const Interpreter = struct {
     /// Returns:
     /// An initialized `Interpreter` instance, or an error if initialization fails.
     pub fn init(flags: SandboxFlags) !Interpreter {
-        gc_once.call();
+        ensureGcInitialized();
         const allocator = gc.allocator;
 
         var self: Interpreter = .{
             .allocator = allocator,
+            .io = std.Io.Threaded.global_single_threaded.io(),
             .root_env = undefined,
             .last_error_message = null,
             .module_cache = std.StringHashMap(*core.Module).init(allocator),
@@ -146,7 +155,9 @@ pub const Interpreter = struct {
 
         // Set the eval start time for time-limited execution
         if (self.time_limit_ms != null) {
-            self.eval_start_ms = std.time.milliTimestamp();
+            var ts: std.c.timespec = undefined;
+            _ = std.c.clock_gettime(.REALTIME, &ts);
+            self.eval_start_ms = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
             self.time_check_counter = 0;
         }
 
@@ -163,6 +174,24 @@ pub const Interpreter = struct {
     /// but this ensures proper cleanup of the module cache.
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard input stream.
+    pub fn currentInputPort(self: *Interpreter) !*core.Port {
+        if (self.stdin_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdin(), true, "<stdin>");
+        self.stdin_port = port;
+        return port;
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard output stream.
+    pub fn currentOutputPort(self: *Interpreter) !*core.Port {
+        if (self.stdout_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
+        self.stdout_port = port;
+        return port;
     }
 };
 

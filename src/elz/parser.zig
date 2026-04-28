@@ -17,7 +17,7 @@ const ElzError = @import("errors.zig").ElzError;
 /// Returns:
 /// An `ArrayList` of tokens, or an error if tokenization fails.
 fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]const u8) {
-    var tokens = std.ArrayListUnmanaged([]const u8){};
+    var tokens = std.ArrayListUnmanaged([]const u8).empty;
     errdefer tokens.deinit(allocator);
     var i: usize = 0;
     while (i < source.len) {
@@ -84,7 +84,7 @@ const Parser = struct {
             return Value{ .pair = p2 };
         }
         if (std.mem.eql(u8, token, "(")) {
-            var values = std.ArrayListUnmanaged(Value){};
+            var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
                 if (self.position >= self.tokens.items.len) {
@@ -140,7 +140,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
     if (std.mem.eql(u8, token, "#t")) return Value{ .boolean = true };
     if (std.mem.eql(u8, token, "#f")) return Value{ .boolean = false };
     if (token.len >= 2 and token[0] == '"' and token[token.len - 1] == '"') {
-        var unescaped = std.ArrayListUnmanaged(u8){};
+        var unescaped = std.ArrayListUnmanaged(u8).empty;
         defer unescaped.deinit(allocator);
         var i: usize = 1;
         while (i < token.len - 1) {
@@ -215,7 +215,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         return err;
     };
     defer tokens.deinit(allocator);
-    if (tokens.items.len == 0) return .{};
+    if (tokens.items.len == 0) return .empty;
 
     var parser = Parser{
         .tokens = tokens,
@@ -223,7 +223,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         .allocator = allocator,
     };
 
-    var forms = std.ArrayListUnmanaged(Value){};
+    var forms = std.ArrayListUnmanaged(Value).empty;
     while (parser.position < parser.tokens.items.len) {
         try forms.append(allocator, try parser.parse_form());
     }
@@ -231,12 +231,18 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
 }
 
 test "parser" {
-    const allocator = std.testing.allocator;
+    // The parser allocates symbol, string, and pair values from the supplied allocator
+    // and never owns their lifetime in production (the GC does). An arena lets the test
+    // free everything in one shot.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const testing = std.testing;
 
     // Test parsing a number
     var value = try read("42", allocator);
-    try testing.expect(value == Value{ .number = 42 });
+    try testing.expect(value == .number);
+    try testing.expectEqual(@as(f64, 42), value.number);
 
     // Test parsing a symbol
     value = try read("foo", allocator);
@@ -244,40 +250,32 @@ test "parser" {
 
     // Test parsing a string
     value = try read("\"hello world\"", allocator);
-    try testing.expect(value == Value{ .string = "hello world" });
+    try testing.expect(value == .string);
+    try testing.expectEqualStrings("hello world", value.string);
 
     // Test parsing a list
     value = try read("(+ 1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     var p = value.pair;
     try testing.expect(p.car.is_symbol("+"));
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .number and p.car.number == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .number and p.car.number == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test parsing a quoted expression
     value = try read("'(1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     p = value.pair;
     try testing.expect(p.car.is_symbol("quote"));
     p = p.cdr.pair;
     const inner_list = p.car;
-    if (inner_list != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{inner_list});
-        return error.TestExpectedPair;
-    }
+    if (inner_list != .pair) return error.TestExpectedPair;
     p = inner_list.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .number and p.car.number == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .number and p.car.number == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test unterminated string error

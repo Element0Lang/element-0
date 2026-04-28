@@ -122,5 +122,11 @@ pub fn GcArrayList(comptime T: type) type {
                 self.allocator.free(self.items.ptr[0..self.capacity]);
             }
         }
+
+        /// Resets the list to empty without releasing the backing allocation. Mirrors the
+        /// `std.ArrayList` method of the same name.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.items = self.items.ptr[0..0];
+        }
     };
 }

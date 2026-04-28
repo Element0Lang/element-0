@@ -20,6 +20,16 @@ Priorities, in order:
 - Add comments only when they clarify non-obvious behavior.
 - Do not add features, error handling, or abstractions beyond what is needed for the current task.
 
+## Writing Style
+
+- Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
+- Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
+- Avoid strong or colorful adjectives and adverbs. Write "TCP proxy" not "lightweight TCP proxy", "scoring components" not "transparent scoring
+  components".
+- Use noun phrases for checklist items, not imperative verbs. Write "redundant index detection" not "detect redundant indexes".
+- Headings in Markdown files must be in the title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in,
+  on, at, to, by, of) stay lowercase unless they are the first word.
+
 ## Repository Layout
 
 - `src/lib.zig`: Main public API export module for embedding Elz as a library.
@@ -34,11 +44,13 @@ Priorities, in order:
 - `src/elz/errors.zig`: Error types.
 - `src/elz/writer.zig`: Value serialization and display.
 - `src/elz/api_helpers.zig`: Public API helper functions.
-- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime, os, modules, and process).
+- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime,
+  os, modules, and process).
 - `src/stdlib/std.elz`: Standard library written in Element 0 itself.
 - `examples/zig/`: FFI examples showing how to call Zig functions from Element 0.
 - `examples/elz/`: Element 0 script examples.
-- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`, `test_module_lib.elz`).
+- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
+  `test_module_lib.elz`).
 - `.github/workflows/`: CI workflows (tests, lints, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
@@ -85,14 +97,14 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 Run all test suites for any change:
 
-| Target              | Command            | What It Runs                                                 |
-|---------------------|--------------------|--------------------------------------------------------------|
-| Zig unit tests      | `make test`        | Inline `test` blocks in `src/**/*.zig`                       |
-| Property tests      | `make test-prop`   | Property-based tests in `tests/*_prop_test.zig` (Minish)     |
-| Integration tests   | `make test-integ`  | Integration tests in `tests/*_integ_test.zig`                |
-| Language tests      | `make test-elz`    | Element 0 test files in `tests/test_*.elz`                   |
-| All tests           | `make test-all`    | Runs all of the above                                        |
-| Lint                | `make lint`        | Checks Zig formatting with `zig fmt --check`                 |
+| Target            | Command           | What It Runs                                             |
+|-------------------|-------------------|----------------------------------------------------------|
+| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                   |
+| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish) |
+| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`            |
+| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`               |
+| All tests         | `make test-all`   | Runs all of the above                                    |
+| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`             |
 
 For interactive exploration: `make repl`.
 
@@ -114,7 +126,8 @@ Good first tasks:
 ## Testing Expectations
 
 - Unit and regression tests live as inline `test` blocks in the module they cover (`src/elz/*.zig` and `src/elz/primitives/*.zig`).
-- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties, and crash resistance.
+- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties,
+  and crash resistance.
 - Integration tests live in `tests/*_integ_test.zig` and test the public embedding API (init, evalString, FFI, error propagation, sandboxing).
 - Language-level tests live in `tests/test_*.elz` and are run by the interpreter itself via `make test-elz`.
 - No language-facing change is complete without an Element 0 test.

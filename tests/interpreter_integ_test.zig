@@ -251,7 +251,7 @@ test "write produces valid output" {
     const value = try interp.evalString("'(1 2 3)", &fuel);
 
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try elz.write(value, fbs.writer());
-    try testing.expectEqualStrings("(1 2 3)", fbs.getWritten());
+    var w: std.Io.Writer = .fixed(&buf);
+    try elz.write(value, &w);
+    try testing.expectEqualStrings("(1 2 3)", w.buffered());
 }

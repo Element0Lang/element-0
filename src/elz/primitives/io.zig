@@ -16,33 +16,44 @@ const interpreter = @import("../interpreter.zig");
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn display(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
-    const aw = &stdout_writer.interface;
-    const value = args.items[0];
-
+/// Renders a value in display mode (strings unquoted, chars as raw codepoints).
+fn render_display(value: Value, w: *std.Io.Writer) !void {
     switch (value) {
-        .string => |s| aw.writeAll(s) catch return ElzError.ForeignFunctionError,
+        .string => |s| try w.writeAll(s),
         .character => |c| {
             if (c > 0x10FFFF) return ElzError.InvalidArgument;
-
             const codepoint: u21 = @intCast(c);
-            if (!std.unicode.utf8ValidCodepoint(codepoint)) {
-                return ElzError.InvalidArgument;
-            }
-
+            if (!std.unicode.utf8ValidCodepoint(codepoint)) return ElzError.InvalidArgument;
             var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(codepoint, &buf) catch {
-                return ElzError.InvalidArgument;
-            };
-            aw.writeAll(buf[0..@as(usize, @intCast(len))]) catch return ElzError.ForeignFunctionError;
+            const len = std.unicode.utf8Encode(codepoint, &buf) catch return ElzError.InvalidArgument;
+            try w.writeAll(buf[0..@as(usize, @intCast(len))]);
         },
-        else => writer.write(value, aw) catch return ElzError.ForeignFunctionError,
+        else => try writer.write(value, w),
     }
-    aw.flush() catch return ElzError.ForeignFunctionError;
+}
+
+/// Writes the rendered bytes from `aw` to the supplied port, or to the interpreter's
+/// current output port when none is given. Routing through the current output port lets
+/// `with-output-to-file` redirect display, write, and newline.
+fn flush_to_destination(interp: *interpreter.Interpreter, aw: *std.Io.Writer.Allocating, port_opt: ?Value) ElzError!void {
+    const bytes = aw.written();
+    const target_port: *core.Port = if (port_opt) |port_val| blk: {
+        if (port_val != .port) return ElzError.InvalidArgument;
+        break :blk port_val.port;
+    } else interp.currentOutputPort() catch return ElzError.OutOfMemory;
+    target_port.writeString(bytes) catch return ElzError.ForeignFunctionError;
+}
+
+pub fn display(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
+    render_display(args.items[0], &aw.writer) catch |err| switch (err) {
+        ElzError.InvalidArgument => return ElzError.InvalidArgument,
+        else => return ElzError.ForeignFunctionError,
+    };
+    const port_opt: ?Value = if (args.items.len == 2) args.items[1] else null;
+    try flush_to_destination(interp, &aw, port_opt);
     return Value.unspecified;
 }
 
@@ -54,14 +65,13 @@ pub fn display(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn write_proc(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
-    const aw = &stdout_writer.interface;
-    writer.write(args.items[0], aw) catch return ElzError.ForeignFunctionError;
-    aw.flush() catch return ElzError.ForeignFunctionError;
+pub fn write_proc(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
+    writer.write(args.items[0], &aw.writer) catch return ElzError.ForeignFunctionError;
+    const port_opt: ?Value = if (args.items.len == 2) args.items[1] else null;
+    try flush_to_destination(interp, &aw, port_opt);
     return Value.unspecified;
 }
 
@@ -73,14 +83,13 @@ pub fn write_proc(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 ///
 /// Returns:
 /// An unspecified value, or an error if writing to stdout fails.
-pub fn newline(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 0) return ElzError.WrongArgumentCount;
-    var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
-    const aw = &stdout_writer.interface;
-    aw.writeAll("\n") catch return ElzError.ForeignFunctionError;
-    aw.flush() catch return ElzError.ForeignFunctionError;
+pub fn newline(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len > 1) return ElzError.WrongArgumentCount;
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
+    aw.writer.writeAll("\n") catch return ElzError.ForeignFunctionError;
+    const port_opt: ?Value = if (args.items.len == 1) args.items[0] else null;
+    try flush_to_destination(interp, &aw, port_opt);
     return Value.unspecified;
 }
 
@@ -101,13 +110,10 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const filename = filename_val.string;
-    const file = std.fs.cwd().openFile(filename, .{}) catch |err| {
+    const source = std.Io.Dir.cwd().readFileAlloc(interp.io, filename, env.allocator, .limited(1 * 1024 * 1024)) catch |err| {
         interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to load file '{s}': {s}", .{ filename, @errorName(err) }) catch null;
         return ElzError.ForeignFunctionError;
     };
-    defer file.close();
-
-    const source = file.readToEndAlloc(env.allocator, 1 * 1024 * 1024) catch return ElzError.OutOfMemory;
     defer env.allocator.free(source);
 
     var forms = parser.readAll(source, env.allocator) catch |e| return e;
@@ -138,7 +144,12 @@ pub fn read_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
     if (str_val != .string) return ElzError.InvalidArgument;
 
     const source = str_val.string;
-    return parser.read(source, env.allocator);
+    return parser.read(source, env.allocator) catch |err| switch (err) {
+        // Match the port-based `read` and produce the eof object for empty input rather
+        // than surfacing a parser-internal error.
+        ElzError.EmptyInput => return Value{ .symbol = "eof" },
+        else => return err,
+    };
 }
 
 test "io primitives" {
@@ -150,17 +161,18 @@ test "io primitives" {
 
     // Test load
     const filename = "test_load.elz";
-    var file = std.fs.cwd().createFile(filename, .{}) catch unreachable;
-    defer file.close();
-    _ = file.writeAll("(define x 42)") catch unreachable;
+    var file = std.Io.Dir.cwd().createFile(interp.io, filename, .{}) catch unreachable;
+    defer file.close(interp.io);
+    file.writeStreamingAll(interp.io, "(define x 42)") catch unreachable;
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value{ .string = filename });
+    try args.append(Value{ .string = filename });
 
     _ = try load(&interp, interp.root_env, args, &fuel);
 
     const x = try interp.root_env.get("x", &interp);
-    try testing.expect(x == Value{ .number = 42 });
+    try testing.expect(x == .number);
+    try testing.expectEqual(@as(f64, 42), x.number);
 
-    std.fs.cwd().deleteFile(filename) catch {};
+    std.Io.Dir.cwd().deleteFile(interp.io, filename) catch {};
 }

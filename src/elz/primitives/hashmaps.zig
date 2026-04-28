@@ -129,15 +129,15 @@ test "hash_map primitives" {
 
     // Test hash_map_set and hash_map_get
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, hm_val);
-    try args.append(interp.allocator, Value{ .string = "key1" });
-    try args.append(interp.allocator, Value{ .number = 42 });
+    try args.append(hm_val);
+    try args.append(Value{ .string = "key1" });
+    try args.append(Value{ .number = 42 });
     _ = try hash_map_set(&interp, interp.root_env, args, &fuel);
 
     // Test hash_map_get
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, hm_val);
-    try args.append(interp.allocator, Value{ .string = "key1" });
+    try args.append(hm_val);
+    try args.append(Value{ .string = "key1" });
     const get_result = try hash_map_get(&interp, interp.root_env, args, &fuel);
     try testing.expect(get_result == .number);
     try testing.expectEqual(get_result.number, 42);
@@ -149,7 +149,7 @@ test "hash_map primitives" {
 
     // Test hash_map_count
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, hm_val);
+    try args.append(hm_val);
     const count_result = try hash_map_count(&interp, interp.root_env, args, &fuel);
     try testing.expect(count_result == .number);
     try testing.expectEqual(count_result.number, 1);
@@ -161,8 +161,8 @@ test "hash_map primitives" {
 
     // Test hash_map_remove
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, hm_val);
-    try args.append(interp.allocator, Value{ .string = "key1" });
+    try args.append(hm_val);
+    try args.append(Value{ .string = "key1" });
     const remove_result = try hash_map_remove(&interp, interp.root_env, args, &fuel);
     try testing.expect(remove_result == .boolean);
     try testing.expect(remove_result.boolean == true);

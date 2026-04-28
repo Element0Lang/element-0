@@ -108,6 +108,22 @@ pub fn is_vector(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     return Value{ .boolean = args.items[0] == .vector };
 }
 
+/// `vector_fill` stores `fill` at every index of a vector.
+/// Syntax: (vector-fill! vec fill)
+pub fn vector_fill(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+
+    const vec_val = args.items[0];
+    const fill = args.items[1];
+
+    if (vec_val != .vector) return ElzError.InvalidArgument;
+
+    for (vec_val.vector.items) |*slot| {
+        slot.* = try fill.deep_clone(env.allocator);
+    }
+    return Value.unspecified;
+}
+
 /// `list_to_vector` converts a list to a vector.
 /// Syntax: (list->vector list)
 pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -171,8 +187,8 @@ test "vector primitives" {
 
     // Test make-vector
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value{ .number = 3 });
-    try args.append(interp.allocator, Value{ .number = 42 });
+    try args.append(Value{ .number = 3 });
+    try args.append(Value{ .number = 42 });
     const result = try make_vector(&interp, interp.root_env, args, &fuel);
     try std.testing.expect(result == .vector);
     try std.testing.expectEqual(@as(usize, 3), result.vector.items.len);
@@ -180,8 +196,28 @@ test "vector primitives" {
 
     // Test vector-length
     args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, result);
+    try args.append(result);
     const len_result = try vector_length(&interp, interp.root_env, args, &fuel);
     try std.testing.expect(len_result == .number);
     try std.testing.expectEqual(@as(f64, 3), len_result.number);
+}
+
+test "vector-fill!" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var make_args = core.ValueList.init(interp.allocator);
+    try make_args.append(Value{ .number = 4 });
+    try make_args.append(Value{ .number = 0 });
+    const v = try make_vector(&interp, interp.root_env, make_args, &fuel);
+
+    var fill_args = core.ValueList.init(interp.allocator);
+    try fill_args.append(v);
+    try fill_args.append(Value{ .number = 7 });
+    const out = try vector_fill(&interp, interp.root_env, fill_args, &fuel);
+    try std.testing.expect(out == .unspecified);
+    for (v.vector.items) |item| {
+        try std.testing.expectEqual(@as(f64, 7), item.number);
+    }
 }

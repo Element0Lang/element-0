@@ -133,6 +133,25 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             try writer.writeAll(p.name);
             try writer.writeAll(">");
         },
+        .promise => |pr| {
+            if (pr.forced) {
+                try writer.writeAll("#<promise:forced>");
+            } else {
+                try writer.writeAll("#<promise>");
+            }
+        },
+        .multi_values => |mv| {
+            try writer.writeAll("#<values:");
+            var buf: [16]u8 = undefined;
+            const count_str = std.fmt.bufPrint(&buf, "{d}", .{mv.items.len}) catch "?";
+            try writer.writeAll(count_str);
+            try writer.writeAll(">");
+        },
+        .syntax_rules => |sr| {
+            try writer.writeAll("#<syntax-rules:");
+            try writer.writeAll(sr.name);
+            try writer.writeAll(">");
+        },
         .unspecified => try writer.writeAll("#<unspecified>"),
     }
 }
@@ -140,68 +159,71 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
 test "write simple values" {
     const testing = std.testing;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Test number
-    try write(Value{ .number = 42 }, w);
-    try testing.expectEqualStrings("42", fbs.getWritten());
+    try write(Value{ .number = 42 }, &w);
+    try testing.expectEqualStrings("42", w.buffered());
 
     // Test boolean
-    fbs.reset();
-    try write(Value{ .boolean = true }, w);
-    try testing.expectEqualStrings("#t", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value{ .boolean = true }, &w);
+    try testing.expectEqualStrings("#t", w.buffered());
 
     // Test nil
-    fbs.reset();
-    try write(Value.nil, w);
-    try testing.expectEqualStrings("()", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value.nil, &w);
+    try testing.expectEqualStrings("()", w.buffered());
 
     // Test symbol
-    fbs.reset();
-    try write(Value{ .symbol = "foo" }, w);
-    try testing.expectEqualStrings("foo", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value{ .symbol = "foo" }, &w);
+    try testing.expectEqualStrings("foo", w.buffered());
 
     // Test string
-    fbs.reset();
-    try write(Value{ .string = "hello" }, w);
-    try testing.expectEqualStrings("\"hello\"", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value{ .string = "hello" }, &w);
+    try testing.expectEqualStrings("\"hello\"", w.buffered());
 }
 
 test "write deeply nested list - regression for stack overflow" {
     const testing = std.testing;
     const allocator = testing.allocator;
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
-    // Create a deeply nested list: (1 (2 (3 (4 ... ))))
-    var current: Value = Value.nil;
-    var depth: usize = 0;
+    // Build a deeply nested list `(1 (2 (3 (4 ... (500)))))`. The innermost level is the
+    // one-element list `(500)`. Each outer level wraps the previous list with one extra
+    // pair so the writer's recursive `car` walk reaches the configured depth.
+    var allocated_pairs: std.ArrayListUnmanaged(*core.Pair) = .empty;
+    defer allocated_pairs.deinit(allocator);
 
-    // Create 500 levels of nesting (well below the 1000 limit)
+    const innermost = try allocator.create(core.Pair);
+    try allocated_pairs.append(allocator, innermost);
+    innermost.* = .{ .car = Value{ .number = 500 }, .cdr = Value.nil };
+    var current: Value = Value{ .pair = innermost };
+
+    var depth: usize = 1;
     while (depth < 500) : (depth += 1) {
-        const p = try allocator.create(core.Pair);
-        p.* = .{
+        const wrapper = try allocator.create(core.Pair);
+        try allocated_pairs.append(allocator, wrapper);
+        wrapper.* = .{ .car = current, .cdr = Value.nil };
+
+        const outer = try allocator.create(core.Pair);
+        try allocated_pairs.append(allocator, outer);
+        outer.* = .{
             .car = Value{ .number = @floatFromInt(500 - depth) },
-            .cdr = current,
+            .cdr = Value{ .pair = wrapper },
         };
-        current = Value{ .pair = p };
+        current = Value{ .pair = outer };
     }
-    defer {
-        var temp = current;
-        while (temp != .nil) {
-            const p = temp.pair;
-            temp = p.cdr;
-            allocator.destroy(p);
-        }
-    }
+    defer for (allocated_pairs.items) |p| allocator.destroy(p);
 
-    // This should not stack overflow
-    try write(current, w);
-    const output = fbs.getWritten();
+    // This should not stack overflow.
+    try write(current, &w);
+    const output = w.buffered();
 
-    // Verify it starts correctly
+    // Verify it starts correctly.
     try testing.expect(std.mem.startsWith(u8, output, "(1 (2 (3"));
 }
 
@@ -209,8 +231,7 @@ test "write extremely deeply nested list - triggers depth limit" {
     const testing = std.testing;
     const allocator = testing.allocator;
     var buf: [16384]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Create a list deeper than MAX_PRINT_DEPTH (1000)
     var current: Value = Value.nil;
@@ -235,8 +256,8 @@ test "write extremely deeply nested list - triggers depth limit" {
     }
 
     // This should truncate with "..."
-    try write(current, w);
-    const output = fbs.getWritten();
+    try write(current, &w);
+    const output = w.buffered();
 
     // Verify it contains the truncation marker
     try testing.expect(std.mem.indexOf(u8, output, "...") != null);
@@ -246,8 +267,7 @@ test "write long flat list - regression for list depth limit" {
     const testing = std.testing;
     const allocator = testing.allocator;
     var buf: [32768]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Create a very long flat list: (1 2 3 4 ... 1200)
     var current: Value = Value.nil;
@@ -271,8 +291,8 @@ test "write long flat list - regression for list depth limit" {
     }
 
     // This should truncate because list iteration depth > 1000
-    try write(current, w);
-    const output = fbs.getWritten();
+    try write(current, &w);
+    const output = w.buffered();
 
     // Should contain truncation
     try testing.expect(std.mem.indexOf(u8, output, "...") != null);
@@ -282,8 +302,7 @@ test "write dotted pair" {
     const testing = std.testing;
     const allocator = testing.allocator;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Create (1 . 2)
     const p = try allocator.create(core.Pair);
@@ -293,27 +312,26 @@ test "write dotted pair" {
         .cdr = Value{ .number = 2 },
     };
 
-    try write(Value{ .pair = p }, w);
-    try testing.expectEqualStrings("(1 . 2)", fbs.getWritten());
+    try write(Value{ .pair = p }, &w);
+    try testing.expectEqualStrings("(1 . 2)", w.buffered());
 }
 
 test "write character special cases" {
     const testing = std.testing;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     // Test space
-    try write(Value{ .character = ' ' }, w);
-    try testing.expectEqualStrings("#\\space", fbs.getWritten());
+    try write(Value{ .character = ' ' }, &w);
+    try testing.expectEqualStrings("#\\space", w.buffered());
 
     // Test newline
-    fbs.reset();
-    try write(Value{ .character = '\n' }, w);
-    try testing.expectEqualStrings("#\\newline", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value{ .character = '\n' }, &w);
+    try testing.expectEqualStrings("#\\newline", w.buffered());
 
     // Test regular character
-    fbs.reset();
-    try write(Value{ .character = 'a' }, w);
-    try testing.expectEqualStrings("#\\a", fbs.getWritten());
+    w = .fixed(&buf);
+    try write(Value{ .character = 'a' }, &w);
+    try testing.expectEqualStrings("#\\a", w.buffered());
 }

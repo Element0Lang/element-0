@@ -16,7 +16,7 @@ fn isProperList(v: Value) bool {
 /// An iterative implementation of `equal?` that is not vulnerable to stack
 /// overflow attacks.
 fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
-    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }){};
+    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }).empty;
     defer stack.deinit(allocator);
     try stack.append(allocator, .{ .a = val1, .b = val2 });
 
@@ -111,7 +111,9 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .symbol => |av| switch (b) {
-            .symbol => |bv| av.ptr == bv.ptr,
+            // R5RS §6.1: (eq? 'a 'a) must be #t regardless of how the symbols were
+            // obtained, so symbols are compared by name rather than by pointer.
+            .symbol => |bv| std.mem.eql(u8, av, bv),
             else => false,
         },
         .cell => |av| switch (b) {
@@ -132,6 +134,18 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .port => |av| switch (b) {
             .port => |bv| av == bv,
+            else => false,
+        },
+        .promise => |av| switch (b) {
+            .promise => |bv| av == bv,
+            else => false,
+        },
+        .multi_values => |av| switch (b) {
+            .multi_values => |bv| av == bv,
+            else => false,
+        },
+        .syntax_rules => |av| switch (b) {
+            .syntax_rules => |bv| av == bv,
             else => false,
         },
         .unspecified => b == .unspecified,
@@ -278,33 +292,33 @@ test "predicate primitives" {
 
     // Test is_null
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value.nil);
+    try args.append(Value.nil);
     var result = try is_null(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 0 });
+    try args.append(Value{ .number = 0 });
     result = try is_null(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = false });
+    try testing.expect(result == .boolean and result.boolean == false);
 
     // Test is_boolean
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .boolean = true });
+    try args.append(Value{ .boolean = true });
     result = try is_boolean(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 
     // Test is_eq
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 1 });
-    try args.append(interp.allocator, Value{ .number = 1 });
+    try args.append(Value{ .number = 1 });
+    try args.append(Value{ .number = 1 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean);
 
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 1 });
-    try args.append(interp.allocator, Value{ .number = 2 });
+    try args.append(Value{ .number = 1 });
+    try args.append(Value{ .number = 2 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = false });
+    try testing.expect(result == .boolean and !result.boolean);
 
     // Test is_equal
     args.clearRetainingCapacity();
@@ -316,8 +330,8 @@ test "predicate primitives" {
     p2.* = .{ .car = core.Value{ .number = 1 }, .cdr = .nil };
     const list2 = core.Value{ .pair = p2 };
 
-    try args.append(interp.allocator, list1);
-    try args.append(interp.allocator, list2);
+    try args.append(list1);
+    try args.append(list2);
     result = try is_equal(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean);
 }

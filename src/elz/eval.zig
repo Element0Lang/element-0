@@ -204,7 +204,7 @@ fn evalImport(
         return core.Value{ .module = cached_mod_ptr };
     }
 
-    const source_bytes = std.fs.cwd().readFileAlloc(interp.allocator, path_str, 1024 * 1024) catch {
+    const source_bytes = std.Io.Dir.cwd().readFileAlloc(interp.io, path_str, interp.allocator, .limited(1024 * 1024)) catch {
         interp.last_error_message = "Failed to read module file.";
         return ElzError.InvalidArgument;
     };
@@ -229,7 +229,7 @@ fn evalImport(
         .exports = std.StringHashMap(core.Value).init(interp.allocator),
     };
 
-    var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }){};
+    var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }).empty;
     defer temp.deinit(interp.allocator);
 
     {
@@ -643,9 +643,658 @@ fn evalLet(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *En
     return .unspecified;
 }
 
+/// Returns true when `name` appears in the literals slice.
+fn is_literal_identifier(name: []const u8, literals: [][]const u8) bool {
+    for (literals) |lit| {
+        if (std.mem.eql(u8, lit, name)) return true;
+    }
+    return false;
+}
+
+/// Returns true when `pair_val` is a list whose first element is the symbol `...`. Used to
+/// detect the syntax-rules ellipsis form `(P . (... . rest))` while pattern matching.
+fn is_ellipsis_marker(value: Value) bool {
+    return value == .pair and value.pair.car.is_symbol("...");
+}
+
+/// One pattern variable binding. Single bindings come from non-ellipsis pattern variables;
+/// repeated bindings come from variables under one level of `...` and store one value per
+/// matched iteration.
+const PatternBinding = union(enum) {
+    single: Value,
+    repeated: []Value,
+};
+
+const Bindings = std.StringHashMapUnmanaged(PatternBinding);
+
+/// Recursively collects names of pattern variables in `pattern`. Skips literals, `_`, and
+/// the ellipsis marker.
+fn collect_pattern_vars(
+    allocator: std.mem.Allocator,
+    pattern: Value,
+    literals: [][]const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    switch (pattern) {
+        .symbol => |s| {
+            if (std.mem.eql(u8, s, "_")) return;
+            if (std.mem.eql(u8, s, "...")) return;
+            if (is_literal_identifier(s, literals)) return;
+            for (out.items) |existing| {
+                if (std.mem.eql(u8, existing, s)) return;
+            }
+            try out.append(allocator, s);
+        },
+        .pair => |p| {
+            try collect_pattern_vars(allocator, p.car, literals, out);
+            try collect_pattern_vars(allocator, p.cdr, literals, out);
+        },
+        else => {},
+    }
+}
+
+/// Errors that the syntax-rules matcher can raise. Declared explicitly to break an
+/// inferred-error-set dependency loop between `match_pattern` and `match_ellipsis_tail`.
+const MatchError = error{
+    OutOfMemory,
+    MissingPatternVar,
+    NestedEllipsisUnsupported,
+};
+
+/// Names treated as syntactic keywords by the evaluator. Identifiers in this set are not
+/// candidates for hygiene renaming, since they do not refer to environment bindings.
+const special_form_names: []const []const u8 = &.{
+    "quote",        "quasiquote", "unquote",      "unquote-splicing",
+    "if",           "cond",       "case",         "and",
+    "or",           "define",     "define-macro", "define-syntax",
+    "syntax-rules", "set!",       "lambda",       "begin",
+    "let",          "let*",       "letrec",       "do",
+    "delay",        "try",        "catch",        "import",
+    "else",         "...",        "_",
+};
+
+fn is_special_form_name(name: []const u8) bool {
+    for (special_form_names) |s| {
+        if (std.mem.eql(u8, s, name)) return true;
+    }
+    return false;
+}
+
+/// Pattern matcher for `syntax-rules`. Records pattern variable bindings into `bindings`.
+/// Supports a single trailing ellipsis pattern of the form `(p ...)`.
+fn match_pattern(
+    allocator: std.mem.Allocator,
+    pattern: Value,
+    input: Value,
+    literals: [][]const u8,
+    bindings: *Bindings,
+) MatchError!bool {
+    switch (pattern) {
+        .symbol => |s| {
+            if (is_literal_identifier(s, literals)) {
+                if (input != .symbol) return false;
+                return std.mem.eql(u8, s, input.symbol);
+            }
+            if (std.mem.eql(u8, s, "_")) return true;
+            try bindings.put(allocator, s, .{ .single = input });
+            return true;
+        },
+        .nil => return input == .nil,
+        .pair => |p| {
+            // Detect tail ellipsis: pattern shape is `(P . (... . nil))`.
+            if (is_ellipsis_marker(p.cdr) and p.cdr.pair.cdr == .nil) {
+                return try match_ellipsis_tail(allocator, p.car, input, literals, bindings);
+            }
+            if (input != .pair) return false;
+            const ip = input.pair;
+            if (!try match_pattern(allocator, p.car, ip.car, literals, bindings)) return false;
+            return try match_pattern(allocator, p.cdr, ip.cdr, literals, bindings);
+        },
+        .number => |n| {
+            if (input != .number) return false;
+            return n == input.number;
+        },
+        .boolean => |b| {
+            if (input != .boolean) return false;
+            return b == input.boolean;
+        },
+        .string => |s| {
+            if (input != .string) return false;
+            return std.mem.eql(u8, s, input.string);
+        },
+        .character => |c| {
+            if (input != .character) return false;
+            return c == input.character;
+        },
+        else => return false,
+    }
+}
+
+/// Matches a tail-ellipsis sub-pattern against zero or more elements of an input list. The
+/// matched values are recorded as repeated bindings on each variable in `sub_pat`.
+fn match_ellipsis_tail(
+    allocator: std.mem.Allocator,
+    sub_pat: Value,
+    input: Value,
+    literals: [][]const u8,
+    bindings: *Bindings,
+) MatchError!bool {
+    var var_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer var_names.deinit(allocator);
+    try collect_pattern_vars(allocator, sub_pat, literals, &var_names);
+
+    // Per-variable accumulators.
+    var accumulators: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty;
+    defer {
+        for (accumulators.items) |*acc| acc.deinit(allocator);
+        accumulators.deinit(allocator);
+    }
+    for (var_names.items) |_| {
+        try accumulators.append(allocator, .empty);
+    }
+
+    var node = input;
+    while (node == .pair) {
+        var iter_bindings: Bindings = .empty;
+        defer iter_bindings.deinit(allocator);
+        const ok = try match_pattern(allocator, sub_pat, node.pair.car, literals, &iter_bindings);
+        if (!ok) return false;
+        for (var_names.items, 0..) |name, i| {
+            const got = iter_bindings.get(name) orelse return error.MissingPatternVar;
+            switch (got) {
+                .single => |v| try accumulators.items[i].append(allocator, v),
+                .repeated => return error.NestedEllipsisUnsupported,
+            }
+        }
+        node = node.pair.cdr;
+    }
+    if (node != .nil) return false;
+
+    for (var_names.items, 0..) |name, i| {
+        const slice = try accumulators.items[i].toOwnedSlice(allocator);
+        try bindings.put(allocator, name, .{ .repeated = slice });
+    }
+    return true;
+}
+
+/// Returns the names of repeated bindings that appear in `template`. Used to drive
+/// ellipsis expansion.
+fn collect_ellipsis_vars(
+    allocator: std.mem.Allocator,
+    template: Value,
+    bindings: *const Bindings,
+    out: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    switch (template) {
+        .symbol => |s| {
+            if (bindings.get(s)) |b| {
+                if (b == .repeated) {
+                    for (out.items) |existing| {
+                        if (std.mem.eql(u8, existing, s)) return;
+                    }
+                    try out.append(allocator, s);
+                }
+            }
+        },
+        .pair => |p| {
+            try collect_ellipsis_vars(allocator, p.car, bindings, out);
+            try collect_ellipsis_vars(allocator, p.cdr, bindings, out);
+        },
+        else => {},
+    }
+}
+
+/// Expands a template, substituting pattern variable bindings. Tail ellipsis templates
+/// `(t ...)` repeat their sub-template once per ellipsis frame in the relevant variables.
+fn expand_template(
+    allocator: std.mem.Allocator,
+    template: Value,
+    bindings: *const Bindings,
+) ElzError!Value {
+    switch (template) {
+        .symbol => |s| {
+            if (bindings.get(s)) |bound| {
+                switch (bound) {
+                    .single => |v| return try v.deep_clone(allocator),
+                    .repeated => return ElzError.InvalidArgument,
+                }
+            }
+            return Value{ .symbol = try allocator.dupe(u8, s) };
+        },
+        .pair => |p| {
+            // Detect tail ellipsis template: `(T . (... . rest))`.
+            if (is_ellipsis_marker(p.cdr)) {
+                const after = p.cdr.pair.cdr;
+                const repeated_list = try expand_ellipsis(allocator, p.car, bindings);
+                const tail = try expand_template(allocator, after, bindings);
+                return try append_lists(allocator, repeated_list, tail);
+            }
+            const new_pair = try allocator.create(core.Pair);
+            new_pair.* = .{
+                .car = try expand_template(allocator, p.car, bindings),
+                .cdr = try expand_template(allocator, p.cdr, bindings),
+            };
+            return Value{ .pair = new_pair };
+        },
+        else => return template.deep_clone(allocator),
+    }
+}
+
+/// Expands a sub-template under ellipsis. Returns a Scheme list with one expansion per
+/// matched frame.
+fn expand_ellipsis(
+    allocator: std.mem.Allocator,
+    sub_tmpl: Value,
+    bindings: *const Bindings,
+) ElzError!Value {
+    var ev_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer ev_names.deinit(allocator);
+    collect_ellipsis_vars(allocator, sub_tmpl, bindings, &ev_names) catch return ElzError.OutOfMemory;
+    if (ev_names.items.len == 0) return ElzError.InvalidArgument;
+
+    const count = blk: {
+        const first = bindings.get(ev_names.items[0]).?.repeated.len;
+        for (ev_names.items[1..]) |n| {
+            if (bindings.get(n).?.repeated.len != first) return ElzError.InvalidArgument;
+        }
+        break :blk first;
+    };
+
+    var result_pairs: std.ArrayListUnmanaged(Value) = .empty;
+    defer result_pairs.deinit(allocator);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        var iter_bindings: Bindings = .empty;
+        defer iter_bindings.deinit(allocator);
+        var it = bindings.iterator();
+        while (it.next()) |entry| {
+            try iter_bindings.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+        for (ev_names.items) |n| {
+            const original = bindings.get(n).?;
+            try iter_bindings.put(allocator, n, .{ .single = original.repeated[i] });
+        }
+        const expanded = try expand_template(allocator, sub_tmpl, &iter_bindings);
+        try result_pairs.append(allocator, expanded);
+    }
+
+    var result: Value = .nil;
+    var j: usize = result_pairs.items.len;
+    while (j > 0) {
+        j -= 1;
+        const pair = try allocator.create(core.Pair);
+        pair.* = .{ .car = result_pairs.items[j], .cdr = result };
+        result = Value{ .pair = pair };
+    }
+    return result;
+}
+
+/// Walks `template` and records every symbol that is a candidate for hygiene renaming:
+/// symbols that are not pattern variables, not special forms, and not bound in the macro
+/// definition's environment.
+fn collect_introduced_identifiers(
+    interp: *interpreter.Interpreter,
+    allocator: std.mem.Allocator,
+    template: Value,
+    pattern_var_names: []const []const u8,
+    def_env: *Environment,
+    out: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    switch (template) {
+        .symbol => |s| {
+            if (is_special_form_name(s)) return;
+            for (pattern_var_names) |pv| {
+                if (std.mem.eql(u8, pv, s)) return;
+            }
+            if (def_env.contains(s)) return;
+            for (out.items) |existing| {
+                if (std.mem.eql(u8, existing, s)) return;
+            }
+            try out.append(allocator, s);
+        },
+        .pair => |p| {
+            // R5RS hygiene only renames identifiers used as expressions. Symbols inside
+            // a `quote` form are data, not code, so leave them untouched.
+            if (p.car.is_symbol("quote")) return;
+            try collect_introduced_identifiers(interp, allocator, p.car, pattern_var_names, def_env, out);
+            try collect_introduced_identifiers(interp, allocator, p.cdr, pattern_var_names, def_env, out);
+        },
+        else => {},
+    }
+}
+
+/// Returns a fresh symbol name based on `base`, using the interpreter's gensym counter.
+fn fresh_hygiene_name(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
+    interp.gensym_counter += 1;
+    return std.fmt.allocPrint(allocator, "{s}__h{d}", .{ base, interp.gensym_counter });
+}
+
+/// Renames symbols in `template` according to `rename_map`. Other nodes are left structurally
+/// identical (still constructed via `expand_template`'s logic later). Symbols inside a
+/// `quote` form are not renamed because they are data rather than expressions.
+fn rename_template(
+    allocator: std.mem.Allocator,
+    template: Value,
+    rename_map: *const std.StringHashMapUnmanaged([]const u8),
+) ElzError!Value {
+    switch (template) {
+        .symbol => |s| {
+            if (rename_map.get(s)) |renamed| {
+                return Value{ .symbol = try allocator.dupe(u8, renamed) };
+            }
+            return Value{ .symbol = try allocator.dupe(u8, s) };
+        },
+        .pair => |p| {
+            if (p.car.is_symbol("quote")) {
+                // Reproduce the quote form structurally without renaming inside.
+                return template.deep_clone(allocator);
+            }
+            const new_pair = try allocator.create(core.Pair);
+            new_pair.* = .{
+                .car = try rename_template(allocator, p.car, rename_map),
+                .cdr = try rename_template(allocator, p.cdr, rename_map),
+            };
+            return Value{ .pair = new_pair };
+        },
+        else => return template.deep_clone(allocator),
+    }
+}
+
+/// Appends two Scheme lists, deep-cloning the head and reusing the tail.
+fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError!Value {
+    if (head == .nil) return tail;
+    if (head != .pair) return ElzError.InvalidArgument;
+    const new_pair = try allocator.create(core.Pair);
+    new_pair.* = .{
+        .car = head.pair.car,
+        .cdr = try append_lists(allocator, head.pair.cdr, tail),
+    };
+    return Value{ .pair = new_pair };
+}
+
+/// Expands a `syntax-rules` macro invocation. Tries each rule in order; the first matching
+/// rule's template is expanded with the captured pattern variable bindings.
+fn expandSyntaxRules(
+    interp: *interpreter.Interpreter,
+    sr: *core.SyntaxRulesMacro,
+    rest: Value,
+    env: *Environment,
+    fuel: *u64,
+    current_ast: **const Value,
+) ElzError!Value {
+    const allocator = env.allocator;
+    // Construct the input as (keyword . rest) so the pattern's leading element can be `_`.
+    const head_pair = try allocator.create(core.Pair);
+    head_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, sr.name) }, .cdr = rest };
+    const input = Value{ .pair = head_pair };
+
+    for (sr.rules) |rule| {
+        var bindings: Bindings = .empty;
+        defer bindings.deinit(allocator);
+
+        const matched = match_pattern(allocator, rule.pattern, input, sr.literals, &bindings) catch return ElzError.OutOfMemory;
+        if (matched) {
+            // Hygiene: collect template-introduced identifiers and rename them with fresh
+            // gensyms. Pattern variables and identifiers known to the macro's definition
+            // environment pass through untouched.
+            var pattern_var_names: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer pattern_var_names.deinit(allocator);
+            try collect_pattern_vars(allocator, rule.pattern, sr.literals, &pattern_var_names);
+
+            var introduced: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer introduced.deinit(allocator);
+            try collect_introduced_identifiers(interp, allocator, rule.template, pattern_var_names.items, sr.env, &introduced);
+
+            var rename_map: std.StringHashMapUnmanaged([]const u8) = .empty;
+            defer rename_map.deinit(allocator);
+            for (introduced.items) |name| {
+                const fresh = fresh_hygiene_name(interp, allocator, name) catch return ElzError.OutOfMemory;
+                try rename_map.put(allocator, name, fresh);
+            }
+
+            const renamed_template = try rename_template(allocator, rule.template, &rename_map);
+            const expanded = try expand_template(allocator, renamed_template, &bindings);
+            const expanded_ptr = try allocator.create(Value);
+            expanded_ptr.* = expanded;
+            current_ast.* = expanded_ptr;
+            return Value.unspecified;
+        }
+    }
+
+    interp.last_error_message = std.fmt.allocPrint(allocator, "No matching syntax-rules pattern for '{s}'.", .{sr.name}) catch null;
+    _ = fuel;
+    return ElzError.InvalidArgument;
+}
+
+/// Evaluates a `let-syntax` or `letrec-syntax` special form. Both bind transformer
+/// values into a fresh environment and evaluate the body there. The two differ only in
+/// the lexical scope used to compile each transformer; for the present implementation
+/// (which captures the transformer's environment but does not yet allow transformers to
+/// recursively reference each other inside templates) the difference is not observable.
+fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const bindings_list = rest.pair.car;
+    const body = rest.pair.cdr;
+
+    const new_env = try Environment.init(env.allocator, env);
+
+    var node = bindings_list;
+    while (node != .nil) {
+        if (node != .pair) return ElzError.InvalidArgument;
+        const binding = node.pair.car;
+        if (binding != .pair) return ElzError.InvalidArgument;
+        const name_val = binding.pair.car;
+        if (name_val != .symbol) return ElzError.InvalidArgument;
+        const tail = binding.pair.cdr;
+        if (tail != .pair) return ElzError.InvalidArgument;
+        const transformer_form = tail.pair.car;
+        if (tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+        if (transformer_form != .pair) return ElzError.InvalidArgument;
+        if (!transformer_form.pair.car.is_symbol("syntax-rules")) return ElzError.InvalidArgument;
+
+        const sr = try buildSyntaxRules(new_env, name_val.symbol, transformer_form.pair.cdr);
+        try new_env.set(interp, name_val.symbol, Value{ .syntax_rules = sr });
+        node = node.pair.cdr;
+    }
+
+    if (body == .nil) return Value.unspecified;
+    var body_node = body;
+    var last: Value = .unspecified;
+    while (body_node != .nil) {
+        if (body_node != .pair) return ElzError.InvalidArgument;
+        last = try eval(interp, &body_node.pair.car, new_env, fuel);
+        body_node = body_node.pair.cdr;
+    }
+    return last;
+}
+
+/// Evaluates a `define-syntax` special form: `(define-syntax name (syntax-rules (lit ...) (pat tmpl) ...))`.
+fn evalDefineSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environment) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const name_val = rest.pair.car;
+    if (name_val != .symbol) return ElzError.InvalidArgument;
+    const tail = rest.pair.cdr;
+    if (tail != .pair) return ElzError.InvalidArgument;
+    const transformer_form = tail.pair.car;
+    if (tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+
+    if (transformer_form != .pair) return ElzError.InvalidArgument;
+    if (!transformer_form.pair.car.is_symbol("syntax-rules")) return ElzError.InvalidArgument;
+
+    const sr = try buildSyntaxRules(env, name_val.symbol, transformer_form.pair.cdr);
+    try env.set(interp, name_val.symbol, Value{ .syntax_rules = sr });
+    return Value.unspecified;
+}
+
+/// Builds a `SyntaxRulesMacro` from the body of a `syntax-rules` form (the `(literals)
+/// (pat tmpl) ...` tail).
+fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*core.SyntaxRulesMacro {
+    if (body != .pair) return ElzError.InvalidArgument;
+    const literals_val = body.pair.car;
+    var rules_node = body.pair.cdr;
+
+    // Collect literal identifier names.
+    var lit_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer lit_names.deinit(env.allocator);
+    var lit_node = literals_val;
+    while (lit_node != .nil) {
+        if (lit_node != .pair) return ElzError.InvalidArgument;
+        const head = lit_node.pair.car;
+        if (head != .symbol) return ElzError.InvalidArgument;
+        try lit_names.append(env.allocator, try env.allocator.dupe(u8, head.symbol));
+        lit_node = lit_node.pair.cdr;
+    }
+
+    // Collect pattern/template rules.
+    var rules_list: std.ArrayListUnmanaged(core.SyntaxRule) = .empty;
+    defer rules_list.deinit(env.allocator);
+    while (rules_node != .nil) {
+        if (rules_node != .pair) return ElzError.InvalidArgument;
+        const rule_form = rules_node.pair.car;
+        if (rule_form != .pair) return ElzError.InvalidArgument;
+        const pattern = rule_form.pair.car;
+        const tail = rule_form.pair.cdr;
+        if (tail != .pair) return ElzError.InvalidArgument;
+        const template = tail.pair.car;
+        if (tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+        try rules_list.append(env.allocator, .{ .pattern = pattern, .template = template });
+        rules_node = rules_node.pair.cdr;
+    }
+
+    const sr = try env.allocator.create(core.SyntaxRulesMacro);
+    sr.* = .{
+        .name = try env.allocator.dupe(u8, name),
+        .literals = try lit_names.toOwnedSlice(env.allocator),
+        .rules = try rules_list.toOwnedSlice(env.allocator),
+        .env = env,
+    };
+    return sr;
+}
+
+/// Evaluates a `delay` special form. Captures the body expression and current environment
+/// in a fresh promise without evaluating the expression.
+/// Syntax: (delay expr)
+fn evalDelay(env: *Environment, rest: Value) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const expr = rest.pair.car;
+    if (rest.pair.cdr != .nil) return ElzError.InvalidArgument;
+
+    const promise = env.allocator.create(core.Promise) catch return ElzError.OutOfMemory;
+    promise.* = .{
+        .expr = expr,
+        .env = env,
+        .forced = false,
+        .result = .unspecified,
+    };
+    return Value{ .promise = promise };
+}
+
+/// Evaluates a `do` special form.
+/// Syntax: (do ((var init step) ...) (test result ...) body ...)
+/// Each binding may be `(var init)` (no step) or `(var init step)`.
+fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const bindings_pair = rest.pair;
+    const bindings_list = bindings_pair.car;
+    const after_bindings = bindings_pair.cdr;
+    if (after_bindings != .pair) return ElzError.InvalidArgument;
+    const test_clause = after_bindings.pair.car;
+    const body = after_bindings.pair.cdr;
+
+    if (test_clause != .pair) return ElzError.InvalidArgument;
+    const test_expr = test_clause.pair.car;
+    const result_exprs = test_clause.pair.cdr;
+
+    // Collect bindings into parallel slices for repeated stepping.
+    var var_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer var_names.deinit(env.allocator);
+    var init_exprs: std.ArrayListUnmanaged(Value) = .empty;
+    defer init_exprs.deinit(env.allocator);
+    var step_exprs: std.ArrayListUnmanaged(?Value) = .empty;
+    defer step_exprs.deinit(env.allocator);
+
+    var binding_node = bindings_list;
+    while (binding_node != .nil) {
+        if (binding_node != .pair) return ElzError.InvalidArgument;
+        const binding = binding_node.pair.car;
+        if (binding != .pair) return ElzError.InvalidArgument;
+        const name_val = binding.pair.car;
+        if (name_val != .symbol) return ElzError.InvalidArgument;
+        const name_tail = binding.pair.cdr;
+        if (name_tail != .pair) return ElzError.InvalidArgument;
+        const init_val = name_tail.pair.car;
+        const init_tail = name_tail.pair.cdr;
+
+        var step_val: ?Value = null;
+        if (init_tail == .pair) {
+            step_val = init_tail.pair.car;
+            if (init_tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+        } else if (init_tail != .nil) {
+            return ElzError.InvalidArgument;
+        }
+
+        try var_names.append(env.allocator, name_val.symbol);
+        try init_exprs.append(env.allocator, init_val);
+        try step_exprs.append(env.allocator, step_val);
+
+        binding_node = binding_node.pair.cdr;
+    }
+
+    // Bind initial values in a fresh scope.
+    const loop_env = try Environment.init(env.allocator, env);
+    for (var_names.items, 0..) |name, i| {
+        var init_expr = init_exprs.items[i];
+        const v = try eval(interp, &init_expr, env, fuel);
+        try loop_env.set(interp, name, v);
+    }
+
+    // Iteration.
+    while (true) {
+        var test_node = test_expr;
+        const test_result = try eval(interp, &test_node, loop_env, fuel);
+        const truthy = !(test_result == .boolean and test_result.boolean == false);
+        if (truthy) {
+            if (result_exprs == .nil) return Value.unspecified;
+            var node = result_exprs;
+            var last: Value = .unspecified;
+            while (node != .nil) {
+                if (node != .pair) return ElzError.InvalidArgument;
+                last = try eval(interp, &node.pair.car, loop_env, fuel);
+                node = node.pair.cdr;
+            }
+            return last;
+        }
+
+        // Body for side effects.
+        var body_node = body;
+        while (body_node != .nil) {
+            if (body_node != .pair) return ElzError.InvalidArgument;
+            _ = try eval(interp, &body_node.pair.car, loop_env, fuel);
+            body_node = body_node.pair.cdr;
+        }
+
+        // Evaluate all step expressions in the current bindings, then assign.
+        var new_values: std.ArrayListUnmanaged(Value) = .empty;
+        defer new_values.deinit(env.allocator);
+        for (step_exprs.items, 0..) |step_opt, i| {
+            if (step_opt) |step| {
+                var step_node = step;
+                const v = try eval(interp, &step_node, loop_env, fuel);
+                try new_values.append(env.allocator, v);
+            } else {
+                const v = try loop_env.get(var_names.items[i], interp);
+                try new_values.append(env.allocator, v);
+            }
+        }
+        for (var_names.items, 0..) |name, i| {
+            try loop_env.update(interp, name, new_values.items[i]);
+        }
+    }
+}
+
 /// Evaluates a `try` special form.
 fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
-    var try_body_forms = std.ArrayListUnmanaged(core.Value){};
+    var try_body_forms = std.ArrayListUnmanaged(core.Value).empty;
     defer try_body_forms.deinit(env.allocator);
     var catch_clause: ?core.Value = null;
     var current_node = rest;
@@ -715,7 +1364,7 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
 /// to produce an expansion form, and that expansion is then evaluated in the calling environment.
 fn evalMacroExpansion(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
     // Collect unevaluated args from the rest list
-    var unevaluated_args = std.ArrayListUnmanaged(Value){};
+    var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
     defer unevaluated_args.deinit(env.allocator);
     var current_node = rest;
     while (current_node != .nil) {
@@ -764,13 +1413,13 @@ fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, 
         .closure => |c| {
             if (c.params.items.len != arg_vals.items.len) return ElzError.WrongArgumentCount;
 
-            var call_env = c.env;
-            if (c.params.items.len > 0) {
-                const new_env = try Environment.init(env.allocator, c.env);
-                for (c.params.items, arg_vals.items) |param, arg| {
-                    try new_env.set(interp, param.symbol, arg);
-                }
-                call_env = new_env;
+            // R5RS §4.1.4 requires each lambda invocation to create a fresh activation
+            // frame, including for zero-argument closures. Without this, an internal
+            // `define` inside a zero-argument body would mutate the closure's captured
+            // environment instead of a per-call scope.
+            const call_env = try Environment.init(env.allocator, c.env);
+            for (c.params.items, arg_vals.items) |param, arg| {
+                try call_env.set(interp, param.symbol, arg);
             }
 
             var body_node = c.body;
@@ -870,7 +1519,9 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
             interp.time_check_counter +%= 1;
             if (interp.time_check_counter & 0xFF == 0) {
                 if (interp.eval_start_ms) |start_ms| {
-                    const now = std.time.milliTimestamp();
+                    var ts: std.c.timespec = undefined;
+                    _ = std.c.clock_gettime(.REALTIME, &ts);
+                    const now = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
                     if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
                         return ElzError.TimeLimitExceeded;
                     }
@@ -882,7 +1533,7 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
         const env = current_env;
 
         switch (ast.*) {
-            .number, .boolean, .character, .nil, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified => return ast.*,
+            .number, .boolean, .character, .nil, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .promise, .multi_values, .syntax_rules, .unspecified => return ast.*,
             .string => |s| return Value{ .string = try env.allocator.dupe(u8, s) },
             .symbol => |sym| return env.get(sym, interp),
             .pair => |p| {
@@ -896,7 +1547,12 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
                     break :blk if (looked_up == .macro) looked_up.macro else null;
                 } else null;
 
-                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
+                const maybe_syntax: ?*core.SyntaxRulesMacro = if (first == .symbol and maybe_macro == null) blk: {
+                    const looked_up = env.get(first.symbol, interp) catch break :blk null;
+                    break :blk if (looked_up == .syntax_rules) looked_up.syntax_rules else null;
+                } else null;
+
+                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (maybe_syntax) |s| expandSyntaxRules(interp, s, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("define-syntax")) evalDefineSyntax(interp, rest, env) else if (first.is_symbol("let-syntax") or first.is_symbol("letrec-syntax")) evalLetSyntax(interp, rest, env, fuel) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel) else if (first.is_symbol("delay")) evalDelay(env, rest) else if (first.is_symbol("do")) evalDo(interp, rest, env, fuel) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
 
                 if (result == .unspecified) {
                     if (current_ast != original_ast_ptr) {

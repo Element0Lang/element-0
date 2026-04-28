@@ -9,7 +9,7 @@ fn increment_list_elements(allocator: std.mem.Allocator, args: []const elz.Value
     if (list_head != .pair and list_head != .nil) {
         return elz.ElzError.InvalidArgument;
     }
-    var numbers = std.ArrayListUnmanaged(f64){};
+    var numbers = std.ArrayListUnmanaged(f64).empty;
     defer numbers.deinit(allocator);
     var current_node = list_head;
     while (current_node != .nil) {
@@ -57,8 +57,8 @@ pub fn main() !void {
     var fuel: u64 = 1000;
     const result = try interpreter.evalString(source, &fuel);
     var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
     const stdout = &stdout_writer.interface;
     try stdout.writeAll("Result: ");
     try elz.write(result, stdout);

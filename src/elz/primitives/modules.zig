@@ -42,21 +42,24 @@ pub fn module_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: 
 test "module primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
-    var interp = interpreter.Interpreter.init(allocator);
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
     // Test module-ref
     var module = try allocator.create(core.Module);
+    defer allocator.destroy(module);
     module.* = .{ .exports = std.StringHashMap(Value).init(allocator) };
+    defer module.exports.deinit();
     try module.exports.put("x", Value{ .number = 42 });
 
     var args = core.ValueList.init(allocator);
+    defer args.deinit();
     try args.append(Value{ .module = module });
     try args.append(Value{ .symbol = "x" });
 
     const result = try module_ref(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .number = 42 });
+    try testing.expectEqual(@as(f64, 42), result.number);
 
     // Test symbol not found
     args.clearRetainingCapacity();

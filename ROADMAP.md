@@ -48,6 +48,9 @@ It outlines the features to be implemented and their current status.
 * [x] `case`
 * [x] `and`
 * [x] `or`
+* [x] `do`
+* [x] `delay`
+* [x] Internal definitions at body head
 
 #### 2.3. Standard Library Procedures
 
@@ -56,12 +59,14 @@ It outlines the features to be implemented and their current status.
 * **Type Predicates**
     * [x] `null?`, `boolean?`, `symbol?`, `number?`, `list?`, `pair?`, `string?`
     * [x] `procedure?`, `char?`, `integer?`, `not`
+    * [x] `complex?`, `real?`, `rational?`, `exact?`, `inexact?` (truthful stubs over the f64-only domain)
 * **Pair and List Manipulation**
     * [x] `cons`, `car`, `cdr`, `pair?`
     * [x] `list`, `length`, `append`, `reverse`, `map`
-    * [x] `list-ref`, `list-tail`, `memq`, `assq`
+    * [x] `list-ref`, `list-tail`, `memq`, `memv`, `member`, `assq`, `assv`, `assoc`
     * [x] `set-car!`, `set-cdr!`
     * [x] `for-each`
+    * [x] Full `caar` through `cddddr` family (24 combinators)
 * **Numeric Operations**
     * [x] `+`, `-`, `*`, `/`
     * [x] `=`, `<`, `>`, `<=`, `>=`
@@ -69,34 +74,49 @@ It outlines the features to be implemented and their current status.
     * [x] `floor`, `ceiling`, `round`, `truncate`
     * [x] `expt`, `exp`, `log`
     * [x] `even?`, `odd?`, `zero?`, `positive?`, `negative?`
+    * [x] `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (one and two-argument forms)
+    * [x] `quotient`, `remainder`, `modulo`, `gcd`, `lcm`
+    * [x] `exact->inexact`, `inexact->exact` (identity until the numeric tower lands)
 * **Symbol Handling**
     * [x] `symbol->string`, `string->symbol`
 * **String and Character Manipulation**
-    * [x] `string-length`, `string-ref`, `char=?`, `char<?`, `char>?`, `char<=?`, `char>=?`
+    * [x] `string-length`, `string-ref`, `string-set!`, `string-copy`, `string-fill!` (ASCII)
+    * [x] `string`, `string->list`, `list->string`
+    * [x] `string=?`, `string<?`, `string>?`, `string<=?`, `string>=?`
+    * [x] `string-ci=?`, `string-ci<?`, `string-ci>?`, `string-ci<=?`, `string-ci>=?`
+    * [x] `char=?`, `char<?`, `char>?`, `char<=?`, `char>=?`
+    * [x] `char-ci=?`, `char-ci<?`, `char-ci>?`, `char-ci<=?`, `char-ci>=?`
+    * [x] `char-alphabetic?`, `char-numeric?`, `char-whitespace?`, `char-upper-case?`, `char-lower-case?`
+    * [x] `char-upcase`, `char-downcase`
     * [x] `char->integer`, `integer->char`
 * **Vector Manipulation**
-    * [x] `vector`, `make-vector`, `vector-ref`, `vector-set!`, `vector-length`, `vector?`, `list->vector`, `vector->list`
+    * [x] `vector`, `make-vector`, `vector-ref`, `vector-set!`, `vector-fill!`, `vector-length`, `vector?`, `list->vector`, `vector->list`
 * **Hash Map Manipulation**
     * [x] `make-hash-map`, `hash-map-set!`, `hash-map-ref`, `hash-map-remove!`, `hash-map-contains?`, `hash-map-count`, `hash-map?`
 
 #### 2.4. Syntactic Extensions
 
 * [x] `quasiquote` (`` ` ``), `unquote` (`,`), `unquote-splicing` (`,@`)
+* [x] `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list ellipsis are not yet supported.
 
 #### 2.5. Advanced Control Flow
 
 * [x] `apply`
 * [x] `eval`
+* [x] `delay`, `force`
+* [x] `values`, `call-with-values`
+* [x] `call-with-escape-continuation` (`call/ec`)
 
 #### 2.6. I/O System
 
-* [x] `write`
-* [x] `display`
-* [x] `newline`
+* [x] `write`, `display`, `newline`, `write-char` (with optional port argument)
 * [x] `load`
-* [x] `read` (as `read-string`)
+* [x] Streaming `read` from a port and `read-string` from a string
 * [x] `open-input-file`, `open-output-file`, `close-input-port`, `close-output-port`
-* [x] `read-line`, `read-char`, `write-port`, `input-port?`, `output-port?`, `eof-object?`
+* [x] `read-line`, `read-char`, `peek-char`, `char-ready?`
+* [x] `write-port`, `input-port?`, `output-port?`, `port?`, `eof-object?`
+* [x] `current-input-port`, `current-output-port`
+* [x] `with-input-from-file`, `with-output-to-file`, `call-with-input-file`, `call-with-output-file`
 
 ### 3. Expanded Standard Library
 
@@ -113,8 +133,10 @@ It outlines the features to be implemented and their current status.
 * [x] **Error Handling**: A mechanism for handling runtime errors, like `try/catch` or `with-handler`.
 * [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
 * [x] `define-macro` (simple procedural macros)
-* [ ] `syntax-rules` (hygienic macros) or similar system for compile-time metaprogramming.
+* [x] `syntax-rules`, `define-syntax`, `let-syntax`, `letrec-syntax` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list ellipsis are deferred.
 * [x] `call-with-escape-continuation` (`call/ec`): Escape-only continuations for early returns. Full `call/cc` deferred pending CPS rewrite.
+* [ ] `dynamic-wind`: deferred until full `call/cc` lands.
+* [ ] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
 
 ### 5. Better Host Integration and Embeddability
 

@@ -8,9 +8,8 @@ const interpreter = @import("../interpreter.zig");
 
 const ParseResult = struct { value: Value, pos: usize };
 
-/// Serializes a Value to JSON format and appends to the buffer.
-fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) !void {
-    const w = buf.writer(allocator);
+/// Serializes a Value to JSON format and writes to the writer.
+fn serializeValue(value: Value, w: *std.Io.Writer) !void {
     switch (value) {
         .number => |n| {
             // Handle special float values
@@ -50,13 +49,13 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             while (current == .pair) {
                 if (!first) try w.writeByte(',');
                 first = false;
-                try serializeValue(current.pair.car, buf, allocator);
+                try serializeValue(current.pair.car, w);
                 current = current.pair.cdr;
             }
             // If improper list, serialize the cdr too
             if (current != .nil) {
                 if (!first) try w.writeByte(',');
-                try serializeValue(current, buf, allocator);
+                try serializeValue(current, w);
             }
             try w.writeByte(']');
         },
@@ -64,7 +63,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             try w.writeByte('[');
             for (v.items, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
-                try serializeValue(item, buf, allocator);
+                try serializeValue(item, w);
             }
             try w.writeByte(']');
         },
@@ -86,7 +85,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
                 }
                 try w.writeByte('"');
                 try w.writeByte(':');
-                try serializeValue(entry.value_ptr.*, buf, allocator);
+                try serializeValue(entry.value_ptr.*, w);
             }
             try w.writeByte('}');
         },
@@ -118,7 +117,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             try w.writeByte('"');
         },
         // Non-serializable types
-        .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .unspecified => {
+        .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .unspecified => {
             return error.OutOfMemory; // Signal unsupported type
         },
     }
@@ -128,7 +127,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
 fn parseJsonString(json: []const u8, start: usize, allocator: std.mem.Allocator) !ParseResult {
     if (start >= json.len or json[start] != '"') return error.OutOfMemory;
     var i = start + 1;
-    var result = std.ArrayListUnmanaged(u8){};
+    var result = std.ArrayListUnmanaged(u8).empty;
     errdefer result.deinit(allocator);
 
     while (i < json.len and json[i] != '"') {
@@ -197,7 +196,7 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
             i += 1;
             i = skipWhitespace(json, i);
 
-            var elements = std.ArrayListUnmanaged(Value){};
+            var elements = std.ArrayListUnmanaged(Value).empty;
             defer elements.deinit(allocator);
 
             if (i < json.len and json[i] == ']') {
@@ -288,12 +287,12 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
 pub fn json_serialize(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
-    var buf = std.ArrayListUnmanaged(u8){};
     const allocator = env.allocator;
-    errdefer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
 
-    serializeValue(args.items[0], &buf, allocator) catch return ElzError.InvalidArgument;
-    return Value{ .string = buf.toOwnedSlice(allocator) catch return ElzError.OutOfMemory };
+    serializeValue(args.items[0], &aw.writer) catch return ElzError.InvalidArgument;
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
 }
 
 /// `json-deserialize` parses a JSON string into a Value.

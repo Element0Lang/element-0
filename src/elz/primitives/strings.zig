@@ -45,7 +45,7 @@ pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
 /// Parameters:
 /// - `args`: A `ValueList` of strings to be appended.
 pub fn string_append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    var buffer = std.ArrayListUnmanaged(u8){};
+    var buffer = std.ArrayListUnmanaged(u8).empty;
     defer buffer.deinit(env.allocator);
 
     for (args.items) |arg| {
@@ -104,6 +104,102 @@ pub fn char_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     const b = args.items[1];
     if (a != .character or b != .character) return ElzError.InvalidArgument;
     return Value{ .boolean = a.character >= b.character };
+}
+
+/// Folds an ASCII letter to lowercase. Non-ASCII code points pass through unchanged.
+fn ascii_fold_lower(c: u32) u32 {
+    if (c >= 'A' and c <= 'Z') return c + 32;
+    return c;
+}
+
+fn char_ci_compare(args: core.ValueList) ElzError!struct { a: u32, b: u32 } {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return .{ .a = ascii_fold_lower(a.character), .b = ascii_fold_lower(b.character) };
+}
+
+/// `char_ci_eq` checks two characters for equality, case-insensitive over ASCII.
+pub fn char_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a == pair.b };
+}
+
+/// `char_ci_lt` is the case-insensitive less-than comparison.
+pub fn char_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a < pair.b };
+}
+
+/// `char_ci_gt` is the case-insensitive greater-than comparison.
+pub fn char_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a > pair.b };
+}
+
+/// `char_ci_le` is the case-insensitive less-than-or-equal comparison.
+pub fn char_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a <= pair.b };
+}
+
+/// `char_ci_ge` is the case-insensitive greater-than-or-equal comparison.
+pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const pair = try char_ci_compare(args);
+    return Value{ .boolean = pair.a >= pair.b };
+}
+
+fn char_arg(args: core.ValueList) ElzError!u32 {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const c = args.items[0];
+    if (c != .character) return ElzError.InvalidArgument;
+    return c.character;
+}
+
+/// `char_alphabetic_p` returns `#t` for ASCII letters.
+pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const is_alpha = (cp >= 'A' and cp <= 'Z') or (cp >= 'a' and cp <= 'z');
+    return Value{ .boolean = is_alpha };
+}
+
+/// `char_numeric_p` returns `#t` for ASCII decimal digits.
+pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= '0' and cp <= '9' };
+}
+
+/// `char_whitespace_p` returns `#t` for ASCII whitespace.
+pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const is_ws = cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0B or cp == 0x0C;
+    return Value{ .boolean = is_ws };
+}
+
+/// `char_upper_case_p` returns `#t` for ASCII uppercase letters.
+pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= 'A' and cp <= 'Z' };
+}
+
+/// `char_lower_case_p` returns `#t` for ASCII lowercase letters.
+pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .boolean = cp >= 'a' and cp <= 'z' };
+}
+
+/// `char_upcase` returns the ASCII uppercase form of a character. Non-letters pass through.
+pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    const folded: u32 = if (cp >= 'a' and cp <= 'z') cp - 32 else cp;
+    return Value{ .character = folded };
+}
+
+/// `char_downcase` returns the ASCII lowercase form of a character. Non-letters pass through.
+pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const cp = try char_arg(args);
+    return Value{ .character = ascii_fold_lower(cp) };
 }
 
 /// `char_to_integer` converts a character to its Unicode code point.
@@ -274,7 +370,7 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
 
     // Build a list of substrings
     var result: Value = Value.nil;
-    var temp_parts = std.ArrayListUnmanaged([]const u8){};
+    var temp_parts = std.ArrayListUnmanaged([]const u8).empty;
     defer temp_parts.deinit(env.allocator);
 
     var it = std.mem.splitSequence(u8, str, delim);
@@ -393,6 +489,205 @@ pub fn string_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     return Value{ .boolean = order != .lt };
 }
 
+/// Folds an ASCII byte to lowercase. Bytes outside `A`-`Z` pass through.
+fn ascii_byte_lower(b: u8) u8 {
+    if (b >= 'A' and b <= 'Z') return b + 32;
+    return b;
+}
+
+/// Lexicographic comparison of two byte slices after ASCII lowercase folding.
+fn string_ci_order(a: []const u8, b: []const u8) std.math.Order {
+    const n = @min(a.len, b.len);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const ca = ascii_byte_lower(a[i]);
+        const cb = ascii_byte_lower(b[i]);
+        if (ca < cb) return .lt;
+        if (ca > cb) return .gt;
+    }
+    if (a.len < b.len) return .lt;
+    if (a.len > b.len) return .gt;
+    return .eq;
+}
+
+fn string_ci_pair(args: core.ValueList) ElzError!struct { a: []const u8, b: []const u8 } {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .string or b != .string) return ElzError.InvalidArgument;
+    return .{ .a = a.string, .b = b.string };
+}
+
+/// `string_ci_eq` is case-insensitive equality over ASCII.
+pub fn string_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try string_ci_pair(args);
+    return Value{ .boolean = string_ci_order(p.a, p.b) == .eq };
+}
+
+/// `string_ci_lt` is case-insensitive less-than over ASCII.
+pub fn string_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try string_ci_pair(args);
+    return Value{ .boolean = string_ci_order(p.a, p.b) == .lt };
+}
+
+/// `string_ci_gt` is case-insensitive greater-than over ASCII.
+pub fn string_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try string_ci_pair(args);
+    return Value{ .boolean = string_ci_order(p.a, p.b) == .gt };
+}
+
+/// `string_ci_le` is case-insensitive less-than-or-equal over ASCII.
+pub fn string_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try string_ci_pair(args);
+    return Value{ .boolean = string_ci_order(p.a, p.b) != .gt };
+}
+
+/// `string_ci_ge` is case-insensitive greater-than-or-equal over ASCII.
+pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try string_ci_pair(args);
+    return Value{ .boolean = string_ci_order(p.a, p.b) != .lt };
+}
+
+/// `string_constructor` builds a string from character arguments. UTF-8 encodes each codepoint.
+/// Syntax: (string char ...)
+pub fn string_constructor(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    errdefer aw.deinit();
+    for (args.items) |arg| {
+        if (arg != .character) return ElzError.InvalidArgument;
+        const cp = arg.character;
+        if (cp > 0x10FFFF) return ElzError.InvalidArgument;
+        const codepoint: u21 = @intCast(cp);
+        if (!std.unicode.utf8ValidCodepoint(codepoint)) return ElzError.InvalidArgument;
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(codepoint, &buf) catch return ElzError.InvalidArgument;
+        aw.writer.writeAll(buf[0..@as(usize, @intCast(len))]) catch return ElzError.OutOfMemory;
+    }
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
+}
+
+/// `string_copy` returns a fresh copy of its argument.
+/// Syntax: (string-copy str)
+pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const s = args.items[0];
+    if (s != .string) return ElzError.InvalidArgument;
+    const copy = env.allocator.dupe(u8, s.string) catch return ElzError.OutOfMemory;
+    return Value{ .string = copy };
+}
+
+/// `string_to_list` returns a list of the characters in a string.
+/// Syntax: (string->list str)
+pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const s = args.items[0];
+    if (s != .string) return ElzError.InvalidArgument;
+
+    // Collect codepoints.
+    var codepoints: std.ArrayListUnmanaged(u32) = .empty;
+    defer codepoints.deinit(env.allocator);
+    var it = std.unicode.Utf8View.initUnchecked(s.string).iterator();
+    while (it.nextCodepoint()) |cp| {
+        codepoints.append(env.allocator, cp) catch return ElzError.OutOfMemory;
+    }
+
+    // Build the list right-to-left.
+    var result: Value = .nil;
+    var i: usize = codepoints.items.len;
+    while (i > 0) {
+        i -= 1;
+        const pair = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        pair.* = .{ .car = Value{ .character = codepoints.items[i] }, .cdr = result };
+        result = Value{ .pair = pair };
+    }
+    return result;
+}
+
+/// `list_to_string` builds a string from a list of characters.
+/// Syntax: (list->string lst)
+pub fn list_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    var node = args.items[0];
+
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    errdefer aw.deinit();
+
+    while (node != .nil) {
+        if (node != .pair) return ElzError.InvalidArgument;
+        const head = node.pair.car;
+        if (head != .character) return ElzError.InvalidArgument;
+        const cp = head.character;
+        if (cp > 0x10FFFF) return ElzError.InvalidArgument;
+        const codepoint: u21 = @intCast(cp);
+        if (!std.unicode.utf8ValidCodepoint(codepoint)) return ElzError.InvalidArgument;
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(codepoint, &buf) catch return ElzError.InvalidArgument;
+        aw.writer.writeAll(buf[0..@as(usize, @intCast(len))]) catch return ElzError.OutOfMemory;
+        node = node.pair.cdr;
+    }
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
+}
+
+/// `string_set` replaces the character at index `k` of `string` with `char`. Strings are
+/// stored as UTF-8 bytes; to keep the operation in place this implementation requires
+/// both the existing and new character to be in the ASCII range (codepoints below 0x80).
+/// A non-ASCII edit is rejected so the caller can rebuild the string instead.
+/// Syntax: (string-set! string k char)
+pub fn string_set(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 3) return ElzError.WrongArgumentCount;
+    const str_val = args.items[0];
+    const idx_val = args.items[1];
+    const char_val = args.items[2];
+    if (str_val != .string or idx_val != .number or char_val != .character) return ElzError.InvalidArgument;
+
+    const idx = idx_val.number;
+    if (idx < 0 or @floor(idx) != idx) return ElzError.InvalidArgument;
+    const k: usize = @intFromFloat(idx);
+
+    const new_cp = char_val.character;
+    if (new_cp >= 0x80) return ElzError.InvalidArgument;
+
+    // Walk codepoints to the kth and verify both are ASCII before mutating in place.
+    const bytes_const = str_val.string;
+    var i: usize = 0;
+    var byte_idx: usize = 0;
+    while (byte_idx < bytes_const.len) : (i += 1) {
+        const lead = bytes_const[byte_idx];
+        const seq_len: usize = std.unicode.utf8ByteSequenceLength(lead) catch return ElzError.InvalidArgument;
+        if (i == k) {
+            if (seq_len != 1) return ElzError.InvalidArgument;
+            const bytes_mut: []u8 = @constCast(bytes_const);
+            bytes_mut[byte_idx] = @intCast(new_cp);
+            return Value.unspecified;
+        }
+        byte_idx += seq_len;
+    }
+    return ElzError.InvalidArgument;
+}
+
+/// `string_fill` overwrites every character of `string` with `char`. Because the
+/// underlying byte buffer is mutated in place, the new character must be ASCII (single
+/// byte) and the existing string must contain only ASCII characters. Non-ASCII content
+/// is rejected so callers do not silently truncate or grow the buffer.
+/// Syntax: (string-fill! string char)
+pub fn string_fill(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const str_val = args.items[0];
+    const char_val = args.items[1];
+    if (str_val != .string or char_val != .character) return ElzError.InvalidArgument;
+
+    const cp = char_val.character;
+    if (cp >= 0x80) return ElzError.InvalidArgument;
+
+    const bytes_const = str_val.string;
+    for (bytes_const) |b| {
+        if (b >= 0x80) return ElzError.InvalidArgument;
+    }
+    const bytes_mut: []u8 = @constCast(bytes_const);
+    @memset(bytes_mut, @intCast(cp));
+    return Value.unspecified;
+}
+
 /// `gensym` generates a unique symbol.
 /// Syntax: (gensym) or (gensym prefix)
 pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -417,26 +712,157 @@ test "string primitives" {
 
     // Test symbol->string
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value{ .symbol = "foo" });
+    try args.append(Value{ .symbol = "foo" });
     var result = try symbol_to_string(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .string = "foo" });
+    try testing.expect(result == .string);
+    try testing.expectEqualStrings("foo", result.string);
 
     // Test string->symbol
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .string = "bar" });
+    try args.append(Value{ .string = "bar" });
     result = try string_to_symbol(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .symbol = "bar" });
+    try testing.expect(result == .symbol);
+    try testing.expectEqualStrings("bar", result.symbol);
 
     // Test string-length
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .string = "hello" });
+    try args.append(Value{ .string = "hello" });
     result = try string_length(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .number = 5 });
+    try testing.expectEqual(@as(f64, 5), result.number);
 
     // Test char=?
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .character = 'a' });
-    try args.append(interp.allocator, Value{ .character = 'a' });
+    try args.append(Value{ .character = 'a' });
+    try args.append(Value{ .character = 'a' });
     result = try char_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
+}
+
+test "char-ci comparisons" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .character = 'A' });
+    try args.append(Value{ .character = 'a' });
+    try testing.expect((try char_ci_eq(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_le(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_ge(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_ci_gt(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .character = 'a' });
+    try args.append(Value{ .character = 'B' });
+    try testing.expect((try char_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == true);
+}
+
+test "char predicates" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .character = 'A' });
+    try testing.expect((try char_alphabetic_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_upper_case_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_lower_case_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_numeric_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+    try testing.expect((try char_whitespace_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .character = '7' });
+    try testing.expect((try char_numeric_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try char_alphabetic_p(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .character = ' ' });
+    try testing.expect((try char_whitespace_p(&interp, interp.root_env, args, &fuel)).boolean == true);
+}
+
+test "char case conversion" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .character = 'a' });
+    try testing.expect((try char_upcase(&interp, interp.root_env, args, &fuel)).character == 'A');
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == 'a');
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .character = 'Z' });
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == 'z');
+
+    // Non-letters pass through.
+    args.clearRetainingCapacity();
+    try args.append(Value{ .character = '5' });
+    try testing.expect((try char_upcase(&interp, interp.root_env, args, &fuel)).character == '5');
+    try testing.expect((try char_downcase(&interp, interp.root_env, args, &fuel)).character == '5');
+}
+
+test "string-ci comparisons" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .string = "Hello" });
+    try args.append(Value{ .string = "hello" });
+    try testing.expect((try string_ci_eq(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try string_ci_le(&interp, interp.root_env, args, &fuel)).boolean == true);
+    try testing.expect((try string_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == false);
+
+    args.clearRetainingCapacity();
+    try args.append(Value{ .string = "abc" });
+    try args.append(Value{ .string = "ABD" });
+    try testing.expect((try string_ci_lt(&interp, interp.root_env, args, &fuel)).boolean == true);
+}
+
+test "string constructor and copy" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .character = 'a' });
+    try args.append(Value{ .character = 'b' });
+    try args.append(Value{ .character = 'c' });
+    const built = try string_constructor(&interp, interp.root_env, args, &fuel);
+    try testing.expect(built == .string);
+    try testing.expectEqualStrings("abc", built.string);
+
+    args.clearRetainingCapacity();
+    try args.append(built);
+    const copy = try string_copy(&interp, interp.root_env, args, &fuel);
+    try testing.expect(copy == .string);
+    try testing.expectEqualStrings("abc", copy.string);
+    try testing.expect(copy.string.ptr != built.string.ptr);
+}
+
+test "string list conversions" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 1000;
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .string = "ab" });
+    const list = try string_to_list(&interp, interp.root_env, args, &fuel);
+    try testing.expect(list == .pair);
+    try testing.expectEqual(@as(u32, 'a'), list.pair.car.character);
+    try testing.expectEqual(@as(u32, 'b'), list.pair.cdr.pair.car.character);
+    try testing.expect(list.pair.cdr.pair.cdr == .nil);
+
+    args.clearRetainingCapacity();
+    try args.append(list);
+    const back = try list_to_string(&interp, interp.root_env, args, &fuel);
+    try testing.expect(back == .string);
+    try testing.expectEqualStrings("ab", back.string);
 }
