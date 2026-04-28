@@ -49,6 +49,16 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
                 try stack.append(allocator, .{ .a = p1.cdr, .b = p2.cdr });
                 try stack.append(allocator, .{ .a = p1.car, .b = p2.car });
             },
+            .vector => |v1| {
+                const v2 = b.vector;
+                if (v1.items.len != v2.items.len) return false;
+                // Push elements in reverse so the LIFO stack visits index 0 first.
+                var i = v1.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(allocator, .{ .a = v1.items[i], .b = v2.items[i] });
+                }
+            },
             .cell => |c1| {
                 const c2 = b.cell;
                 try stack.append(allocator, .{ .a = c1.content, .b = c2.content });

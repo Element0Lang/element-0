@@ -29,9 +29,18 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                 }
             },
             ' ', '\t', '\r', '\n' => i += 1,
-            '(', ')', '\'' => {
+            '(', ')', '\'', '`' => {
                 try tokens.append(allocator, source[i .. i + 1]);
                 i += 1;
+            },
+            ',' => {
+                if (i + 1 < source.len and source[i + 1] == '@') {
+                    try tokens.append(allocator, source[i .. i + 2]);
+                    i += 2;
+                } else {
+                    try tokens.append(allocator, source[i .. i + 1]);
+                    i += 1;
+                }
             },
             '"' => {
                 var j = i + 1;
@@ -48,7 +57,10 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
             },
             else => {
                 var j = i;
-                while (j < source.len and !std.ascii.isWhitespace(source[j]) and source[j] != '(' and source[j] != ')' and source[j] != '\'' and source[j] != ';') {
+                while (j < source.len) {
+                    const c = source[j];
+                    if (std.ascii.isWhitespace(c)) break;
+                    if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"') break;
                     j += 1;
                 }
                 try tokens.append(allocator, source[i..j]);
@@ -74,13 +86,25 @@ const Parser = struct {
         if (self.position >= self.tokens.items.len) return ElzError.UnexpectedEndOfInput;
         const token = self.tokens.items[self.position];
         self.position += 1;
-        if (std.mem.eql(u8, token, "'")) {
+        // Quote and quasiquote-family shorthand: each wraps the next form in a one-arg
+        // application of the corresponding special form.
+        const wrapper_name: ?[]const u8 = if (std.mem.eql(u8, token, "'"))
+            "quote"
+        else if (std.mem.eql(u8, token, "`"))
+            "quasiquote"
+        else if (std.mem.eql(u8, token, ","))
+            "unquote"
+        else if (std.mem.eql(u8, token, ",@"))
+            "unquote-splicing"
+        else
+            null;
+        if (wrapper_name) |name| {
             const next_form = try self.parse_form();
-            const quote_symbol = Value{ .symbol = "quote" };
+            const sym = Value{ .symbol = name };
             const p1 = try self.allocator.create(core.Pair);
             p1.* = .{ .car = next_form, .cdr = Value.nil };
             const p2 = try self.allocator.create(core.Pair);
-            p2.* = .{ .car = quote_symbol, .cdr = Value{ .pair = p1 } };
+            p2.* = .{ .car = sym, .cdr = Value{ .pair = p1 } };
             return Value{ .pair = p2 };
         }
         if (std.mem.eql(u8, token, "(")) {

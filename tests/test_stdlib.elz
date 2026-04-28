@@ -448,6 +448,34 @@
      (letrec ((f (lambda () (define x 7) x)))
        (f))))
 
+;; --- Regression: equal? structurally compares vectors ---
+(test-case "equal? returns #t for vectors with identical content"
+  (equal? (vector 1 2 3) (vector 1 2 3)))
+(test-case "equal? returns #f for vectors with different content"
+  (not (equal? (vector 1 2 3) (vector 1 2 4))))
+(test-case "equal? returns #f for vectors of different lengths"
+  (not (equal? (vector 1 2) (vector 1 2 3))))
+(test-case "equal? on empty vectors"
+  (equal? (vector) (vector)))
+(test-case "equal? recurses into nested vectors"
+  (equal? (vector 1 (vector 2 3)) (vector 1 (vector 2 3))))
+(test-case "equal? mixes vector and list elements"
+  (equal? (vector 'a (list 1 2)) (vector 'a (list 1 2))))
+
+;; --- Regression: quasiquote, unquote, unquote-splicing shorthand parse correctly ---
+(test-case "backtick produces quasiquote"
+  (equal? `(1 2 3) '(1 2 3)))
+(test-case "comma inside backtick splices a single value"
+  (let ((x 42))
+    (equal? `(a ,x c) '(a 42 c))))
+(test-case "comma-at splices a list"
+  (let ((xs (list 1 2 3)))
+    (equal? `(a ,@xs c) '(a 1 2 3 c))))
+(test-case "nested backtick increments level"
+  (equal? `(a `(b ,c) d) '(a (quasiquote (b (unquote c))) d)))
+(test-case "comma at top-level inside backtick"
+  (let ((y 7)) (= `,y 7)))
+
 (test-case "let-syntax binds a transformer locally"
   (= 7
      (let-syntax ((twice (syntax-rules ()

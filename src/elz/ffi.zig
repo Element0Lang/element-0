@@ -35,11 +35,20 @@ pub fn Caster(comptime T: type) type {
                         if (@floor(n) != n) {
                             return ElzError.InvalidArgument;
                         }
-                        const min_val: f64 = if (int_info.signedness == .signed)
+                        // f64 can represent integers exactly only up to 2^53. For target
+                        // integer types whose range exceeds that (i64, u64, i128, ...),
+                        // values close to the boundary may round during the float-to-int
+                        // conversion and overflow. Restrict to the f64 exact-integer range
+                        // when the target type is wider than 53 bits; otherwise the
+                        // target type's own range is the binding constraint.
+                        const exact_bound: f64 = @as(f64, @floatFromInt(@as(i64, 1) << 53));
+                        const type_min: f64 = if (int_info.signedness == .signed)
                             -@as(f64, @floatFromInt(@as(i128, 1) << int_info.bits - 1))
                         else
                             0;
-                        const max_val: f64 = @floatFromInt((@as(u128, 1) << int_info.bits) - 1);
+                        const type_max: f64 = @floatFromInt((@as(u128, 1) << int_info.bits) - 1);
+                        const min_val = if (int_info.bits >= 53) @max(type_min, -exact_bound) else type_min;
+                        const max_val = if (int_info.bits >= 53) @min(type_max, exact_bound) else type_max;
                         if (n < min_val or n > max_val) {
                             return ElzError.InvalidArgument;
                         }
