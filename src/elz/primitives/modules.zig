@@ -48,10 +48,13 @@ test "module primitives" {
 
     // Test module-ref
     var module = try allocator.create(core.Module);
+    defer allocator.destroy(module);
     module.* = .{ .exports = std.StringHashMap(Value).init(allocator) };
+    defer module.exports.deinit();
     try module.exports.put("x", Value{ .number = 42 });
 
     var args = core.ValueList.init(allocator);
+    defer args.deinit();
     try args.append(Value{ .module = module });
     try args.append(Value{ .symbol = "x" });
 

@@ -202,11 +202,16 @@ pub fn atan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueL
 }
 
 /// Validates that `n` is a finite, integer-valued `f64` and converts it to `i64`.
+///
+/// f64 represents integers exactly only up to 2^53. Beyond that, integer-valued f64
+/// values exist with gaps. To avoid undefined behavior in `@intFromFloat` when `n` is
+/// just below i64's range but rounds (during the implicit float-to-int conversion) to a
+/// value outside i64, the bound is set to 2^53 rather than to `maxInt(i64)`. Integer
+/// arithmetic outside that range is rejected so the user sees an error rather than UB.
 fn require_integer(n: f64) ElzError!i64 {
     if (!std.math.isFinite(n) or @floor(n) != n) return ElzError.InvalidArgument;
-    const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
-    const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
-    if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
+    const safe_bound: f64 = @as(f64, @floatFromInt(@as(i64, 1) << 53));
+    if (n > safe_bound or n < -safe_bound) return ElzError.InvalidArgument;
     return @intFromFloat(n);
 }
 
@@ -266,6 +271,11 @@ pub fn gcd(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
 }
 
 /// `lcm` returns the least common multiple of its arguments. With no arguments it returns 1.
+///
+/// Without a numeric tower, the running accumulator is an `i64`; the multiplication that
+/// expands the lcm at each step can overflow for inputs that fit individually but whose
+/// least common multiple does not. The overflow case is reported as an invalid argument
+/// rather than producing a silently wrapped result.
 pub fn lcm(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return Value{ .number = 1 };
     var acc: i64 = 1;
@@ -275,7 +285,10 @@ pub fn lcm(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
         if (n == 0) return Value{ .number = 0 };
         const g = gcd_pair(acc, n);
         const abs_n: i64 = if (n < 0) -n else n;
-        acc = @divExact(acc, g) * abs_n;
+        const reduced = @divExact(acc, g);
+        const product, const overflow = @mulWithOverflow(reduced, abs_n);
+        if (overflow != 0) return ElzError.InvalidArgument;
+        acc = product;
     }
     return Value{ .number = @floatFromInt(if (acc < 0) -acc else acc) };
 }

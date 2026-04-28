@@ -144,7 +144,12 @@ pub fn read_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
     if (str_val != .string) return ElzError.InvalidArgument;
 
     const source = str_val.string;
-    return parser.read(source, env.allocator);
+    return parser.read(source, env.allocator) catch |err| switch (err) {
+        // Match the port-based `read` and produce the eof object for empty input rather
+        // than surfacing a parser-internal error.
+        ElzError.EmptyInput => return Value{ .symbol = "eof" },
+        else => return err,
+    };
 }
 
 test "io primitives" {

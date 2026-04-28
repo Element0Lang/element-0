@@ -24,9 +24,23 @@ pub const define_foreign_func = @import("elz/env_setup.zig").define_foreign_func
 pub const parser = @import("elz/parser.zig");
 pub const eval = @import("elz/eval.zig");
 
-// Inline `test` blocks across `src/elz/**` are intentionally not pulled into `make test`
-// yet. After resolving 0.16 migration drift, 112 unit tests compile and pass, but 153
-// leaks under `std.testing.allocator` remain across `core`, `math`, `control`,
-// `modules`, and `parser` (107 in one regression test alone). Reviving inline test
-// discovery is tracked as a separate slice so that surfacing those leaks does not block
-// `make test` from passing.
+// Pull inline `test` blocks from the implementation modules into `make test`. Each
+// transitively imports `core`, `interpreter`, `eval`, and the various primitives, so the
+// full suite of inline unit tests runs together.
+test {
+    _ = @import("elz/core.zig");
+    _ = @import("elz/parser.zig");
+    _ = @import("elz/writer.zig");
+    _ = @import("elz/primitives/control.zig");
+    _ = @import("elz/primitives/format.zig");
+    _ = @import("elz/primitives/hashmaps.zig");
+    _ = @import("elz/primitives/io.zig");
+    _ = @import("elz/primitives/lists.zig");
+    _ = @import("elz/primitives/math.zig");
+    _ = @import("elz/primitives/modules.zig");
+    _ = @import("elz/primitives/ports.zig");
+    _ = @import("elz/primitives/predicates.zig");
+    _ = @import("elz/primitives/regex.zig");
+    _ = @import("elz/primitives/strings.zig");
+    _ = @import("elz/primitives/vectors.zig");
+}

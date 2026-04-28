@@ -231,7 +231,12 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
 }
 
 test "parser" {
-    const allocator = std.testing.allocator;
+    // The parser allocates symbol, string, and pair values from the supplied allocator
+    // and never owns their lifetime in production (the GC does). An arena lets the test
+    // free everything in one shot.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const testing = std.testing;
 
     // Test parsing a number

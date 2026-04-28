@@ -953,6 +953,9 @@ fn collect_introduced_identifiers(
             try out.append(allocator, s);
         },
         .pair => |p| {
+            // R5RS hygiene only renames identifiers used as expressions. Symbols inside
+            // a `quote` form are data, not code, so leave them untouched.
+            if (p.car.is_symbol("quote")) return;
             try collect_introduced_identifiers(interp, allocator, p.car, pattern_var_names, def_env, out);
             try collect_introduced_identifiers(interp, allocator, p.cdr, pattern_var_names, def_env, out);
         },
@@ -967,7 +970,8 @@ fn fresh_hygiene_name(interp: *interpreter.Interpreter, allocator: std.mem.Alloc
 }
 
 /// Renames symbols in `template` according to `rename_map`. Other nodes are left structurally
-/// identical (still constructed via `expand_template`'s logic later).
+/// identical (still constructed via `expand_template`'s logic later). Symbols inside a
+/// `quote` form are not renamed because they are data rather than expressions.
 fn rename_template(
     allocator: std.mem.Allocator,
     template: Value,
@@ -981,6 +985,10 @@ fn rename_template(
             return Value{ .symbol = try allocator.dupe(u8, s) };
         },
         .pair => |p| {
+            if (p.car.is_symbol("quote")) {
+                // Reproduce the quote form structurally without renaming inside.
+                return template.deep_clone(allocator);
+            }
             const new_pair = try allocator.create(core.Pair);
             new_pair.* = .{
                 .car = try rename_template(allocator, p.car, rename_map),
@@ -1405,13 +1413,13 @@ fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, 
         .closure => |c| {
             if (c.params.items.len != arg_vals.items.len) return ElzError.WrongArgumentCount;
 
-            var call_env = c.env;
-            if (c.params.items.len > 0) {
-                const new_env = try Environment.init(env.allocator, c.env);
-                for (c.params.items, arg_vals.items) |param, arg| {
-                    try new_env.set(interp, param.symbol, arg);
-                }
-                call_env = new_env;
+            // R5RS §4.1.4 requires each lambda invocation to create a fresh activation
+            // frame, including for zero-argument closures. Without this, an internal
+            // `define` inside a zero-argument body would mutate the closure's captured
+            // environment instead of a per-call scope.
+            const call_env = try Environment.init(env.allocator, c.env);
+            for (c.params.items, arg_vals.items) |param, arg| {
+                try call_env.set(interp, param.symbol, arg);
             }
 
             var body_node = c.body;

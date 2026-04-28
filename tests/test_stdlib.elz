@@ -199,6 +199,23 @@
 (test-case "lcm no args" (= (lcm) 1))
 (test-case "lcm two args" (= (lcm 4 6) 12))
 (test-case "lcm with zero" (= (lcm 4 0) 0))
+;; --- Regression: integer math bounds and overflow ---
+(test-case "quotient rejects values beyond f64 exact-integer range"
+  (try
+    (begin (quotient 1e20 1) #f)
+    (catch err #t)))
+(test-case "quotient rejects very negative beyond exact range"
+  (try
+    (begin (quotient -1e20 1) #f)
+    (catch err #t)))
+(test-case "quotient at exact boundary still works"
+  (= (quotient 9007199254740992 1) 9007199254740992))
+(test-case "lcm overflow is reported as an error rather than wrapping"
+  (try
+    (begin (lcm 4611686018427387904 3) #f)
+    (catch err #t)))
+(test-case "lcm of large coprime values that fit produces correct result"
+  (= (lcm 1000000 999999) 999999000000))
 
 ;; --- List Function Tests ---
 (test-case "list-ref" (equal? (list-ref '(a b c d) 2) 'c))
@@ -348,6 +365,40 @@
 (test-case "syntax-rules hygiene: my-or with caller's x not captured"
   (let ((x 42))
     (= 42 (my-or #f #f x))))
+;; --- Regression: hygiene must not rename inside quote forms ---
+(define-syntax tag-it
+  (syntax-rules ()
+    ((_ v) (cons 'tagged v))))
+(test-case "syntax-rules hygiene: quoted literal is preserved verbatim"
+  (let ((result (tag-it 5)))
+    (and (pair? result)
+         (equal? (car result) 'tagged)
+         (= (cdr result) 5))))
+(define-syntax tag-pair
+  (syntax-rules ()
+    ((_ k v) (cons (cons 'k v) 'sentinel))))
+(test-case "syntax-rules hygiene: pattern variable inside quote is still substituted"
+  (let ((result (tag-pair name 7)))
+    (and (equal? (car (car result)) 'name)
+         (= (cdr (car result)) 7)
+         (equal? (cdr result) 'sentinel))))
+;; --- Regression: define preserves sharing semantics for heap values ---
+(test-case "define aliases vector binding (mutation visible through both names)"
+  (let ((v (vector 1 2 3)))
+    (let ((w v))
+      (vector-set! v 0 99)
+      (= (vector-ref w 0) 99))))
+(test-case "define aliases pair binding"
+  (let ((p (cons 1 2)))
+    (let ((q p))
+      (set-car! p 99)
+      (= (car q) 99))))
+(test-case "set! propagates through aliased vector binding"
+  (let ((v (vector 0))
+        (w #f))
+    (set! w v)
+    (vector-set! w 0 42)
+    (= (vector-ref v 0) 42)))
 
 (test-case "let-syntax binds a transformer locally"
   (= 7
@@ -472,6 +523,27 @@
                   (lambda () (read-line (current-input-port))))))
       (delete-file path)
       (string=? line "from-file"))))
+;; --- Regression: with-output-to-file restores stdout on error ---
+(test-case "with-output-to-file restores current-output-port even when thunk raises"
+  (let ((path "/tmp/elz-redir-err.txt"))
+    (call-with-output-file path (lambda (port) (write-port "init" port)))
+    (let ((before (current-output-port)))
+      (try
+        (with-output-to-file path (lambda () (car '())))
+        (catch err 'caught))
+      (let ((after (current-output-port)))
+        (delete-file path)
+        (eq? before after)))))
+(test-case "with-input-from-file restores current-input-port even when thunk raises"
+  (let ((path "/tmp/elz-redir-err-in.txt"))
+    (call-with-output-file path (lambda (port) (write-port "x" port)))
+    (let ((before (current-input-port)))
+      (try
+        (with-input-from-file path (lambda () (car '())))
+        (catch err 'caught))
+      (let ((after (current-input-port)))
+        (delete-file path)
+        (eq? before after)))))
 (test-case "read returns a single datum"
   (let ((path "/tmp/elz-read.txt"))
     (call-with-output-file path
@@ -561,6 +633,27 @@
      (let ((x 3))
        (define y (* x x))
        y)))
+;; --- Regression: zero-arg lambda creates fresh scope per call ---
+(test-case "internal define in 0-arg lambda does not leak across calls"
+  (let ((f (lambda () (define x 100) x)))
+    (f)
+    ;; If the 0-arg lambda body shared the closure's env, x would still be defined
+    ;; in this scope. After the fix, x must be scoped to the call.
+    (try
+      (begin (display x) #f)
+      (catch err #t))))
+(test-case "0-arg lambda body sees fresh bindings each call"
+  (let ((counter 0)
+        (f (lambda ()
+             (define hit 1)
+             hit)))
+    (f) (f) (f)
+    (= counter 0))) ;; counter stayed 0; defines did not collide with outer counter
+;; --- Regression: read-string on empty input returns eof ---
+(test-case "read-string on empty input returns eof object"
+  (eof-object? (read-string "")))
+(test-case "read-string on whitespace-only input returns eof object"
+  (eof-object? (read-string "   ")))
 
 ;; --- Promise (delay/force) Tests ---
 (test-case "force of delay returns expression value"

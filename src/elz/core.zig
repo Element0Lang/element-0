@@ -21,6 +21,17 @@ pub const Cell = struct {
     content: Value,
 };
 
+/// Returns a `Value` whose inline slices (symbol name, string bytes) are owned by
+/// `allocator`, while heap-allocated reference variants pass through unchanged so that
+/// aliased bindings observe each other's mutations.
+fn own_value_slices(value: Value, allocator: std.mem.Allocator) !Value {
+    return switch (value) {
+        .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
+        .string => |s| Value{ .string = try allocator.dupe(u8, s) },
+        else => value,
+    };
+}
+
 /// `Environment` represents a lexical scope in the interpreter.
 /// It contains a set of bindings from symbols to values and a reference to an outer (enclosing) environment.
 pub const Environment = struct {
@@ -107,7 +118,11 @@ pub const Environment = struct {
     /// `void` or an error if memory allocation for the name or value fails.
     pub fn set(self: *Environment, interp: *interpreter.Interpreter, name: []const u8, value: Value) ElzError!void {
         const owned_name = try self.allocator.dupe(u8, name);
-        const owned_value = try value.deep_clone(self.allocator);
+        // Only the inline byte-slice variants need to own their backing memory; heap
+        // values (pair, vector, hash_map, port, cell, closure, ...) are shared by
+        // reference so that aliased bindings observe each other's mutations as R5RS
+        // requires for `(define w v)` style aliasing.
+        const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
         _ = interp;
     }
@@ -126,9 +141,10 @@ pub const Environment = struct {
         var current_env: ?*Environment = self;
         while (current_env) |env| {
             if (env.bindings.getEntry(name)) |entry| {
+                const owned = try own_value_slices(value, self.allocator);
                 switch (entry.value_ptr.*) {
-                    .cell => |c| c.content = try value.deep_clone(self.allocator),
-                    else => entry.value_ptr.* = try value.deep_clone(self.allocator),
+                    .cell => |c| c.content = owned,
+                    else => entry.value_ptr.* = owned,
                 }
                 return;
             }
@@ -506,7 +522,14 @@ pub const Value = union(enum) {
 };
 
 test "core environment" {
-    const allocator = std.testing.allocator;
+    // Element 0 environments and values allocate their backing storage from the
+    // interpreter's GC allocator in production. Inside this unit test we use an arena
+    // backed by `std.testing.allocator` so every allocation is freed by `arena.deinit()`
+    // without having to traverse the environment's binding map and free each entry by
+    // hand.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
         .allocator = allocator,
