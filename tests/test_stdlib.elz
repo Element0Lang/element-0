@@ -476,6 +476,35 @@
 (test-case "comma at top-level inside backtick"
   (let ((y 7)) (= `,y 7)))
 
+;; --- Regression: cond with `=>` clause syntax ---
+(test-case "cond => applies the procedure to the test value"
+  (= 25
+     (cond ((+ 2 3) => (lambda (x) (* x x)))
+           (else 0))))
+(test-case "cond => is skipped when test is false"
+  (eq? 'fallback
+       (cond (#f => (lambda (x) 'taken))
+             (else 'fallback))))
+(test-case "cond mixes => and regular clauses"
+  (= 10
+     (cond (#f 1)
+           ((* 2 5) => (lambda (x) x))
+           (else 99))))
+
+;; --- Regression: named-let support ---
+(test-case "named-let computes a result via tail recursion"
+  (= 10
+     (let loop ((i 0) (sum 0))
+       (if (= i 5) sum (loop (+ i 1) (+ sum i))))))
+(test-case "named-let returns immediately when test is true at entry"
+  (= 0
+     (let loop ((n 0))
+       (if (= n 0) n (loop (- n 1))))))
+(test-case "named-let does not affect a same-name binding outside its scope"
+  (let ((loop 'outer))
+    (let loop ((n 0)) (if (= n 1) n (loop (+ n 1))))
+    (eq? loop 'outer)))
+
 (test-case "let-syntax binds a transformer locally"
   (= 7
      (let-syntax ((twice (syntax-rules ()

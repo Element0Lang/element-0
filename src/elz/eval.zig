@@ -317,6 +317,17 @@ fn evalCond(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fu
         if (is_true) {
             const body = clause_p.cdr;
             if (body == .nil) return condition;
+            // R5RS §4.2.1: `(test => proc)` applies `proc` to the value of `test` when
+            // the test is truthy. Detect the arrow form and dispatch the application.
+            if (body == .pair and body.pair.car.is_symbol("=>")) {
+                const tail = body.pair.cdr;
+                if (tail != .pair or tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+                const recipient = try eval(interp, &tail.pair.car, env, fuel);
+                var call_args = core.ValueList.init(env.allocator);
+                defer call_args.deinit();
+                try call_args.append(condition);
+                return eval_proc(interp, recipient, call_args, env, fuel);
+            }
             var current_body_node = body;
             while (current_body_node.pair.cdr != .nil) {
                 _ = try eval(interp, &current_body_node.pair.car, env, fuel);
@@ -635,13 +646,115 @@ fn evalBegin(interp: *interpreter.Interpreter, rest: Value, env: *Environment, f
     return .unspecified;
 }
 
-/// Evaluates a `let` or `let*` special form.
+/// Builds the AST for `(letrec ((name (lambda (var ...) body...))) (name init ...))`
+/// from a named-let form `(let name ((var init) ...) body ...)` and routes it through
+/// the trampoline so the call to `name` benefits from tail-call elimination.
+fn expandNamedLet(
+    interp: *interpreter.Interpreter,
+    name: []const u8,
+    rest: Value,
+    env: *Environment,
+    current_ast: **const Value,
+    current_env: **Environment,
+) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const bindings_list = rest.pair.car;
+    const body = rest.pair.cdr;
+    if (body == .nil) return ElzError.InvalidArgument;
+
+    const allocator = env.allocator;
+
+    // Walk the bindings into parallel `vars` and `inits` lists.
+    var var_list: Value = .nil;
+    var var_tail: ?*core.Pair = null;
+    var init_list: Value = .nil;
+    var init_tail: ?*core.Pair = null;
+
+    var node = bindings_list;
+    while (node != .nil) {
+        if (node != .pair) return ElzError.InvalidArgument;
+        const binding = node.pair.car;
+        if (binding != .pair) return ElzError.InvalidArgument;
+        const var_val = binding.pair.car;
+        if (var_val != .symbol) return ElzError.InvalidArgument;
+        const init_tail_pair = binding.pair.cdr;
+        if (init_tail_pair != .pair or init_tail_pair.pair.cdr != .nil) return ElzError.InvalidArgument;
+        const init_val = init_tail_pair.pair.car;
+
+        const var_pair = try allocator.create(core.Pair);
+        var_pair.* = .{ .car = var_val, .cdr = .nil };
+        if (var_tail) |t| {
+            t.cdr = Value{ .pair = var_pair };
+        } else {
+            var_list = Value{ .pair = var_pair };
+        }
+        var_tail = var_pair;
+
+        const init_pair = try allocator.create(core.Pair);
+        init_pair.* = .{ .car = init_val, .cdr = .nil };
+        if (init_tail) |t| {
+            t.cdr = Value{ .pair = init_pair };
+        } else {
+            init_list = Value{ .pair = init_pair };
+        }
+        init_tail = init_pair;
+
+        node = node.pair.cdr;
+    }
+
+    // Construct `(lambda (var ...) body ...)`.
+    const lambda_after_params = try allocator.create(core.Pair);
+    lambda_after_params.* = .{ .car = var_list, .cdr = body };
+    const lambda_form_pair = try allocator.create(core.Pair);
+    lambda_form_pair.* = .{ .car = Value{ .symbol = "lambda" }, .cdr = Value{ .pair = lambda_after_params } };
+    const lambda_form = Value{ .pair = lambda_form_pair };
+
+    // `(name lambda-form)` as one binding.
+    const binding_after_name = try allocator.create(core.Pair);
+    binding_after_name.* = .{ .car = lambda_form, .cdr = .nil };
+    const binding_pair = try allocator.create(core.Pair);
+    binding_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = Value{ .pair = binding_after_name } };
+    const single_binding_pair = try allocator.create(core.Pair);
+    single_binding_pair.* = .{ .car = Value{ .pair = binding_pair }, .cdr = .nil };
+    const bindings_value = Value{ .pair = single_binding_pair };
+
+    // `(name init ...)` invocation.
+    const call_pair = try allocator.create(core.Pair);
+    call_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = init_list };
+    const call_value = Value{ .pair = call_pair };
+
+    // `(letrec (binding) call)`.
+    const letrec_after_bindings = try allocator.create(core.Pair);
+    letrec_after_bindings.* = .{ .car = call_value, .cdr = .nil };
+    const letrec_bindings_and_body = try allocator.create(core.Pair);
+    letrec_bindings_and_body.* = .{ .car = bindings_value, .cdr = Value{ .pair = letrec_after_bindings } };
+    const letrec_form_pair = try allocator.create(core.Pair);
+    letrec_form_pair.* = .{ .car = Value{ .symbol = "letrec" }, .cdr = Value{ .pair = letrec_bindings_and_body } };
+
+    const expanded = try allocator.create(Value);
+    expanded.* = Value{ .pair = letrec_form_pair };
+    current_ast.* = expanded;
+    current_env.* = env;
+    _ = interp;
+    return Value.unspecified;
+}
+
+/// Evaluates a `let` or `let*` special form. Also handles the named-let form
+/// `(let name ((var init) ...) body)`, which R5RS §4.2.4 specifies is sugar for
+/// `(letrec ((name (lambda (var ...) body))) (name init ...))`.
 fn evalLet(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) !Value {
     const is_let_star = first.is_symbol("let*");
     const p_bindings = switch (rest) {
         .pair => |p_rest| p_rest,
         else => return ElzError.InvalidArgument,
     };
+
+    // Named let: when the first form after `let` is a symbol, expand the form into the
+    // equivalent letrec/lambda invocation and re-enter the trampoline.
+    if (!is_let_star and p_bindings.car == .symbol) {
+        return try expandNamedLet(interp, p_bindings.car.symbol, p_bindings.cdr, env, current_ast, current_env);
+    }
+
     const bindings_list = p_bindings.car;
     const body = p_bindings.cdr;
     const new_env = try Environment.init(env.allocator, env);
@@ -1603,14 +1716,26 @@ pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start
                 const first = p.car;
                 const rest = p.cdr;
 
-                // Check if first is a macro name before falling through to evalApplication
+                // Check if first is a macro name before falling through to evalApplication.
+                // These lookups are tentative: a missing binding is normal (e.g. for any
+                // special form keyword) and must not pollute `last_error_message`. We
+                // snapshot the message before each lookup and restore it on failure so a
+                // later genuine error reports the right context.
+                const saved_msg_macro = interp.last_error_message;
                 const maybe_macro: ?*core.Macro = if (first == .symbol) blk: {
-                    const looked_up = env.get(first.symbol, interp) catch break :blk null;
+                    const looked_up = env.get(first.symbol, interp) catch {
+                        interp.last_error_message = saved_msg_macro;
+                        break :blk null;
+                    };
                     break :blk if (looked_up == .macro) looked_up.macro else null;
                 } else null;
 
+                const saved_msg_syntax = interp.last_error_message;
                 const maybe_syntax: ?*core.SyntaxRulesMacro = if (first == .symbol and maybe_macro == null) blk: {
-                    const looked_up = env.get(first.symbol, interp) catch break :blk null;
+                    const looked_up = env.get(first.symbol, interp) catch {
+                        interp.last_error_message = saved_msg_syntax;
+                        break :blk null;
+                    };
                     break :blk if (looked_up == .syntax_rules) looked_up.syntax_rules else null;
                 } else null;
 
