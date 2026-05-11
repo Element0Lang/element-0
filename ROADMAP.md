@@ -136,7 +136,7 @@ It outlines the features to be implemented and their current status.
 * [x] **Error Handling**: A mechanism for handling runtime errors, like `try/catch` or `with-handler`.
 * [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
 * [x] `define-macro` (simple procedural macros)
-* [ ] `dynamic-wind`: deferred until full `call/cc` lands.
+* [x] `dynamic-wind`, `call/cc` (`call-with-current-continuation`): full CPS evaluator with winder chain management.
 * [ ] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
 
 ### 5. Better Host Integration and Embeddability

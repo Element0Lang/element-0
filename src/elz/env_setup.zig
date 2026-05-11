@@ -178,6 +178,9 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "with-output-to-file", core.Value{ .procedure = control.with_output_to_file });
     try interp.root_env.set(interp, "call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
     try interp.root_env.set(interp, "call/ec", core.Value{ .procedure = control.call_with_escape_continuation });
+    try interp.root_env.set(interp, "call-with-current-continuation", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
+    try interp.root_env.set(interp, "call/cc", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
+    try interp.root_env.set(interp, "dynamic-wind", core.Value{ .cont_aware_procedure = control.dynamic_wind });
 }
 
 /// Populates the interpreter's root environment with I/O primitive functions.

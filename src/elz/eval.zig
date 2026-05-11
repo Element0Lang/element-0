@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core.zig");
 const Value = core.Value;
 const UserDefinedProc = core.UserDefinedProc;
@@ -8,81 +9,27 @@ const interpreter = @import("interpreter.zig");
 const parser = @import("parser.zig");
 const env_setup = @import("env_setup.zig");
 
-/// Evaluates a list of expressions and returns a list of the results.
-fn eval_expr_list(interp: *interpreter.Interpreter, list: Value, env: *Environment, fuel: *u64) ElzError!core.ValueList {
-    var results = core.ValueList.init(env.allocator);
-    var current_node = list;
-    while (current_node != .nil) {
-        const p = switch (current_node) {
-            .pair => |pair_val| pair_val,
-            else => return ElzError.InvalidArgument,
-        };
-        try results.append(try eval(interp, &p.car, env, fuel));
-        current_node = p.cdr;
-    }
-    return results;
+// ============================================================================
+// Continuation helpers
+// ============================================================================
+
+pub fn allocCont(interp: *interpreter.Interpreter, frame: core.ContFrame, next: ?*core.Cont) ElzError!*core.Cont {
+    const k = try interp.allocator.create(core.Cont);
+    k.* = .{ .frame = frame, .next = next };
+    return k;
 }
 
-/// Evaluates a `letrec` special form.
-fn evalLetRec(interp: *interpreter.Interpreter, ast: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) ElzError!Value {
-    if (ast != .pair) return ElzError.InvalidArgument;
-    const top = ast.pair;
-    const rest = top.cdr;
-    if (rest == .nil or rest != .pair) return ElzError.InvalidArgument;
-
-    const bindings_and_body = rest.pair;
-    const bindings_val = bindings_and_body.car;
-    const body_list = bindings_and_body.cdr;
-
-    const new_env = try Environment.init(env.allocator, env);
-
-    var current_binding_node = bindings_val;
-    while (current_binding_node != .nil) {
-        if (current_binding_node != .pair) return ElzError.InvalidArgument;
-        const binding_cell = current_binding_node.pair;
-        const binding = binding_cell.car;
-        if (binding != .pair) return ElzError.InvalidArgument;
-        const var_init = binding.pair;
-        const var_sym_val = var_init.car;
-        if (var_sym_val != .symbol) return ElzError.InvalidArgument;
-        try new_env.set(interp, var_sym_val.symbol, Value.unspecified);
-        current_binding_node = binding_cell.cdr;
-    }
-
-    current_binding_node = bindings_val;
-    while (current_binding_node != .nil) {
-        const binding_cell = current_binding_node.pair;
-        const binding = binding_cell.car;
-        const var_init = binding.pair;
-        const var_sym_val = var_init.car;
-        const init_tail = var_init.cdr;
-        if (init_tail == .nil or init_tail != .pair) return ElzError.InvalidArgument;
-        const init_pair = init_tail.pair;
-        var init_expr = init_pair.car;
-        if (init_pair.cdr != .nil) return ElzError.InvalidArgument;
-
-        const value = try eval(interp, &init_expr, new_env, fuel);
-        try new_env.update(interp, var_sym_val.symbol, value);
-
-        current_binding_node = binding_cell.cdr;
-    }
-
-    if (body_list == .nil) return Value.nil;
-
-    // R5RS §4.2.2: the last body form is in tail position. Evaluate the leading forms
-    // for their effect and hand the trailing one back to the trampoline.
-    var body_node = body_list;
-    while (body_node.pair.cdr != .nil) {
-        _ = try eval(interp, &body_node.pair.car, new_env, fuel);
-        body_node = body_node.pair.cdr;
-    }
-    std.mem.doNotOptimizeAway(&new_env);
-    current_ast.* = &body_node.pair.car;
-    current_env.* = new_env;
-    return .unspecified;
+fn isTruthy(v: Value) bool {
+    return switch (v) {
+        .boolean => |b| b,
+        else => true,
+    };
 }
 
-/// Evaluates a `quote` special form.
+// ============================================================================
+// Quote / Quasiquote
+// ============================================================================
+
 fn evalQuote(rest: Value, env: *Environment) !Value {
     const p_arg = switch (rest) {
         .pair => |p_rest| p_rest,
@@ -92,8 +39,6 @@ fn evalQuote(rest: Value, env: *Environment) !Value {
     return try p_arg.car.deep_clone(env.allocator);
 }
 
-/// Evaluates a `quasiquote` special form.
-/// Handles unquote (,) and unquote-splicing (,@) within templates.
 fn evalQuasiquote(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
     const p_arg = switch (rest) {
         .pair => |p_rest| p_rest,
@@ -103,15 +48,11 @@ fn evalQuasiquote(interp: *interpreter.Interpreter, rest: Value, env: *Environme
     return try expandQuasiquote(interp, p_arg.car, env, fuel, 1);
 }
 
-/// Recursively expands a quasiquote template.
-/// Level tracks nesting depth of quasiquotes.
 fn expandQuasiquote(interp: *interpreter.Interpreter, template: Value, env: *Environment, fuel: *u64, level: usize) ElzError!Value {
     switch (template) {
         .pair => |p| {
-            // Check for (unquote expr) or (unquote-splicing expr)
             if (p.car.is_symbol("unquote")) {
                 if (level == 1) {
-                    // Evaluate the unquoted expression
                     const unquote_rest = switch (p.cdr) {
                         .pair => |up| up,
                         else => return ElzError.InvalidArgument,
@@ -119,20 +60,17 @@ fn expandQuasiquote(interp: *interpreter.Interpreter, template: Value, env: *Env
                     if (unquote_rest.cdr != .nil) return ElzError.InvalidArgument;
                     return try eval(interp, &unquote_rest.car, env, fuel);
                 } else {
-                    // Decrease level and continue
                     const new_cdr = try expandQuasiquote(interp, p.cdr, env, fuel, level - 1);
                     const new_pair = try env.allocator.create(core.Pair);
                     new_pair.* = .{ .car = p.car, .cdr = new_cdr };
                     return Value{ .pair = new_pair };
                 }
             } else if (p.car.is_symbol("quasiquote")) {
-                // Increase level for nested quasiquotes
                 const new_cdr = try expandQuasiquote(interp, p.cdr, env, fuel, level + 1);
                 const new_pair = try env.allocator.create(core.Pair);
                 new_pair.* = .{ .car = p.car, .cdr = new_cdr };
                 return Value{ .pair = new_pair };
             } else if (p.car == .pair) {
-                // Check if first element is (unquote-splicing expr)
                 const inner = p.car.pair;
                 if (inner.car.is_symbol("unquote-splicing") and level == 1) {
                     const splice_rest = switch (inner.cdr) {
@@ -141,30 +79,23 @@ fn expandQuasiquote(interp: *interpreter.Interpreter, template: Value, env: *Env
                     };
                     if (splice_rest.cdr != .nil) return ElzError.InvalidArgument;
                     const splice_result = try eval(interp, &splice_rest.car, env, fuel);
-                    // Append the spliced list to the rest
                     const rest_expanded = try expandQuasiquote(interp, p.cdr, env, fuel, level);
                     return try appendLists(env.allocator, splice_result, rest_expanded);
                 }
             }
-            // Normal pair - recurse on both car and cdr
             const new_car = try expandQuasiquote(interp, p.car, env, fuel, level);
             const new_cdr = try expandQuasiquote(interp, p.cdr, env, fuel, level);
             const new_pair = try env.allocator.create(core.Pair);
             new_pair.* = .{ .car = new_car, .cdr = new_cdr };
             return Value{ .pair = new_pair };
         },
-        else => {
-            // Self-quoting values
-            return try template.deep_clone(env.allocator);
-        },
+        else => return try template.deep_clone(env.allocator),
     }
 }
 
-/// Helper: Append two lists for unquote-splicing.
 fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) ElzError!Value {
     if (list1 == .nil) return list2;
     if (list1 != .pair) return ElzError.InvalidArgument;
-
     const new_pair = try allocator.create(core.Pair);
     new_pair.* = .{
         .car = try list1.pair.car.deep_clone(allocator),
@@ -173,7 +104,10 @@ fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) ElzErro
     return Value{ .pair = new_pair };
 }
 
-/// Evaluates an `import` special form.
+// ============================================================================
+// Import
+// ============================================================================
+
 fn evalImport(
     interp: *interpreter.Interpreter,
     rest: core.Value,
@@ -250,339 +184,10 @@ fn evalImport(
     return core.Value{ .module = mod_ptr };
 }
 
-/// Evaluates an `if` special form.
-fn evalIf(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    const p_test = switch (rest) {
-        .pair => |p_rest| p_rest,
-        else => return ElzError.IfInvalidArguments,
-    };
-    const p_consequent = switch (p_test.cdr) {
-        .pair => |p_rest| p_rest,
-        else => return ElzError.IfInvalidArguments,
-    };
-    const condition = try eval(interp, &p_test.car, env, fuel);
+// ============================================================================
+// Lambda / define-macro / macro expansion
+// ============================================================================
 
-    const is_true = switch (condition) {
-        .boolean => |b| b,
-        else => true,
-    };
-
-    if (is_true) {
-        // Point to the car of p_consequent (heap-allocated in the AST)
-        current_ast.* = &p_consequent.car;
-        return .unspecified;
-    } else {
-        const p_alternative = switch (p_consequent.cdr) {
-            .pair => |p_rest| p_rest,
-            .nil => return Value.nil,
-            else => return ElzError.IfInvalidArguments,
-        };
-        if (p_alternative.cdr != .nil) return ElzError.IfInvalidArguments;
-        // Point to the car of p_alternative (heap-allocated in the AST)
-        current_ast.* = &p_alternative.car;
-        return .unspecified;
-    }
-}
-
-/// Evaluates a `cond` special form.
-fn evalCond(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    var current_clause_node = rest;
-    while (current_clause_node != .nil) {
-        const clause_pair = switch (current_clause_node) {
-            .pair => |cp| cp,
-            else => return ElzError.InvalidArgument,
-        };
-        const clause = clause_pair.car;
-        const clause_p = switch (clause) {
-            .pair => |cp| cp,
-            else => return ElzError.InvalidArgument,
-        };
-        const test_expr = clause_p.car;
-        if (test_expr.is_symbol("else")) {
-            const body = clause_p.cdr;
-            if (body == .nil) return ElzError.InvalidArgument;
-            var current_body_node = body;
-            while (current_body_node.pair.cdr != .nil) {
-                _ = try eval(interp, &current_body_node.pair.car, env, fuel);
-                current_body_node = current_body_node.pair.cdr;
-            }
-            current_ast.* = &current_body_node.pair.car;
-            return .unspecified;
-        }
-        const condition = try eval(interp, &test_expr, env, fuel);
-        const is_true = switch (condition) {
-            .boolean => |b| b,
-            else => true,
-        };
-        if (is_true) {
-            const body = clause_p.cdr;
-            if (body == .nil) return condition;
-            // R5RS §4.2.1: `(test => proc)` applies `proc` to the value of `test` when
-            // the test is truthy. Detect the arrow form and dispatch the application.
-            if (body == .pair and body.pair.car.is_symbol("=>")) {
-                const tail = body.pair.cdr;
-                if (tail != .pair or tail.pair.cdr != .nil) return ElzError.InvalidArgument;
-                const recipient = try eval(interp, &tail.pair.car, env, fuel);
-                var call_args = core.ValueList.init(env.allocator);
-                defer call_args.deinit();
-                try call_args.append(condition);
-                return eval_proc(interp, recipient, call_args, env, fuel);
-            }
-            var current_body_node = body;
-            while (current_body_node.pair.cdr != .nil) {
-                _ = try eval(interp, &current_body_node.pair.car, env, fuel);
-                current_body_node = current_body_node.pair.cdr;
-            }
-            current_ast.* = &current_body_node.pair.car;
-            return .unspecified;
-        }
-        current_clause_node = clause_pair.cdr;
-    }
-    return Value.nil;
-}
-
-/// Evaluates a `case` special form.
-/// Syntax: (case key ((datum1 datum2 ...) expr1 ...) ... (else expr))
-fn evalCase(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    // Get the key expression
-    const rest_pair = switch (rest) {
-        .pair => |p| p,
-        else => return ElzError.InvalidArgument,
-    };
-    const key = try eval(interp, &rest_pair.car, env, fuel);
-
-    var current_clause_node = rest_pair.cdr;
-    while (current_clause_node != .nil) {
-        const clause_pair = switch (current_clause_node) {
-            .pair => |cp| cp,
-            else => return ElzError.InvalidArgument,
-        };
-        const clause = clause_pair.car;
-        const clause_p = switch (clause) {
-            .pair => |cp| cp,
-            else => return ElzError.InvalidArgument,
-        };
-
-        const datums = clause_p.car;
-        const body = clause_p.cdr;
-
-        // Check for else clause
-        if (datums.is_symbol("else")) {
-            if (body == .nil) return Value.nil;
-            var current_body_node = body;
-            while (current_body_node.pair.cdr != .nil) {
-                _ = try eval(interp, &current_body_node.pair.car, env, fuel);
-                current_body_node = current_body_node.pair.cdr;
-            }
-            current_ast.* = &current_body_node.pair.car;
-            return .unspecified;
-        }
-
-        // Check if key matches any datum in the list
-        var found = false;
-        var datum_node = datums;
-        while (datum_node != .nil) {
-            const datum_pair = switch (datum_node) {
-                .pair => |dp| dp,
-                else => return ElzError.InvalidArgument,
-            };
-            const datum = datum_pair.car;
-
-            // Use eqv? semantics for comparison
-            if (is_eqv(key, datum)) {
-                found = true;
-                break;
-            }
-            datum_node = datum_pair.cdr;
-        }
-
-        if (found) {
-            if (body == .nil) return Value.nil;
-            var current_body_node = body;
-            while (current_body_node.pair.cdr != .nil) {
-                _ = try eval(interp, &current_body_node.pair.car, env, fuel);
-                current_body_node = current_body_node.pair.cdr;
-            }
-            current_ast.* = &current_body_node.pair.car;
-            return .unspecified;
-        }
-
-        current_clause_node = clause_pair.cdr;
-    }
-    return Value.nil;
-}
-
-/// Helper for case: checks if two values are eqv?
-fn is_eqv(a: Value, b: Value) bool {
-    return switch (a) {
-        .number => |n| if (b == .number) n == b.number else false,
-        .boolean => |bl| if (b == .boolean) bl == b.boolean else false,
-        .character => |c| if (b == .character) c == b.character else false,
-        .symbol => |s| if (b == .symbol) std.mem.eql(u8, s, b.symbol) else false,
-        .nil => b == .nil,
-        else => false,
-    };
-}
-
-/// Evaluates an `and` special form.
-fn evalAnd(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    if (rest == .nil) return Value{ .boolean = true };
-    var current_node = rest;
-    while (current_node.pair.cdr != .nil) {
-        const result = try eval(interp, &current_node.pair.car, env, fuel);
-        const is_true = switch (result) {
-            .boolean => |b| b,
-            else => true,
-        };
-        if (!is_true) return result;
-        current_node = current_node.pair.cdr;
-    }
-    current_ast.* = &current_node.pair.car;
-    return .unspecified;
-}
-
-/// Evaluates an `or` special form.
-fn evalOr(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    if (rest == .nil) return Value{ .boolean = false };
-    var current_node = rest;
-    while (current_node.pair.cdr != .nil) {
-        const result = try eval(interp, &current_node.pair.car, env, fuel);
-        const is_true = switch (result) {
-            .boolean => |b| b,
-            else => true,
-        };
-        if (is_true) return result;
-        current_node = current_node.pair.cdr;
-    }
-    current_ast.* = &current_node.pair.car;
-    return .unspecified;
-}
-
-/// Evaluates a `define` special form.
-fn evalDefine(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
-    const p_name = switch (rest) {
-        .pair => |p_rest| p_rest,
-        else => return ElzError.DefineInvalidArguments,
-    };
-    const name_or_sig = p_name.car;
-    const body = p_name.cdr;
-    switch (name_or_sig) {
-        .symbol => |symbol_name| {
-            const p_expr = switch (body) {
-                .pair => |p_rest| p_rest,
-                else => return ElzError.DefineInvalidArguments,
-            };
-            if (p_expr.cdr != .nil) return ElzError.DefineInvalidArguments;
-            const value = try eval(interp, &p_expr.car, env, fuel);
-            try env.set(interp, symbol_name, value);
-            return value;
-        },
-        .pair => |sig_pair| {
-            const fn_name_val = sig_pair.car;
-            const fn_name = if (fn_name_val == .symbol) fn_name_val.symbol else return ElzError.DefineInvalidSymbol;
-            const params = sig_pair.cdr;
-            var params_list_gc = core.ValueList.init(env.allocator);
-            var rest_param_name: ?[]const u8 = null;
-            var current_param = params;
-            walk: while (true) {
-                switch (current_param) {
-                    .pair => |pp| {
-                        if (pp.car != .symbol) return ElzError.LambdaInvalidParams;
-                        try params_list_gc.append(pp.car);
-                        current_param = pp.cdr;
-                    },
-                    .nil => break :walk,
-                    .symbol => |s| {
-                        rest_param_name = try env.allocator.dupe(u8, s);
-                        break :walk;
-                    },
-                    else => return ElzError.LambdaInvalidParams,
-                }
-            }
-            const proc = try env.allocator.create(UserDefinedProc);
-            proc.* = .{
-                .params = params_list_gc,
-                .rest_param = rest_param_name,
-                .body = try body.deep_clone(env.allocator),
-                .env = env,
-            };
-            const closure = Value{ .closure = proc };
-            try env.set(interp, fn_name, closure);
-            return closure;
-        },
-        else => return ElzError.DefineInvalidSymbol,
-    }
-}
-
-/// Evaluates a `set!` special form.
-fn evalSet(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
-    const p_sym = switch (rest) {
-        .pair => |p_rest| p_rest,
-        else => return ElzError.SetInvalidArguments,
-    };
-    const symbol = p_sym.car;
-    if (symbol != .symbol) return ElzError.SetInvalidSymbol;
-    const p_expr = switch (p_sym.cdr) {
-        .pair => |p_rest| p_rest,
-        else => return ElzError.SetInvalidArguments,
-    };
-    if (p_expr.cdr != .nil) return ElzError.SetInvalidArguments;
-    const value = try eval(interp, &p_expr.car, env, fuel);
-    try env.update(interp, symbol.symbol, value);
-    return Value.nil;
-}
-
-/// Evaluates a `define-macro` special form.
-/// Syntax: (define-macro (name args...) body...)
-fn evalDefineMacro(interp: *interpreter.Interpreter, rest: Value, env: *Environment) !Value {
-    const p_sig = switch (rest) {
-        .pair => |p| p,
-        else => return ElzError.DefineInvalidArguments,
-    };
-
-    // Get (name args...) list
-    const signature = p_sig.car;
-    const body = p_sig.cdr;
-
-    const sig_pair = switch (signature) {
-        .pair => |p| p,
-        else => return ElzError.DefineInvalidArguments,
-    };
-
-    // Get macro name
-    const macro_name = switch (sig_pair.car) {
-        .symbol => |s| s,
-        else => return ElzError.DefineInvalidSymbol,
-    };
-
-    // Get parameters
-    var params_list = core.ValueList.init(env.allocator);
-    var current_param = sig_pair.cdr;
-    while (current_param != .nil) {
-        const param_p = switch (current_param) {
-            .pair => |p| p,
-            else => return ElzError.LambdaInvalidParams,
-        };
-        if (param_p.car != .symbol) return ElzError.LambdaInvalidParams;
-        try params_list.append(param_p.car);
-        current_param = param_p.cdr;
-    }
-
-    // Create macro
-    const macro = try env.allocator.create(core.Macro);
-    macro.* = .{
-        .name = macro_name,
-        .params = params_list,
-        .body = try body.deep_clone(env.allocator),
-        .env = env,
-    };
-
-    const macro_val = Value{ .macro = macro };
-    try env.set(interp, macro_name, macro_val);
-    return macro_val;
-}
-
-/// Evaluates a `lambda` special form.
 fn evalLambda(rest: Value, env: *Environment) !Value {
     const p_formals = switch (rest) {
         .pair => |p_rest| p_rest,
@@ -596,13 +201,10 @@ fn evalLambda(rest: Value, env: *Environment) !Value {
     var rest_param_name: ?[]const u8 = null;
 
     switch (params_list) {
-        // `(lambda args body)` — variadic, no fixed parameters.
         .symbol => |s| {
             rest_param_name = try env.allocator.dupe(u8, s);
         },
         .nil => {},
-        // Walk a (possibly improper) list, accumulating fixed parameters and noting a
-        // dotted rest parameter when present.
         .pair => {
             var current_param = params_list;
             while (true) {
@@ -634,166 +236,217 @@ fn evalLambda(rest: Value, env: *Environment) !Value {
     return Value{ .closure = proc };
 }
 
-/// Evaluates a `begin` special form.
-fn evalBegin(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
+fn evalDefineMacro(interp: *interpreter.Interpreter, rest: Value, env: *Environment) !Value {
+    const p_sig = switch (rest) {
+        .pair => |p| p,
+        else => return ElzError.DefineInvalidArguments,
+    };
+    const signature = p_sig.car;
+    const body = p_sig.cdr;
+    const sig_pair = switch (signature) {
+        .pair => |p| p,
+        else => return ElzError.DefineInvalidArguments,
+    };
+    const macro_name = switch (sig_pair.car) {
+        .symbol => |s| s,
+        else => return ElzError.DefineInvalidSymbol,
+    };
+    var params_list = core.ValueList.init(env.allocator);
+    var current_param = sig_pair.cdr;
+    while (current_param != .nil) {
+        const param_p = switch (current_param) {
+            .pair => |p| p,
+            else => return ElzError.LambdaInvalidParams,
+        };
+        if (param_p.car != .symbol) return ElzError.LambdaInvalidParams;
+        try params_list.append(param_p.car);
+        current_param = param_p.cdr;
+    }
+    const macro = try env.allocator.create(core.Macro);
+    macro.* = .{
+        .name = macro_name,
+        .params = params_list,
+        .body = try body.deep_clone(env.allocator),
+        .env = env,
+    };
+    const macro_val = Value{ .macro = macro };
+    try env.set(interp, macro_name, macro_val);
+    return macro_val;
+}
+
+fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
+    var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
+    defer unevaluated_args.deinit(env.allocator);
     var current_node = rest;
-    if (current_node == .nil) return .nil;
-    while (current_node.pair.cdr != .nil) {
-        _ = try eval(interp, &current_node.pair.car, env, fuel);
-        current_node = current_node.pair.cdr;
+    while (current_node != .nil) {
+        const pair = switch (current_node) {
+            .pair => |p| p,
+            else => break,
+        };
+        try unevaluated_args.append(env.allocator, pair.car);
+        current_node = pair.cdr;
     }
-    current_ast.* = &current_node.pair.car;
-    return .unspecified;
+    if (unevaluated_args.items.len != m.params.items.len) return ElzError.WrongArgumentCount;
+    const macro_env = try Environment.init(env.allocator, m.env);
+    for (m.params.items, unevaluated_args.items) |param, arg| {
+        try macro_env.set(interp, param.symbol, arg);
+    }
+    var body_node = m.body;
+    var expansion: Value = .unspecified;
+    while (body_node != .nil) {
+        const pair = switch (body_node) {
+            .pair => |p| p,
+            else => break,
+        };
+        expansion = try eval(interp, &pair.car, macro_env, fuel);
+        body_node = pair.cdr;
+    }
+    return expansion;
 }
 
-/// Builds the AST for `(letrec ((name (lambda (var ...) body...))) (name init ...))`
-/// from a named-let form `(let name ((var init) ...) body ...)` and routes it through
-/// the trampoline so the call to `name` benefits from tail-call elimination.
-fn expandNamedLet(
-    interp: *interpreter.Interpreter,
-    name: []const u8,
-    rest: Value,
-    env: *Environment,
-    current_ast: **const Value,
-    current_env: **Environment,
-) ElzError!Value {
-    if (rest != .pair) return ElzError.InvalidArgument;
-    const bindings_list = rest.pair.car;
-    const body = rest.pair.cdr;
-    if (body == .nil) return ElzError.InvalidArgument;
+// ============================================================================
+// letrec / try (direct-style, they call back into eval)
+// ============================================================================
 
-    const allocator = env.allocator;
+fn evalLetRec(interp: *interpreter.Interpreter, ast: Value, env: *Environment, fuel: *u64) ElzError!Value {
+    if (ast != .pair) return ElzError.InvalidArgument;
+    const top = ast.pair;
+    const rest = top.cdr;
+    if (rest == .nil or rest != .pair) return ElzError.InvalidArgument;
 
-    // Walk the bindings into parallel `vars` and `inits` lists.
-    var var_list: Value = .nil;
-    var var_tail: ?*core.Pair = null;
-    var init_list: Value = .nil;
-    var init_tail: ?*core.Pair = null;
+    const bindings_and_body = rest.pair;
+    const bindings_val = bindings_and_body.car;
+    const body_list = bindings_and_body.cdr;
 
-    var node = bindings_list;
-    while (node != .nil) {
-        if (node != .pair) return ElzError.InvalidArgument;
-        const binding = node.pair.car;
+    const new_env = try Environment.init(env.allocator, env);
+
+    var current_binding_node = bindings_val;
+    while (current_binding_node != .nil) {
+        if (current_binding_node != .pair) return ElzError.InvalidArgument;
+        const binding_cell = current_binding_node.pair;
+        const binding = binding_cell.car;
         if (binding != .pair) return ElzError.InvalidArgument;
-        const var_val = binding.pair.car;
-        if (var_val != .symbol) return ElzError.InvalidArgument;
-        const init_tail_pair = binding.pair.cdr;
-        if (init_tail_pair != .pair or init_tail_pair.pair.cdr != .nil) return ElzError.InvalidArgument;
-        const init_val = init_tail_pair.pair.car;
-
-        const var_pair = try allocator.create(core.Pair);
-        var_pair.* = .{ .car = var_val, .cdr = .nil };
-        if (var_tail) |t| {
-            t.cdr = Value{ .pair = var_pair };
-        } else {
-            var_list = Value{ .pair = var_pair };
-        }
-        var_tail = var_pair;
-
-        const init_pair = try allocator.create(core.Pair);
-        init_pair.* = .{ .car = init_val, .cdr = .nil };
-        if (init_tail) |t| {
-            t.cdr = Value{ .pair = init_pair };
-        } else {
-            init_list = Value{ .pair = init_pair };
-        }
-        init_tail = init_pair;
-
-        node = node.pair.cdr;
+        const var_init = binding.pair;
+        const var_sym_val = var_init.car;
+        if (var_sym_val != .symbol) return ElzError.InvalidArgument;
+        try new_env.set(interp, var_sym_val.symbol, Value.unspecified);
+        current_binding_node = binding_cell.cdr;
     }
 
-    // Construct `(lambda (var ...) body ...)`.
-    const lambda_after_params = try allocator.create(core.Pair);
-    lambda_after_params.* = .{ .car = var_list, .cdr = body };
-    const lambda_form_pair = try allocator.create(core.Pair);
-    lambda_form_pair.* = .{ .car = Value{ .symbol = "lambda" }, .cdr = Value{ .pair = lambda_after_params } };
-    const lambda_form = Value{ .pair = lambda_form_pair };
+    current_binding_node = bindings_val;
+    while (current_binding_node != .nil) {
+        const binding_cell = current_binding_node.pair;
+        const binding = binding_cell.car;
+        const var_init = binding.pair;
+        const var_sym_val = var_init.car;
+        const init_tail = var_init.cdr;
+        if (init_tail == .nil or init_tail != .pair) return ElzError.InvalidArgument;
+        const init_pair = init_tail.pair;
+        var init_expr = init_pair.car;
+        if (init_pair.cdr != .nil) return ElzError.InvalidArgument;
 
-    // `(name lambda-form)` as one binding.
-    const binding_after_name = try allocator.create(core.Pair);
-    binding_after_name.* = .{ .car = lambda_form, .cdr = .nil };
-    const binding_pair = try allocator.create(core.Pair);
-    binding_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = Value{ .pair = binding_after_name } };
-    const single_binding_pair = try allocator.create(core.Pair);
-    single_binding_pair.* = .{ .car = Value{ .pair = binding_pair }, .cdr = .nil };
-    const bindings_value = Value{ .pair = single_binding_pair };
+        const value = try eval(interp, &init_expr, new_env, fuel);
+        try new_env.update(interp, var_sym_val.symbol, value);
 
-    // `(name init ...)` invocation.
-    const call_pair = try allocator.create(core.Pair);
-    call_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = init_list };
-    const call_value = Value{ .pair = call_pair };
+        current_binding_node = binding_cell.cdr;
+    }
 
-    // `(letrec (binding) call)`.
-    const letrec_after_bindings = try allocator.create(core.Pair);
-    letrec_after_bindings.* = .{ .car = call_value, .cdr = .nil };
-    const letrec_bindings_and_body = try allocator.create(core.Pair);
-    letrec_bindings_and_body.* = .{ .car = bindings_value, .cdr = Value{ .pair = letrec_after_bindings } };
-    const letrec_form_pair = try allocator.create(core.Pair);
-    letrec_form_pair.* = .{ .car = Value{ .symbol = "letrec" }, .cdr = Value{ .pair = letrec_bindings_and_body } };
+    if (body_list == .nil) return Value.nil;
 
-    const expanded = try allocator.create(Value);
-    expanded.* = Value{ .pair = letrec_form_pair };
-    current_ast.* = expanded;
-    current_env.* = env;
-    _ = interp;
-    return Value.unspecified;
+    var body_node = body_list;
+    var last: Value = Value.unspecified;
+    while (true) {
+        if (body_node != .pair) return ElzError.InvalidArgument;
+        const bpair = body_node.pair;
+        var expr = bpair.car;
+        last = try eval(interp, &expr, new_env, fuel);
+        if (bpair.cdr == .nil) break;
+        body_node = bpair.cdr;
+    }
+
+    std.mem.doNotOptimizeAway(&new_env);
+    return last;
 }
 
-/// Evaluates a `let` or `let*` special form. Also handles the named-let form
-/// `(let name ((var init) ...) body)`, which R5RS §4.2.4 specifies is sugar for
-/// `(letrec ((name (lambda (var ...) body))) (name init ...))`.
-fn evalLet(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) !Value {
-    const is_let_star = first.is_symbol("let*");
-    const p_bindings = switch (rest) {
-        .pair => |p_rest| p_rest,
+fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
+    var try_body_forms = std.ArrayListUnmanaged(core.Value).empty;
+    defer try_body_forms.deinit(env.allocator);
+    var catch_clause: ?core.Value = null;
+    var current_node = rest;
+    while (current_node != .nil) {
+        const node_p = switch (current_node) {
+            .pair => |pair_val| pair_val,
+            else => return ElzError.InvalidArgument,
+        };
+        const form = node_p.car;
+        if (form == .pair and form.pair.car.is_symbol("catch")) {
+            catch_clause = form;
+            break;
+        }
+        try try_body_forms.append(env.allocator, form);
+        current_node = node_p.cdr;
+    }
+
+    if (catch_clause == null) return ElzError.InvalidArgument;
+
+    const catch_p = catch_clause.?.pair;
+    const catch_args_p = switch (catch_p.cdr) {
+        .pair => |pair_val| pair_val,
         else => return ElzError.InvalidArgument,
     };
 
-    // Named let: when the first form after `let` is a symbol, expand the form into the
-    // equivalent letrec/lambda invocation and re-enter the trampoline.
-    if (!is_let_star and p_bindings.car == .symbol) {
-        return try expandNamedLet(interp, p_bindings.car.symbol, p_bindings.cdr, env, current_ast, current_env);
+    const err_symbol = catch_args_p.car;
+    if (err_symbol != .symbol) return ElzError.InvalidArgument;
+    const handler_body = catch_args_p.cdr;
+    if (handler_body == .nil) return ElzError.InvalidArgument;
+
+    var last_result: core.Value = .unspecified;
+    var eval_error: ?ElzError = null;
+    for (try_body_forms.items) |form| {
+        last_result = eval(interp, &form, env, fuel) catch |err| {
+            eval_error = err;
+            break;
+        };
     }
 
-    const bindings_list = p_bindings.car;
-    const body = p_bindings.cdr;
-    const new_env = try Environment.init(env.allocator, env);
-    var current_binding = bindings_list;
-    while (current_binding != .nil) {
-        const binding_p = switch (current_binding) {
-            .pair => |p_rest| p_rest,
-            else => return ElzError.InvalidArgument,
-        };
-        const binding = binding_p.car;
-        const var_p = switch (binding) {
-            .pair => |p_rest| p_rest,
-            else => return ElzError.InvalidArgument,
-        };
-        const var_sym = var_p.car;
-        if (var_sym != .symbol) return ElzError.InvalidArgument;
-        const init_p = switch (var_p.cdr) {
-            .pair => |p_rest| p_rest,
-            else => return ElzError.InvalidArgument,
-        };
-        const init_expr = init_p.car;
-        const eval_env = if (is_let_star) new_env else env;
-        const value = try eval(interp, &init_expr, eval_env, fuel);
-        try new_env.set(interp, var_sym.symbol, value);
-        current_binding = binding_p.cdr;
+    if (eval_error) |_| {
+        const new_env = try Environment.init(env.allocator, env);
+        const msg = interp.last_error_message orelse "An unknown error occurred.";
+        const err_val = try Value.from(env.allocator, msg);
+        try new_env.set(interp, err_symbol.symbol, err_val);
+        var current_handler_node = handler_body;
+        var handler_result: core.Value = .unspecified;
+        while (current_handler_node != .nil) {
+            const handler_p = current_handler_node.pair;
+            handler_result = try eval(interp, &handler_p.car, new_env, fuel);
+            current_handler_node = handler_p.cdr;
+        }
+        std.mem.doNotOptimizeAway(&new_env);
+        return handler_result;
+    } else {
+        return last_result;
     }
-
-    var current_body_node = body;
-    if (current_body_node == .nil) return .nil;
-    while (current_body_node.pair.cdr != .nil) {
-        _ = try eval(interp, &current_body_node.pair.car, new_env, fuel);
-        current_body_node = current_body_node.pair.cdr;
-    }
-    current_ast.* = &current_body_node.pair.car;
-    current_env.* = new_env;
-    return .unspecified;
 }
 
-/// Returns true when `name` appears in the literals slice.
+// ============================================================================
+// Helper for case: eqv?
+// ============================================================================
+
+fn is_eqv(a: Value, b: Value) bool {
+    return switch (a) {
+        .number => |n| if (b == .number) n == b.number else false,
+        .boolean => |bl| if (b == .boolean) bl == b.boolean else false,
+        .character => |c| if (b == .character) c == b.character else false,
+        .symbol => |s| if (b == .symbol) std.mem.eql(u8, s, b.symbol) else false,
+        .nil => b == .nil,
+        else => false,
+    };
+}
+
+// ============================================================================
+// syntax-rules machinery (ported verbatim from develop)
+// ============================================================================
+
 fn is_literal_identifier(name: []const u8, literals: [][]const u8) bool {
     for (literals) |lit| {
         if (std.mem.eql(u8, lit, name)) return true;
@@ -801,15 +454,10 @@ fn is_literal_identifier(name: []const u8, literals: [][]const u8) bool {
     return false;
 }
 
-/// Returns true when `pair_val` is a list whose first element is the symbol `...`. Used to
-/// detect the syntax-rules ellipsis form `(P . (... . rest))` while pattern matching.
 fn is_ellipsis_marker(value: Value) bool {
     return value == .pair and value.pair.car.is_symbol("...");
 }
 
-/// One pattern variable binding. Single bindings come from non-ellipsis pattern variables;
-/// repeated bindings come from variables under one level of `...` and store one value per
-/// matched iteration.
 const PatternBinding = union(enum) {
     single: Value,
     repeated: []Value,
@@ -817,8 +465,6 @@ const PatternBinding = union(enum) {
 
 const Bindings = std.StringHashMapUnmanaged(PatternBinding);
 
-/// Recursively collects names of pattern variables in `pattern`. Skips literals, `_`, and
-/// the ellipsis marker.
 fn collect_pattern_vars(
     allocator: std.mem.Allocator,
     pattern: Value,
@@ -843,16 +489,12 @@ fn collect_pattern_vars(
     }
 }
 
-/// Errors that the syntax-rules matcher can raise. Declared explicitly to break an
-/// inferred-error-set dependency loop between `match_pattern` and `match_ellipsis_tail`.
 const MatchError = error{
     OutOfMemory,
     MissingPatternVar,
     NestedEllipsisUnsupported,
 };
 
-/// Names treated as syntactic keywords by the evaluator. Identifiers in this set are not
-/// candidates for hygiene renaming, since they do not refer to environment bindings.
 const special_form_names: []const []const u8 = &.{
     "quote",        "quasiquote", "unquote",      "unquote-splicing",
     "if",           "cond",       "case",         "and",
@@ -870,8 +512,6 @@ fn is_special_form_name(name: []const u8) bool {
     return false;
 }
 
-/// Pattern matcher for `syntax-rules`. Records pattern variable bindings into `bindings`.
-/// Supports a single trailing ellipsis pattern of the form `(p ...)`.
 fn match_pattern(
     allocator: std.mem.Allocator,
     pattern: Value,
@@ -891,7 +531,6 @@ fn match_pattern(
         },
         .nil => return input == .nil,
         .pair => |p| {
-            // Detect tail ellipsis: pattern shape is `(P . (... . nil))`.
             if (is_ellipsis_marker(p.cdr) and p.cdr.pair.cdr == .nil) {
                 return try match_ellipsis_tail(allocator, p.car, input, literals, bindings);
             }
@@ -920,8 +559,6 @@ fn match_pattern(
     }
 }
 
-/// Matches a tail-ellipsis sub-pattern against zero or more elements of an input list. The
-/// matched values are recorded as repeated bindings on each variable in `sub_pat`.
 fn match_ellipsis_tail(
     allocator: std.mem.Allocator,
     sub_pat: Value,
@@ -933,7 +570,6 @@ fn match_ellipsis_tail(
     defer var_names.deinit(allocator);
     try collect_pattern_vars(allocator, sub_pat, literals, &var_names);
 
-    // Per-variable accumulators.
     var accumulators: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty;
     defer {
         for (accumulators.items) |*acc| acc.deinit(allocator);
@@ -967,8 +603,6 @@ fn match_ellipsis_tail(
     return true;
 }
 
-/// Returns the names of repeated bindings that appear in `template`. Used to drive
-/// ellipsis expansion.
 fn collect_ellipsis_vars(
     allocator: std.mem.Allocator,
     template: Value,
@@ -994,8 +628,6 @@ fn collect_ellipsis_vars(
     }
 }
 
-/// Expands a template, substituting pattern variable bindings. Tail ellipsis templates
-/// `(t ...)` repeat their sub-template once per ellipsis frame in the relevant variables.
 fn expand_template(
     allocator: std.mem.Allocator,
     template: Value,
@@ -1012,7 +644,6 @@ fn expand_template(
             return Value{ .symbol = try allocator.dupe(u8, s) };
         },
         .pair => |p| {
-            // Detect tail ellipsis template: `(T . (... . rest))`.
             if (is_ellipsis_marker(p.cdr)) {
                 const after = p.cdr.pair.cdr;
                 const repeated_list = try expand_ellipsis(allocator, p.car, bindings);
@@ -1030,8 +661,6 @@ fn expand_template(
     }
 }
 
-/// Expands a sub-template under ellipsis. Returns a Scheme list with one expansion per
-/// matched frame.
 fn expand_ellipsis(
     allocator: std.mem.Allocator,
     sub_tmpl: Value,
@@ -1079,9 +708,6 @@ fn expand_ellipsis(
     return result;
 }
 
-/// Walks `template` and records every symbol that is a candidate for hygiene renaming:
-/// symbols that are not pattern variables, not special forms, and not bound in the macro
-/// definition's environment.
 fn collect_introduced_identifiers(
     interp: *interpreter.Interpreter,
     allocator: std.mem.Allocator,
@@ -1103,8 +729,6 @@ fn collect_introduced_identifiers(
             try out.append(allocator, s);
         },
         .pair => |p| {
-            // R5RS hygiene only renames identifiers used as expressions. Symbols inside
-            // a `quote` form are data, not code, so leave them untouched.
             if (p.car.is_symbol("quote")) return;
             try collect_introduced_identifiers(interp, allocator, p.car, pattern_var_names, def_env, out);
             try collect_introduced_identifiers(interp, allocator, p.cdr, pattern_var_names, def_env, out);
@@ -1113,15 +737,11 @@ fn collect_introduced_identifiers(
     }
 }
 
-/// Returns a fresh symbol name based on `base`, using the interpreter's gensym counter.
 fn fresh_hygiene_name(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
     interp.gensym_counter += 1;
     return std.fmt.allocPrint(allocator, "{s}__h{d}", .{ base, interp.gensym_counter });
 }
 
-/// Renames symbols in `template` according to `rename_map`. Other nodes are left structurally
-/// identical (still constructed via `expand_template`'s logic later). Symbols inside a
-/// `quote` form are not renamed because they are data rather than expressions.
 fn rename_template(
     allocator: std.mem.Allocator,
     template: Value,
@@ -1136,7 +756,6 @@ fn rename_template(
         },
         .pair => |p| {
             if (p.car.is_symbol("quote")) {
-                // Reproduce the quote form structurally without renaming inside.
                 return template.deep_clone(allocator);
             }
             const new_pair = try allocator.create(core.Pair);
@@ -1150,7 +769,6 @@ fn rename_template(
     }
 }
 
-/// Appends two Scheme lists, deep-cloning the head and reusing the tail.
 fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError!Value {
     if (head == .nil) return tail;
     if (head != .pair) return ElzError.InvalidArgument;
@@ -1162,18 +780,15 @@ fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError
     return Value{ .pair = new_pair };
 }
 
-/// Expands a `syntax-rules` macro invocation. Tries each rule in order; the first matching
-/// rule's template is expanded with the captured pattern variable bindings.
 fn expandSyntaxRules(
     interp: *interpreter.Interpreter,
     sr: *core.SyntaxRulesMacro,
     rest: Value,
     env: *Environment,
     fuel: *u64,
-    current_ast: **const Value,
 ) ElzError!Value {
+    _ = fuel;
     const allocator = env.allocator;
-    // Construct the input as (keyword . rest) so the pattern's leading element can be `_`.
     const head_pair = try allocator.create(core.Pair);
     head_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, sr.name) }, .cdr = rest };
     const input = Value{ .pair = head_pair };
@@ -1184,9 +799,6 @@ fn expandSyntaxRules(
 
         const matched = match_pattern(allocator, rule.pattern, input, sr.literals, &bindings) catch return ElzError.OutOfMemory;
         if (matched) {
-            // Hygiene: collect template-introduced identifiers and rename them with fresh
-            // gensyms. Pattern variables and identifiers known to the macro's definition
-            // environment pass through untouched.
             var pattern_var_names: std.ArrayListUnmanaged([]const u8) = .empty;
             defer pattern_var_names.deinit(allocator);
             try collect_pattern_vars(allocator, rule.pattern, sr.literals, &pattern_var_names);
@@ -1203,24 +815,14 @@ fn expandSyntaxRules(
             }
 
             const renamed_template = try rename_template(allocator, rule.template, &rename_map);
-            const expanded = try expand_template(allocator, renamed_template, &bindings);
-            const expanded_ptr = try allocator.create(Value);
-            expanded_ptr.* = expanded;
-            current_ast.* = expanded_ptr;
-            return Value.unspecified;
+            return try expand_template(allocator, renamed_template, &bindings);
         }
     }
 
     interp.last_error_message = std.fmt.allocPrint(allocator, "No matching syntax-rules pattern for '{s}'.", .{sr.name}) catch null;
-    _ = fuel;
     return ElzError.InvalidArgument;
 }
 
-/// Evaluates a `let-syntax` or `letrec-syntax` special form. Both bind transformer
-/// values into a fresh environment and evaluate the body there. The two differ only in
-/// the lexical scope used to compile each transformer; for the present implementation
-/// (which captures the transformer's environment but does not yet allow transformers to
-/// recursively reference each other inside templates) the difference is not observable.
 fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
     if (rest != .pair) return ElzError.InvalidArgument;
     const bindings_list = rest.pair.car;
@@ -1258,7 +860,6 @@ fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environmen
     return last;
 }
 
-/// Evaluates a `define-syntax` special form: `(define-syntax name (syntax-rules (lit ...) (pat tmpl) ...))`.
 fn evalDefineSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environment) ElzError!Value {
     if (rest != .pair) return ElzError.InvalidArgument;
     const name_val = rest.pair.car;
@@ -1276,14 +877,11 @@ fn evalDefineSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environ
     return Value.unspecified;
 }
 
-/// Builds a `SyntaxRulesMacro` from the body of a `syntax-rules` form (the `(literals)
-/// (pat tmpl) ...` tail).
 fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*core.SyntaxRulesMacro {
     if (body != .pair) return ElzError.InvalidArgument;
     const literals_val = body.pair.car;
     var rules_node = body.pair.cdr;
 
-    // Collect literal identifier names.
     var lit_names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer lit_names.deinit(env.allocator);
     var lit_node = literals_val;
@@ -1295,7 +893,6 @@ fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*
         lit_node = lit_node.pair.cdr;
     }
 
-    // Collect pattern/template rules.
     var rules_list: std.ArrayListUnmanaged(core.SyntaxRule) = .empty;
     defer rules_list.deinit(env.allocator);
     while (rules_node != .nil) {
@@ -1303,10 +900,10 @@ fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*
         const rule_form = rules_node.pair.car;
         if (rule_form != .pair) return ElzError.InvalidArgument;
         const pattern = rule_form.pair.car;
-        const tail = rule_form.pair.cdr;
-        if (tail != .pair) return ElzError.InvalidArgument;
-        const template = tail.pair.car;
-        if (tail.pair.cdr != .nil) return ElzError.InvalidArgument;
+        const rtail = rule_form.pair.cdr;
+        if (rtail != .pair) return ElzError.InvalidArgument;
+        const template = rtail.pair.car;
+        if (rtail.pair.cdr != .nil) return ElzError.InvalidArgument;
         try rules_list.append(env.allocator, .{ .pattern = pattern, .template = template });
         rules_node = rules_node.pair.cdr;
     }
@@ -1321,9 +918,6 @@ fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*
     return sr;
 }
 
-/// Evaluates a `delay` special form. Captures the body expression and current environment
-/// in a fresh promise without evaluating the expression.
-/// Syntax: (delay expr)
 fn evalDelay(env: *Environment, rest: Value) ElzError!Value {
     if (rest != .pair) return ElzError.InvalidArgument;
     const expr = rest.pair.car;
@@ -1339,10 +933,94 @@ fn evalDelay(env: *Environment, rest: Value) ElzError!Value {
     return Value{ .promise = promise };
 }
 
-/// Evaluates a `do` special form.
-/// Syntax: (do ((var init step) ...) (test result ...) body ...)
-/// Each binding may be `(var init)` (no step) or `(var init step)`.
-fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) ElzError!Value {
+// ============================================================================
+// Named let expansion (returns expanded AST for CPS trampoline)
+// ============================================================================
+
+fn expandNamedLetAST(
+    interp: *interpreter.Interpreter,
+    name: []const u8,
+    rest: Value,
+    env: *Environment,
+) ElzError!Value {
+    if (rest != .pair) return ElzError.InvalidArgument;
+    const bindings_list = rest.pair.car;
+    const body = rest.pair.cdr;
+    if (body == .nil) return ElzError.InvalidArgument;
+
+    const allocator = env.allocator;
+
+    var var_list: Value = .nil;
+    var var_tail: ?*core.Pair = null;
+    var init_list: Value = .nil;
+    var init_tail: ?*core.Pair = null;
+
+    var node = bindings_list;
+    while (node != .nil) {
+        if (node != .pair) return ElzError.InvalidArgument;
+        const binding = node.pair.car;
+        if (binding != .pair) return ElzError.InvalidArgument;
+        const var_val = binding.pair.car;
+        if (var_val != .symbol) return ElzError.InvalidArgument;
+        const init_tail_pair = binding.pair.cdr;
+        if (init_tail_pair != .pair or init_tail_pair.pair.cdr != .nil) return ElzError.InvalidArgument;
+        const init_val = init_tail_pair.pair.car;
+
+        const var_pair = try allocator.create(core.Pair);
+        var_pair.* = .{ .car = var_val, .cdr = .nil };
+        if (var_tail) |t| {
+            t.cdr = Value{ .pair = var_pair };
+        } else {
+            var_list = Value{ .pair = var_pair };
+        }
+        var_tail = var_pair;
+
+        const init_pair = try allocator.create(core.Pair);
+        init_pair.* = .{ .car = init_val, .cdr = .nil };
+        if (init_tail) |t| {
+            t.cdr = Value{ .pair = init_pair };
+        } else {
+            init_list = Value{ .pair = init_pair };
+        }
+        init_tail = init_pair;
+
+        node = node.pair.cdr;
+    }
+
+    const lambda_after_params = try allocator.create(core.Pair);
+    lambda_after_params.* = .{ .car = var_list, .cdr = body };
+    const lambda_form_pair = try allocator.create(core.Pair);
+    lambda_form_pair.* = .{ .car = Value{ .symbol = "lambda" }, .cdr = Value{ .pair = lambda_after_params } };
+    const lambda_form = Value{ .pair = lambda_form_pair };
+
+    const binding_after_name = try allocator.create(core.Pair);
+    binding_after_name.* = .{ .car = lambda_form, .cdr = .nil };
+    const binding_pair = try allocator.create(core.Pair);
+    binding_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = Value{ .pair = binding_after_name } };
+    const single_binding_pair = try allocator.create(core.Pair);
+    single_binding_pair.* = .{ .car = Value{ .pair = binding_pair }, .cdr = .nil };
+    const bindings_value = Value{ .pair = single_binding_pair };
+
+    const call_pair = try allocator.create(core.Pair);
+    call_pair.* = .{ .car = Value{ .symbol = try allocator.dupe(u8, name) }, .cdr = init_list };
+    const call_value = Value{ .pair = call_pair };
+
+    const letrec_after_bindings = try allocator.create(core.Pair);
+    letrec_after_bindings.* = .{ .car = call_value, .cdr = .nil };
+    const letrec_bindings_and_body = try allocator.create(core.Pair);
+    letrec_bindings_and_body.* = .{ .car = bindings_value, .cdr = Value{ .pair = letrec_after_bindings } };
+    const letrec_form_pair = try allocator.create(core.Pair);
+    letrec_form_pair.* = .{ .car = Value{ .symbol = "letrec" }, .cdr = Value{ .pair = letrec_bindings_and_body } };
+
+    _ = interp;
+    return Value{ .pair = letrec_form_pair };
+}
+
+// ============================================================================
+// evalDo: direct-style with full iteration, returns last result
+// ============================================================================
+
+fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
     if (rest != .pair) return ElzError.InvalidArgument;
     const bindings_pair = rest.pair;
     const bindings_list = bindings_pair.car;
@@ -1355,7 +1033,6 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
     const test_expr = test_clause.pair.car;
     const result_exprs = test_clause.pair.cdr;
 
-    // Collect bindings into parallel slices for repeated stepping.
     var var_names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer var_names.deinit(env.allocator);
     var init_exprs: std.ArrayListUnmanaged(Value) = .empty;
@@ -1390,7 +1067,6 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
         binding_node = binding_node.pair.cdr;
     }
 
-    // Bind initial values in a fresh scope.
     const loop_env = try Environment.init(env.allocator, env);
     for (var_names.items, 0..) |name, i| {
         var init_expr = init_exprs.items[i];
@@ -1398,26 +1074,22 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
         try loop_env.set(interp, name, v);
     }
 
-    // Iteration.
     while (true) {
         var test_node = test_expr;
         const test_result = try eval(interp, &test_node, loop_env, fuel);
         const truthy = !(test_result == .boolean and test_result.boolean == false);
         if (truthy) {
             if (result_exprs == .nil) return Value.unspecified;
-            // R5RS §4.2.4: the last result expression of `do` is in tail position.
             var node = result_exprs;
-            while (node.pair.cdr != .nil) {
+            var last_result: Value = .unspecified;
+            while (node != .nil) {
                 if (node != .pair) return ElzError.InvalidArgument;
-                _ = try eval(interp, &node.pair.car, loop_env, fuel);
+                last_result = try eval(interp, &node.pair.car, loop_env, fuel);
                 node = node.pair.cdr;
             }
-            current_ast.* = &node.pair.car;
-            current_env.* = loop_env;
-            return .unspecified;
+            return last_result;
         }
 
-        // Body for side effects.
         var body_node = body;
         while (body_node != .nil) {
             if (body_node != .pair) return ElzError.InvalidArgument;
@@ -1425,7 +1097,6 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
             body_node = body_node.pair.cdr;
         }
 
-        // Evaluate all step expressions in the current bindings, then assign.
         var new_values: std.ArrayListUnmanaged(Value) = .empty;
         defer new_values.deinit(env.allocator);
         for (step_exprs.items, 0..) |step_opt, i| {
@@ -1444,121 +1115,10 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
     }
 }
 
-/// Evaluates a `try` special form.
-fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel: *u64) !Value {
-    var try_body_forms = std.ArrayListUnmanaged(core.Value).empty;
-    defer try_body_forms.deinit(env.allocator);
-    var catch_clause: ?core.Value = null;
-    var current_node = rest;
-    while (current_node != .nil) {
-        const node_p = switch (current_node) {
-            .pair => |pair_val| pair_val,
-            else => return ElzError.InvalidArgument,
-        };
-        const form = node_p.car;
-        if (form == .pair and form.pair.car.is_symbol("catch")) {
-            catch_clause = form;
-            break;
-        }
-        try try_body_forms.append(env.allocator, form);
-        current_node = node_p.cdr;
-    }
+// ============================================================================
+// bindClosureArgs: handle variadic closures
+// ============================================================================
 
-    if (catch_clause == null) {
-        return ElzError.InvalidArgument;
-    }
-
-    const catch_p = catch_clause.?.pair;
-    const catch_args_p = switch (catch_p.cdr) {
-        .pair => |pair_val| pair_val,
-        else => return ElzError.InvalidArgument,
-    };
-
-    const err_symbol = catch_args_p.car;
-    if (err_symbol != .symbol) {
-        return ElzError.InvalidArgument;
-    }
-    const handler_body = catch_args_p.cdr;
-    if (handler_body == .nil) {
-        return ElzError.InvalidArgument;
-    }
-
-    var last_result: core.Value = .unspecified;
-    var eval_error: ?ElzError = null;
-    for (try_body_forms.items) |form| {
-        last_result = eval(interp, &form, env, fuel) catch |err| {
-            eval_error = err;
-            break;
-        };
-    }
-
-    if (eval_error) |_| {
-        const new_env = try Environment.init(env.allocator, env);
-        const msg = interp.last_error_message orelse "An unknown error occurred.";
-        const err_val = try Value.from(env.allocator, msg);
-        try new_env.set(interp, err_symbol.symbol, err_val);
-        var current_handler_node = handler_body;
-        var handler_result: core.Value = .unspecified;
-        while (current_handler_node != .nil) {
-            const handler_p = current_handler_node.pair;
-            handler_result = try eval(interp, &handler_p.car, new_env, fuel);
-            current_handler_node = handler_p.cdr;
-        }
-        std.mem.doNotOptimizeAway(&new_env);
-        return handler_result;
-    } else {
-        return last_result;
-    }
-}
-
-/// Evaluates a macro expansion.
-/// The macro's unevaluated arguments are bound to its parameters, the body is evaluated
-/// to produce an expansion form, and that expansion is then evaluated in the calling environment.
-fn evalMacroExpansion(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value) !Value {
-    // Collect unevaluated args from the rest list
-    var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
-    defer unevaluated_args.deinit(env.allocator);
-    var current_node = rest;
-    while (current_node != .nil) {
-        const pair = switch (current_node) {
-            .pair => |p| p,
-            else => break,
-        };
-        try unevaluated_args.append(env.allocator, pair.car);
-        current_node = pair.cdr;
-    }
-
-    // Check arg count
-    if (unevaluated_args.items.len != m.params.items.len) return ElzError.WrongArgumentCount;
-
-    // Create a new environment with unevaluated args bound to macro params
-    const macro_env = try Environment.init(env.allocator, m.env);
-    for (m.params.items, unevaluated_args.items) |param, arg| {
-        try macro_env.set(interp, param.symbol, arg);
-    }
-
-    // Evaluate the macro body to produce the expansion
-    var body_node = m.body;
-    var expansion: Value = .unspecified;
-    while (body_node != .nil) {
-        const pair = switch (body_node) {
-            .pair => |p| p,
-            else => break,
-        };
-        expansion = try eval(interp, &pair.car, macro_env, fuel);
-        body_node = pair.cdr;
-    }
-
-    // Now evaluate the expansion in the calling environment via the trampoline
-    const stored = try env.allocator.create(Value);
-    stored.* = expansion;
-    current_ast.* = stored;
-    return .unspecified;
-}
-
-/// Builds a fresh activation frame for a closure call and binds the arguments. Handles
-/// fixed, all-variadic (`(lambda args body)`), and mixed (`(lambda (a . rest) body)`)
-/// parameter lists.
 fn bindClosureArgs(
     interp: *interpreter.Interpreter,
     c: *UserDefinedProc,
@@ -1572,8 +1132,6 @@ fn bindClosureArgs(
         if (arg_vals.items.len < fixed_count) return ElzError.WrongArgumentCount;
     }
 
-    // R5RS §4.1.4 requires each lambda invocation to introduce a fresh activation frame,
-    // including for zero-parameter closures, so internal definitions are scoped per call.
     const call_env = try Environment.init(env.allocator, c.env);
     for (c.params.items, 0..) |param, i| {
         try call_env.set(interp, param.symbol, arg_vals.items[i]);
@@ -1592,172 +1150,646 @@ fn bindClosureArgs(
     return call_env;
 }
 
-/// Evaluates a procedure application.
-fn evalApplication(interp: *interpreter.Interpreter, first: Value, rest: Value, env: *Environment, fuel: *u64, current_ast: **const Value, current_env: **Environment) !Value {
-    const proc_val = try eval(interp, &first, env, fuel);
-    const arg_vals = try eval_expr_list(interp, rest, env, fuel);
+// ============================================================================
+// CPS evaluator core
+// ============================================================================
 
-    switch (proc_val) {
-        .closure => |c| {
-            const call_env = try bindClosureArgs(interp, c, arg_vals, env);
+fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
+    switch (ast) {
+        .number, .boolean, .character, .nil, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified, .promise, .multi_values, .syntax_rules => {
+            return .{ .apply = .{ .k = k, .val = ast } };
+        },
+        .string => |s| {
+            return .{ .apply = .{ .k = k, .val = Value{ .string = try env.allocator.dupe(u8, s) } } };
+        },
+        .symbol => |sym| {
+            const val = try env.get(sym, interp);
+            return .{ .apply = .{ .k = k, .val = val } };
+        },
+        .pair => |p| {
+            const first = p.car;
+            const rest = p.cdr;
 
-            var body_node = c.body;
-            if (body_node == .nil) return .nil;
-
-            while (body_node.pair.cdr != .nil) {
-                _ = try eval(interp, &body_node.pair.car, call_env, fuel);
-                body_node = body_node.pair.cdr;
+            // Check for syntax_rules macros first (before special form checks)
+            if (first == .symbol) {
+                const saved_msg = interp.last_error_message;
+                if (env.get(first.symbol, interp)) |looked_up| {
+                    if (looked_up == .syntax_rules) {
+                        const expanded = try expandSyntaxRules(interp, looked_up.syntax_rules, rest, env, fuel);
+                        return .{ .eval = .{ .ast = expanded, .env = env, .k = k } };
+                    }
+                    if (looked_up == .macro) {
+                        const expansion = try expandMacro(interp, looked_up.macro, rest, env, fuel);
+                        return .{ .eval = .{ .ast = expansion, .env = env, .k = k } };
+                    }
+                } else |_| {
+                    interp.last_error_message = saved_msg;
+                }
             }
 
-            current_env.* = call_env;
-            current_ast.* = &body_node.pair.car;
-            return .unspecified;
+            // Special forms
+            if (first.is_symbol("quote")) {
+                const v = try evalQuote(rest, env);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("quasiquote")) {
+                const v = try evalQuasiquote(interp, rest, env, fuel);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("import")) {
+                const v = try evalImport(interp, rest, env, fuel);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("lambda")) {
+                const v = try evalLambda(rest, env);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("define-macro")) {
+                const v = try evalDefineMacro(interp, rest, env);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("define-syntax")) {
+                const v = try evalDefineSyntax(interp, rest, env);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("let-syntax") or first.is_symbol("letrec-syntax")) {
+                const v = try evalLetSyntax(interp, rest, env, fuel);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("delay")) {
+                const v = try evalDelay(env, rest);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("do")) {
+                const v = try evalDo(interp, rest, env, fuel);
+                return .{ .apply = .{ .k = k, .val = v } };
+            }
+            if (first.is_symbol("if")) {
+                const p_test = switch (rest) {
+                    .pair => |pr| pr,
+                    else => return ElzError.IfInvalidArguments,
+                };
+                const p_cons = switch (p_test.cdr) {
+                    .pair => |pr| pr,
+                    else => return ElzError.IfInvalidArguments,
+                };
+                const consequent = p_cons.car;
+                const alternative = switch (p_cons.cdr) {
+                    .nil => Value.unspecified,
+                    .pair => |alt_p| blk: {
+                        if (alt_p.cdr != .nil) return ElzError.IfInvalidArguments;
+                        break :blk alt_p.car;
+                    },
+                    else => return ElzError.IfInvalidArguments,
+                };
+                const next_k = try allocCont(interp, .{ .if_branch = .{ .consequent = consequent, .alternative = alternative, .env = env } }, k);
+                return .{ .eval = .{ .ast = p_test.car, .env = env, .k = next_k } };
+            }
+            if (first.is_symbol("cond")) {
+                return try evalCondStep(interp, rest, env, k);
+            }
+            if (first.is_symbol("case")) {
+                return try evalCaseStep(interp, rest, env, k, fuel);
+            }
+            if (first.is_symbol("and")) {
+                if (rest == .nil) return .{ .apply = .{ .k = k, .val = Value{ .boolean = true } } };
+                const rp = rest.pair;
+                if (rp.cdr == .nil) {
+                    return .{ .eval = .{ .ast = rp.car, .env = env, .k = k } };
+                }
+                const next_k = try allocCont(interp, .{ .and_rest = .{ .rest = rp.cdr, .env = env } }, k);
+                return .{ .eval = .{ .ast = rp.car, .env = env, .k = next_k } };
+            }
+            if (first.is_symbol("or")) {
+                if (rest == .nil) return .{ .apply = .{ .k = k, .val = Value{ .boolean = false } } };
+                const rp = rest.pair;
+                if (rp.cdr == .nil) {
+                    return .{ .eval = .{ .ast = rp.car, .env = env, .k = k } };
+                }
+                const next_k = try allocCont(interp, .{ .or_rest = .{ .rest = rp.cdr, .env = env } }, k);
+                return .{ .eval = .{ .ast = rp.car, .env = env, .k = next_k } };
+            }
+            if (first.is_symbol("define")) {
+                const p_name = switch (rest) {
+                    .pair => |pr| pr,
+                    else => return ElzError.DefineInvalidArguments,
+                };
+                const name_or_sig = p_name.car;
+                const body = p_name.cdr;
+                switch (name_or_sig) {
+                    .symbol => |sym| {
+                        const p_expr = switch (body) {
+                            .pair => |pr| pr,
+                            else => return ElzError.DefineInvalidArguments,
+                        };
+                        if (p_expr.cdr != .nil) return ElzError.DefineInvalidArguments;
+                        const next_k = try allocCont(interp, .{ .define_bind = .{ .name = sym, .env = env } }, k);
+                        return .{ .eval = .{ .ast = p_expr.car, .env = env, .k = next_k } };
+                    },
+                    .pair => |sig_pair| {
+                        const fn_name_val = sig_pair.car;
+                        const fn_name = if (fn_name_val == .symbol) fn_name_val.symbol else return ElzError.DefineInvalidSymbol;
+                        const params = sig_pair.cdr;
+                        var params_list_gc = core.ValueList.init(env.allocator);
+                        var rest_param_name: ?[]const u8 = null;
+                        var current_param = params;
+                        walk: while (true) {
+                            switch (current_param) {
+                                .pair => |pp| {
+                                    if (pp.car != .symbol) return ElzError.LambdaInvalidParams;
+                                    try params_list_gc.append(pp.car);
+                                    current_param = pp.cdr;
+                                },
+                                .nil => break :walk,
+                                .symbol => |s| {
+                                    rest_param_name = try env.allocator.dupe(u8, s);
+                                    break :walk;
+                                },
+                                else => return ElzError.LambdaInvalidParams,
+                            }
+                        }
+                        const proc = try env.allocator.create(UserDefinedProc);
+                        proc.* = .{
+                            .params = params_list_gc,
+                            .rest_param = rest_param_name,
+                            .body = try body.deep_clone(env.allocator),
+                            .env = env,
+                        };
+                        const closure = Value{ .closure = proc };
+                        try env.set(interp, fn_name, closure);
+                        return .{ .apply = .{ .k = k, .val = closure } };
+                    },
+                    else => return ElzError.DefineInvalidSymbol,
+                }
+            }
+            if (first.is_symbol("set!")) {
+                const p_sym = switch (rest) {
+                    .pair => |pr| pr,
+                    else => return ElzError.SetInvalidArguments,
+                };
+                const symbol = p_sym.car;
+                if (symbol != .symbol) return ElzError.SetInvalidSymbol;
+                const p_expr = switch (p_sym.cdr) {
+                    .pair => |pr| pr,
+                    else => return ElzError.SetInvalidArguments,
+                };
+                if (p_expr.cdr != .nil) return ElzError.SetInvalidArguments;
+                const next_k = try allocCont(interp, .{ .set_bind = .{ .name = symbol.symbol, .env = env } }, k);
+                return .{ .eval = .{ .ast = p_expr.car, .env = env, .k = next_k } };
+            }
+            if (first.is_symbol("begin")) {
+                if (rest == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+                return evalBodyStep(interp, rest, env, k);
+            }
+            if (first.is_symbol("let") or first.is_symbol("let*")) {
+                return try evalLetStep(interp, first.is_symbol("let*"), rest, env, k, fuel);
+            }
+            if (first.is_symbol("letrec")) {
+                const result = try evalLetRec(interp, ast, env, fuel);
+                return .{ .apply = .{ .k = k, .val = result } };
+            }
+            if (first.is_symbol("try")) {
+                const result = try evalTry(interp, rest, env, fuel);
+                return .{ .apply = .{ .k = k, .val = result } };
+            }
+
+            // Function application: eval operator, then operands
+            const next_k = try allocCont(interp, .{ .eval_rator = .{ .rand_list = rest, .env = env } }, k);
+            return .{ .eval = .{ .ast = first, .env = env, .k = next_k } };
         },
-        .procedure => |prim| return prim(interp, env, arg_vals, fuel),
-        .foreign_procedure => |ff| {
-            return ff(env, arg_vals) catch |err| {
-                interp.last_error_message = @errorName(err);
-                return ElzError.ForeignFunctionError;
-            };
-        },
-        else => return ElzError.NotAFunction,
     }
 }
 
-/// Applies a procedure to a list of arguments.
-/// This function is used to execute a procedure (either a closure or a primitive) with a given set of arguments.
-/// It is not tail-recursive and should be used when the result of the procedure call is immediately needed.
-///
-/// Parameters:
-/// - `interp`: A pointer to the interpreter instance.
-/// - `proc`: The procedure `Value` to apply.
-/// - `args`: A `ValueList` of arguments to apply the procedure with.
-/// - `env`: The environment in which to apply the procedure.
-/// - `fuel`: A pointer to the execution fuel counter.
-///
-/// Returns:
-/// The result of the procedure application, or an error if the application fails.
-pub fn eval_proc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, fuel: *u64) ElzError!Value {
+fn evalBodyStep(interp: *interpreter.Interpreter, body: Value, env: *Environment, k: *core.Cont) ElzError!core.EvalStep {
+    if (body == .nil) return .{ .apply = .{ .k = k, .val = .nil } };
+    const p = body.pair;
+    if (p.cdr == .nil) {
+        return .{ .eval = .{ .ast = p.car, .env = env, .k = k } };
+    }
+    const next_k = try allocCont(interp, .{ .begin_rest = .{ .rest = p.cdr, .env = env } }, k);
+    return .{ .eval = .{ .ast = p.car, .env = env, .k = next_k } };
+}
+
+fn evalLetStep(interp: *interpreter.Interpreter, is_star: bool, rest: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
+    const p_bindings = switch (rest) {
+        .pair => |pr| pr,
+        else => return ElzError.InvalidArgument,
+    };
+
+    // Named let: (let name ((var init) ...) body...)
+    if (!is_star and p_bindings.car == .symbol) {
+        const name = p_bindings.car.symbol;
+        const expanded = try expandNamedLetAST(interp, name, p_bindings.cdr, env);
+        return .{ .eval = .{ .ast = expanded, .env = env, .k = k } };
+    }
+
+    const bindings_list = p_bindings.car;
+    const body = p_bindings.cdr;
+    const new_env = try Environment.init(env.allocator, env);
+
+    if (bindings_list == .nil) {
+        if (body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+        return evalBodyStep(interp, body, new_env, k);
+    }
+
+    // For let* with no bindings remaining, just use evalBodyStep
+    // For regular let (not star), we evaluate all inits in outer env.
+    // The CPS let_bind frame tracks this.
+    const first_binding_p = bindings_list.pair;
+    const first_binding = first_binding_p.car;
+    const var_p = switch (first_binding) {
+        .pair => |pr| pr,
+        else => return ElzError.InvalidArgument,
+    };
+    const var_sym = var_p.car;
+    if (var_sym != .symbol) return ElzError.InvalidArgument;
+    const init_p = switch (var_p.cdr) {
+        .pair => |pr| pr,
+        else => return ElzError.InvalidArgument,
+    };
+    const init_expr = init_p.car;
+    const eval_env = if (is_star) new_env else env;
+
+    _ = fuel;
+    const next_k = try allocCont(interp, .{ .let_bind = .{
+        .name = var_sym.symbol,
+        .remaining = first_binding_p.cdr,
+        .body = body,
+        .new_env = new_env,
+        .outer_env = env,
+        .is_star = is_star,
+    } }, k);
+    return .{ .eval = .{ .ast = init_expr, .env = eval_env, .k = next_k } };
+}
+
+fn evalCondStep(interp: *interpreter.Interpreter, rest: Value, env: *Environment, k: *core.Cont) ElzError!core.EvalStep {
+    const current_clause_node = rest;
+    if (current_clause_node != .nil) {
+        const clause_pair = switch (current_clause_node) {
+            .pair => |cp| cp,
+            else => return ElzError.InvalidArgument,
+        };
+        const clause = clause_pair.car;
+        const clause_p = switch (clause) {
+            .pair => |cp| cp,
+            else => return ElzError.InvalidArgument,
+        };
+        const test_expr = clause_p.car;
+        if (test_expr.is_symbol("else")) {
+            const body = clause_p.cdr;
+            if (body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+            return evalBodyStep(interp, body, env, k);
+        }
+        const rest_clauses = clause_pair.cdr;
+        const cond_sym = Value{ .symbol = "cond" };
+        const alt_pair = try env.allocator.create(core.Pair);
+        alt_pair.* = .{ .car = cond_sym, .cdr = rest_clauses };
+        const alt_form = Value{ .pair = alt_pair };
+
+        const body = clause_p.cdr;
+        if (body == .nil) {
+            const next_k = try allocCont(interp, .{ .or_rest = .{ .rest = blk: {
+                const p = try env.allocator.create(core.Pair);
+                p.* = .{ .car = alt_form, .cdr = Value.nil };
+                break :blk Value{ .pair = p };
+            }, .env = env } }, k);
+            return .{ .eval = .{ .ast = test_expr, .env = env, .k = next_k } };
+        }
+
+        const begin_sym = Value{ .symbol = "begin" };
+        const begin_pair = try env.allocator.create(core.Pair);
+        begin_pair.* = .{ .car = begin_sym, .cdr = body };
+        const consequent = Value{ .pair = begin_pair };
+
+        const next_k = try allocCont(interp, .{ .if_branch = .{ .consequent = consequent, .alternative = alt_form, .env = env } }, k);
+        return .{ .eval = .{ .ast = test_expr, .env = env, .k = next_k } };
+    }
+    return .{ .apply = .{ .k = k, .val = Value.nil } };
+}
+
+fn evalCaseStep(interp: *interpreter.Interpreter, rest: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
+    const rest_pair = switch (rest) {
+        .pair => |p| p,
+        else => return ElzError.InvalidArgument,
+    };
+    var key_expr = rest_pair.car;
+    const key = try eval(interp, &key_expr, env, fuel);
+
+    var current_clause_node = rest_pair.cdr;
+    while (current_clause_node != .nil) {
+        const clause_pair = switch (current_clause_node) {
+            .pair => |cp| cp,
+            else => return ElzError.InvalidArgument,
+        };
+        const clause = clause_pair.car;
+        const clause_p = switch (clause) {
+            .pair => |cp| cp,
+            else => return ElzError.InvalidArgument,
+        };
+        const datums = clause_p.car;
+        const body = clause_p.cdr;
+
+        if (datums.is_symbol("else")) {
+            if (body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+            return evalBodyStep(interp, body, env, k);
+        }
+
+        var found = false;
+        var datum_node = datums;
+        while (datum_node != .nil) {
+            const datum_pair = switch (datum_node) {
+                .pair => |dp| dp,
+                else => return ElzError.InvalidArgument,
+            };
+            if (is_eqv(key, datum_pair.car)) {
+                found = true;
+                break;
+            }
+            datum_node = datum_pair.cdr;
+        }
+        if (found) {
+            if (body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+            return evalBodyStep(interp, body, env, k);
+        }
+        current_clause_node = clause_pair.cdr;
+    }
+    return .{ .apply = .{ .k = k, .val = Value.nil } };
+}
+
+// ============================================================================
+// applyK: dispatch on continuation frame
+// ============================================================================
+
+fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel: *u64) ElzError!core.EvalStep {
+    switch (k.frame) {
+        .halt => return .{ .done = val },
+        .eval_rator => |er| {
+            const proc = val;
+            if (er.rand_list == .nil) {
+                const empty = core.ValueList.init(er.env.allocator);
+                return try applyProc(interp, proc, empty, er.env, k.next.?, fuel);
+            }
+            const rp = er.rand_list.pair;
+            const done = core.ValueList.init(er.env.allocator);
+            const next_k = try allocCont(interp, .{ .eval_rands = .{
+                .proc = proc,
+                .done = done,
+                .rest = rp.cdr,
+                .env = er.env,
+            } }, k.next.?);
+            return .{ .eval = .{ .ast = rp.car, .env = er.env, .k = next_k } };
+        },
+        .eval_rands => |*er| {
+            try er.done.append(val);
+            if (er.rest == .nil) {
+                return try applyProc(interp, er.proc, er.done, er.env, k.next.?, fuel);
+            }
+            const rp = er.rest.pair;
+            const next_k = try allocCont(interp, .{ .eval_rands = .{
+                .proc = er.proc,
+                .done = er.done,
+                .rest = rp.cdr,
+                .env = er.env,
+            } }, k.next.?);
+            return .{ .eval = .{ .ast = rp.car, .env = er.env, .k = next_k } };
+        },
+        .if_branch => |ib| {
+            const branch = if (isTruthy(val)) ib.consequent else ib.alternative;
+            return .{ .eval = .{ .ast = branch, .env = ib.env, .k = k.next.? } };
+        },
+        .begin_rest => |br| {
+            return try evalBodyStep(interp, br.rest, br.env, k.next.?);
+        },
+        .define_bind => |db| {
+            try db.env.set(interp, db.name, val);
+            return .{ .apply = .{ .k = k.next.?, .val = val } };
+        },
+        .set_bind => |sb| {
+            try sb.env.update(interp, sb.name, val);
+            return .{ .apply = .{ .k = k.next.?, .val = Value.nil } };
+        },
+        .and_rest => |ar| {
+            if (!isTruthy(val)) return .{ .apply = .{ .k = k.next.?, .val = val } };
+            if (ar.rest == .nil) return .{ .apply = .{ .k = k.next.?, .val = val } };
+            const rp = ar.rest.pair;
+            if (rp.cdr == .nil) {
+                return .{ .eval = .{ .ast = rp.car, .env = ar.env, .k = k.next.? } };
+            }
+            const next_k = try allocCont(interp, .{ .and_rest = .{ .rest = rp.cdr, .env = ar.env } }, k.next.?);
+            return .{ .eval = .{ .ast = rp.car, .env = ar.env, .k = next_k } };
+        },
+        .or_rest => |orr| {
+            if (isTruthy(val)) return .{ .apply = .{ .k = k.next.?, .val = val } };
+            if (orr.rest == .nil) return .{ .apply = .{ .k = k.next.?, .val = val } };
+            const rp = orr.rest.pair;
+            if (rp.cdr == .nil) {
+                return .{ .eval = .{ .ast = rp.car, .env = orr.env, .k = k.next.? } };
+            }
+            const next_k = try allocCont(interp, .{ .or_rest = .{ .rest = rp.cdr, .env = orr.env } }, k.next.?);
+            return .{ .eval = .{ .ast = rp.car, .env = orr.env, .k = next_k } };
+        },
+        .let_bind => |lb| {
+            try lb.new_env.set(interp, lb.name, val);
+            if (lb.remaining == .nil) {
+                if (lb.body == .nil) return .{ .apply = .{ .k = k.next.?, .val = Value.nil } };
+                return evalBodyStep(interp, lb.body, lb.new_env, k.next.?);
+            }
+            const rb_p = lb.remaining.pair;
+            const binding = rb_p.car;
+            const var_p = switch (binding) {
+                .pair => |pr| pr,
+                else => return ElzError.InvalidArgument,
+            };
+            const var_sym = var_p.car;
+            if (var_sym != .symbol) return ElzError.InvalidArgument;
+            const init_p = switch (var_p.cdr) {
+                .pair => |pr| pr,
+                else => return ElzError.InvalidArgument,
+            };
+            const init_expr = init_p.car;
+            const eval_env = if (lb.is_star) lb.new_env else lb.outer_env;
+            const next_k = try allocCont(interp, .{ .let_bind = .{
+                .name = var_sym.symbol,
+                .remaining = rb_p.cdr,
+                .body = lb.body,
+                .new_env = lb.new_env,
+                .outer_env = lb.outer_env,
+                .is_star = lb.is_star,
+            } }, k.next.?);
+            return .{ .eval = .{ .ast = init_expr, .env = eval_env, .k = next_k } };
+        },
+        .dyn_wind_before_done => |dw| {
+            dw.winder.next = interp.winders;
+            interp.winders = dw.winder;
+            const no_args = core.ValueList.init(interp.allocator);
+            return try applyProc(interp, dw.thunk, no_args, interp.root_env, k.next.?, fuel);
+        },
+        .dyn_wind_thunk_done => |dt| {
+            interp.winders = dt.outer_winders;
+            const after_k = try allocCont(interp, .{ .dyn_wind_after_done = .{ .thunk_result = val } }, k.next.?);
+            const no_args = core.ValueList.init(interp.allocator);
+            return try applyProc(interp, dt.after_proc, no_args, interp.root_env, after_k, fuel);
+        },
+        .dyn_wind_after_done => |da| {
+            return .{ .apply = .{ .k = k.next.?, .val = da.thunk_result } };
+        },
+    }
+}
+
+pub fn applyProc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
     switch (proc) {
         .closure => |c| {
-            const new_env = try bindClosureArgs(interp, c, args, env);
-            var result: Value = .nil;
-            var current_node = c.body;
-            while (current_node != .nil) {
-                const p = switch (current_node) {
-                    .pair => |pair_val| pair_val,
-                    else => return ElzError.InvalidArgument,
-                };
-                result = try eval(interp, &p.car, new_env, fuel);
-                current_node = p.cdr;
-            }
-            std.mem.doNotOptimizeAway(&new_env);
-            return result;
+            const call_env = try bindClosureArgs(interp, c, args, env);
+            if (c.body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };
+            return evalBodyStep(interp, c.body, call_env, k);
         },
-        .procedure => |p| return p(interp, env, args, fuel),
+        .procedure => |prim| {
+            const result = try prim(interp, env, args, fuel);
+            return .{ .apply = .{ .k = k, .val = result } };
+        },
+        .cont_aware_procedure => |cap| {
+            return try cap(interp, env, args, fuel, k);
+        },
+        .continuation => |cap| {
+            const arg_val = if (args.items.len > 0) args.items[0] else Value.unspecified;
+            return try invokeCapturedCont(interp, cap, arg_val, fuel);
+        },
         .foreign_procedure => |ff| {
-            return ff(env, args) catch |err| {
+            const result = ff(env, args) catch |err| {
                 interp.last_error_message = @errorName(err);
                 return ElzError.ForeignFunctionError;
             };
+            return .{ .apply = .{ .k = k, .val = result } };
         },
         else => return ElzError.NotAFunction,
     }
 }
 
-/// Evaluates an Abstract Syntax Tree (AST) node in a given environment.
-/// This is the main evaluation function of the interpreter. It uses a trampoline loop (`while (true)`)
-/// to achieve tail-call optimization (TCO). Instead of making a recursive call for tail-position
-/// expressions, it updates `current_ast` and `current_env` and continues the loop.
-///
-/// Parameters:
-/// - `interp`: A pointer to the interpreter instance.
-/// - `ast_start`: A pointer to the initial AST `Value` to evaluate.
-/// - `env_start`: The initial environment in which to evaluate the AST.
-/// - `fuel`: A pointer to the execution fuel counter. This is decremented on each evaluation step.
-///
-/// Returns:
-/// The result of the evaluation as a `Value`, or an error if evaluation fails.
-pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start: *Environment, fuel: *u64) ElzError!Value {
-    var current_ast = ast_start;
-    var current_env = env_start;
+fn invokeCapturedCont(interp: *interpreter.Interpreter, cap: *core.CapturedCont, val: Value, fuel: *u64) ElzError!core.EvalStep {
+    return try doWindChange(interp, interp.winders, cap.winders, cap.k, val, fuel);
+}
 
-    while (true) {
-        std.mem.doNotOptimizeAway(&current_env);
+fn doWindChange(interp: *interpreter.Interpreter, from: ?*core.Winder, to: ?*core.Winder, k: *core.Cont, val: Value, fuel: *u64) ElzError!core.EvalStep {
+    if (from == to) {
+        interp.winders = to;
+        return .{ .apply = .{ .k = k, .val = val } };
+    }
 
-        interp.last_error_message = null;
-        if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
-        fuel.* -= 1;
+    var from_depth: usize = 0;
+    var to_depth: usize = 0;
+    var fp = from;
+    while (fp) |f| {
+        from_depth += 1;
+        fp = f.next;
+    }
+    var tp = to;
+    while (tp) |t| {
+        to_depth += 1;
+        tp = t.next;
+    }
 
-        // Check time limit every 256 steps to minimize syscall overhead
-        if (interp.time_limit_ms) |limit_ms| {
-            interp.time_check_counter +%= 1;
-            if (interp.time_check_counter & 0xFF == 0) {
-                if (interp.eval_start_ms) |start_ms| {
-                    var ts: std.c.timespec = undefined;
-                    _ = std.c.clock_gettime(.REALTIME, &ts);
-                    const now = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
-                    if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
-                        return ElzError.TimeLimitExceeded;
-                    }
+    fp = from;
+    tp = to;
+    var fd = from_depth;
+    var td = to_depth;
+    while (fd > td) {
+        fp = fp.?.next;
+        fd -= 1;
+    }
+    while (td > fd) {
+        tp = tp.?.next;
+        td -= 1;
+    }
+    while (fp != tp) {
+        fp = fp.?.next;
+        tp = tp.?.next;
+    }
+    const common = fp;
+
+    var rewind_list: std.ArrayListUnmanaged(*core.Winder) = .empty;
+    defer rewind_list.deinit(interp.allocator);
+    tp = to;
+    while (tp != common) {
+        try rewind_list.append(interp.allocator, tp.?);
+        tp = tp.?.next;
+    }
+
+    fp = from;
+    while (fp != common) {
+        const empty = core.ValueList.init(interp.allocator);
+        _ = try eval_proc(interp, fp.?.after, empty, interp.root_env, fuel);
+        fp = fp.?.next;
+    }
+
+    var i: usize = rewind_list.items.len;
+    while (i > 0) {
+        i -= 1;
+        const w = rewind_list.items[i];
+        const empty = core.ValueList.init(interp.allocator);
+        _ = try eval_proc(interp, w.before, empty, interp.root_env, fuel);
+    }
+
+    interp.winders = to;
+    return .{ .apply = .{ .k = k, .val = val } };
+}
+
+// ============================================================================
+// Public entry points
+// ============================================================================
+
+inline fn checkFuelAndTime(interp: *interpreter.Interpreter, fuel: *u64) ElzError!void {
+    interp.last_error_message = null;
+    if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
+    fuel.* -= 1;
+
+    if (interp.time_limit_ms) |limit_ms| {
+        interp.time_check_counter +%= 1;
+        if (interp.time_check_counter & 0xFF == 0) {
+            if (interp.eval_start_ms) |start_ms| {
+                const now = interpreter.currentTimeMs();
+                if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
+                    return ElzError.TimeLimitExceeded;
                 }
             }
         }
-
-        const ast = current_ast;
-        const env = current_env;
-
-        switch (ast.*) {
-            .number, .boolean, .character, .nil, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .promise, .multi_values, .syntax_rules, .unspecified => return ast.*,
-            .string => |s| return Value{ .string = try env.allocator.dupe(u8, s) },
-            .symbol => |sym| return env.get(sym, interp),
-            .pair => |p| {
-                const original_ast_ptr = current_ast;
-                const first = p.car;
-                const rest = p.cdr;
-
-                // Check if first is a macro name before falling through to evalApplication.
-                // These lookups are tentative: a missing binding is normal (e.g. for any
-                // special form keyword) and must not pollute `last_error_message`. We
-                // snapshot the message before each lookup and restore it on failure so a
-                // later genuine error reports the right context.
-                const saved_msg_macro = interp.last_error_message;
-                const maybe_macro: ?*core.Macro = if (first == .symbol) blk: {
-                    const looked_up = env.get(first.symbol, interp) catch {
-                        interp.last_error_message = saved_msg_macro;
-                        break :blk null;
-                    };
-                    break :blk if (looked_up == .macro) looked_up.macro else null;
-                } else null;
-
-                const saved_msg_syntax = interp.last_error_message;
-                const maybe_syntax: ?*core.SyntaxRulesMacro = if (first == .symbol and maybe_macro == null) blk: {
-                    const looked_up = env.get(first.symbol, interp) catch {
-                        interp.last_error_message = saved_msg_syntax;
-                        break :blk null;
-                    };
-                    break :blk if (looked_up == .syntax_rules) looked_up.syntax_rules else null;
-                } else null;
-
-                const result = try if (maybe_macro) |m| evalMacroExpansion(interp, m, rest, env, fuel, &current_ast) else if (maybe_syntax) |s| expandSyntaxRules(interp, s, rest, env, fuel, &current_ast) else if (first.is_symbol("quote")) evalQuote(rest, env) else if (first.is_symbol("quasiquote")) evalQuasiquote(interp, rest, env, fuel) else if (first.is_symbol("import")) evalImport(interp, rest, env, fuel) else if (first.is_symbol("if")) evalIf(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("cond")) evalCond(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("case")) evalCase(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("and")) evalAnd(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("or")) evalOr(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("define")) evalDefine(interp, rest, env, fuel) else if (first.is_symbol("define-macro")) evalDefineMacro(interp, rest, env) else if (first.is_symbol("define-syntax")) evalDefineSyntax(interp, rest, env) else if (first.is_symbol("let-syntax") or first.is_symbol("letrec-syntax")) evalLetSyntax(interp, rest, env, fuel) else if (first.is_symbol("set!")) evalSet(interp, rest, env, fuel) else if (first.is_symbol("lambda")) evalLambda(rest, env) else if (first.is_symbol("begin")) evalBegin(interp, rest, env, fuel, &current_ast) else if (first.is_symbol("let") or first.is_symbol("let*")) evalLet(interp, first, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("letrec")) evalLetRec(interp, ast.*, env, fuel, &current_ast, &current_env) else if (first.is_symbol("delay")) evalDelay(env, rest) else if (first.is_symbol("do")) evalDo(interp, rest, env, fuel, &current_ast, &current_env) else if (first.is_symbol("try")) evalTry(interp, rest, env, fuel) else evalApplication(interp, first, rest, env, fuel, &current_ast, &current_env);
-
-                if (result == .unspecified) {
-                    if (current_ast != original_ast_ptr) {
-                        continue;
-                    }
-                }
-                return result;
-            },
-        }
     }
 }
+
+pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start: *Environment, fuel: *u64) ElzError!Value {
+    const halt = try allocCont(interp, .halt, null);
+    var step: core.EvalStep = .{ .eval = .{ .ast = ast_start.*, .env = env_start, .k = halt } };
+    while (true) {
+        try checkFuelAndTime(interp, fuel);
+        step = switch (step) {
+            .eval => |e| try evalStep(interp, e.ast, e.env, e.k, fuel),
+            .apply => |a| try applyK(interp, a.k, a.val, fuel),
+            .done => |v| return v,
+        };
+    }
+}
+
+pub fn eval_proc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, fuel: *u64) ElzError!Value {
+    const halt = try allocCont(interp, .halt, null);
+    var step = try applyProc(interp, proc, args, env, halt, fuel);
+    while (true) {
+        try checkFuelAndTime(interp, fuel);
+        step = switch (step) {
+            .eval => |e| try evalStep(interp, e.ast, e.env, e.k, fuel),
+            .apply => |a| try applyK(interp, a.k, a.val, fuel),
+            .done => |v| return v,
+        };
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 test "eval simple values" {
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 1000;
 
-    // Numbers are self-evaluating
     const result = try interp.evalString("42", &fuel);
     try std.testing.expect(result == .number);
     try std.testing.expectEqual(@as(f64, 42), result.number);
@@ -1768,7 +1800,6 @@ test "eval quote" {
     defer interp.deinit();
     var fuel: u64 = 1000;
 
-    // Quote returns the unevaluated form
     const result = try interp.evalString("(quote (1 2 3))", &fuel);
     try std.testing.expect(result == .pair);
 }
@@ -1818,7 +1849,6 @@ test "eval and" {
     defer interp.deinit();
     var fuel: u64 = 1000;
 
-    // and returns last value if all truthy
     const result = try interp.evalString("(and 1 2 3)", &fuel);
     try std.testing.expect(result == .number);
     try std.testing.expectEqual(@as(f64, 3), result.number);
@@ -1829,7 +1859,6 @@ test "eval or" {
     defer interp.deinit();
     var fuel: u64 = 1000;
 
-    // or returns first truthy value
     const result = try interp.evalString("(or #f 5)", &fuel);
     try std.testing.expect(result == .number);
     try std.testing.expectEqual(@as(f64, 5), result.number);
@@ -1893,7 +1922,6 @@ test "eval let*" {
     defer interp.deinit();
     var fuel: u64 = 1000;
 
-    // let* allows sequential binding
     const result = try interp.evalString("(let* ((x 5) (y x)) (+ x y))", &fuel);
     try std.testing.expect(result == .number);
     try std.testing.expectEqual(@as(f64, 10), result.number);
@@ -1935,8 +1963,36 @@ test "eval try/catch error" {
 test "eval fuel exhaustion" {
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
-    var fuel: u64 = 1; // Very limited fuel
+    var fuel: u64 = 1;
 
     const result = interp.evalString("(+ 1 (+ 2 3))", &fuel);
     try std.testing.expectError(ElzError.ExecutionBudgetExceeded, result);
+}
+
+test "eval call/cc basic escape" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 10000;
+
+    const result = try interp.evalString("(+ 1 (call/cc (lambda (k) (+ 2 (k 10)))))", &fuel);
+    try std.testing.expect(result == .number);
+    try std.testing.expectEqual(@as(f64, 11), result.number);
+}
+
+test "eval dynamic-wind basic" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 100000;
+
+    _ = try interp.evalString("(define log '())", &fuel);
+    _ = try interp.evalString(
+        \\(dynamic-wind
+        \\  (lambda () (set! log (cons 'before log)))
+        \\  (lambda () (set! log (cons 'body log)))
+        \\  (lambda () (set! log (cons 'after log))))
+    , &fuel);
+    const result = try interp.evalString("log", &fuel);
+    try std.testing.expect(result == .pair);
+    try std.testing.expect(result.pair.car == .symbol);
+    try std.testing.expect(std.mem.eql(u8, result.pair.car.symbol, "after"));
 }

@@ -108,6 +108,14 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .procedure => |bv| av == bv,
             else => false,
         },
+        .cont_aware_procedure => |av| switch (b) {
+            .cont_aware_procedure => |bv| av == bv,
+            else => false,
+        },
+        .continuation => |av| switch (b) {
+            .continuation => |bv| av == bv,
+            else => false,
+        },
         .macro => |av| switch (b) {
             .macro => |bv| av == bv,
             else => false,
@@ -232,7 +240,7 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = (v == .procedure or v == .closure or v == .foreign_procedure) };
+    return Value{ .boolean = (v == .procedure or v == .closure or v == .foreign_procedure or v == .cont_aware_procedure or v == .continuation) };
 }
 
 /// `is_char` checks if a value is a character.

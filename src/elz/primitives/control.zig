@@ -228,6 +228,58 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     }
 }
 
+/// `call-with-current-continuation` (call/cc): captures the current continuation
+/// as a first-class value and passes it to the supplied procedure.
+pub fn call_with_current_continuation(
+    interp: *interpreter.Interpreter,
+    env: *core.Environment,
+    args: core.ValueList,
+    fuel: *u64,
+    k: *core.Cont,
+) ElzError!core.EvalStep {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const cap = try env.allocator.create(core.CapturedCont);
+    cap.* = .{ .k = k, .winders = interp.winders };
+    const k_val = core.Value{ .continuation = cap };
+    var call_args = core.ValueList.init(env.allocator);
+    try call_args.append(k_val);
+    return try eval.applyProc(interp, args.items[0], call_args, env, k, fuel);
+}
+
+/// `dynamic-wind`: (dynamic-wind before thunk after)
+/// Calls `before`, then `thunk` (returning its value), then `after`.
+/// If a continuation is invoked that crosses the dynamic-wind boundary,
+/// `before` and `after` are re-invoked to maintain dynamic context.
+pub fn dynamic_wind(
+    interp: *interpreter.Interpreter,
+    env: *core.Environment,
+    args: core.ValueList,
+    fuel: *u64,
+    k: *core.Cont,
+) ElzError!core.EvalStep {
+    if (args.items.len != 3) return ElzError.WrongArgumentCount;
+    const before = args.items[0];
+    const thunk = args.items[1];
+    const after_proc = args.items[2];
+
+    const winder = try env.allocator.create(core.Winder);
+    winder.* = .{ .before = before, .after = after_proc, .next = interp.winders };
+
+    const k_thunk_done = try eval.allocCont(interp, .{ .dyn_wind_thunk_done = .{
+        .after_proc = after_proc,
+        .outer_winders = interp.winders,
+    } }, k);
+    const k_before_done = try eval.allocCont(interp, .{ .dyn_wind_before_done = .{
+        .winder = winder,
+        .thunk = thunk,
+        .after_proc = after_proc,
+        .outer_winders = interp.winders,
+    } }, k_thunk_done);
+
+    const no_args = core.ValueList.init(env.allocator);
+    return try eval.applyProc(interp, before, no_args, env, k_before_done, fuel);
+}
+
 test "control primitives" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

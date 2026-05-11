@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("./core.zig");
 const env_setup = @import("./env_setup.zig");
 const eval = @import("./eval.zig");
@@ -6,6 +7,19 @@ const parser = @import("./parser.zig");
 const gc = @import("gc.zig");
 
 var gc_initialized = std.atomic.Value(bool).init(false);
+
+const filetime_unix_offset: i64 = 116444736000000000;
+
+pub fn currentTimeMs() i64 {
+    if (comptime builtin.os.tag == .windows) {
+        const filetime = std.os.windows.ntdll.RtlGetSystemTimePrecise();
+        return @divFloor(filetime - filetime_unix_offset, 10_000);
+    } else {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
+    }
+}
 
 fn ensureGcInitialized() void {
     if (gc_initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
@@ -57,6 +71,8 @@ pub const Interpreter = struct {
     escape_id: u64 = 0,
     /// Counter for generating unique escape continuation IDs.
     escape_id_counter: u64 = 0,
+    /// The innermost active dynamic-wind frame (null when none).
+    winders: ?*core.Winder = null,
     /// The current input port. Populated lazily on first reference.
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
@@ -155,9 +171,7 @@ pub const Interpreter = struct {
 
         // Set the eval start time for time-limited execution
         if (self.time_limit_ms != null) {
-            var ts: std.c.timespec = undefined;
-            _ = std.c.clock_gettime(.REALTIME, &ts);
-            self.eval_start_ms = @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
+            self.eval_start_ms = currentTimeMs();
             self.time_check_counter = 0;
         }
 

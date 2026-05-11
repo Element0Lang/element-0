@@ -206,6 +206,62 @@ pub const SyntaxRulesMacro = struct {
 /// A pointer to a native Zig function that can be called from Elz.
 pub const PrimitiveFn = *const fn (interp: *interpreter.Interpreter, env: *Environment, args: ValueList, fuel: *u64) ElzError!Value;
 
+/// A dynamic-wind frame: a (before, after) pair pushed onto the interpreter
+/// dynamic winder chain. The chain is innermost-first.
+pub const Winder = struct {
+    before: Value,
+    after: Value,
+    next: ?*Winder,
+};
+
+/// A captured continuation, which holds the continuation chain plus the
+/// dynamic-wind context active when it was captured.
+pub const CapturedCont = struct {
+    k: *Cont,
+    winders: ?*Winder,
+};
+
+/// A single continuation frame in the CPS-converted evaluator.
+pub const ContFrame = union(enum) {
+    halt,
+    eval_rator: struct { rand_list: Value, env: *Environment },
+    eval_rands: struct { proc: Value, done: ValueList, rest: Value, env: *Environment },
+    if_branch: struct { consequent: Value, alternative: Value, env: *Environment },
+    begin_rest: struct { rest: Value, env: *Environment },
+    define_bind: struct { name: []const u8, env: *Environment },
+    set_bind: struct { name: []const u8, env: *Environment },
+    and_rest: struct { rest: Value, env: *Environment },
+    or_rest: struct { rest: Value, env: *Environment },
+    let_bind: struct { name: []const u8, remaining: Value, body: Value, new_env: *Environment, outer_env: *Environment, is_star: bool },
+    dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
+    dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
+    dyn_wind_after_done: struct { thunk_result: Value },
+};
+
+/// A continuation: a singly-linked list of frames.
+pub const Cont = struct {
+    frame: ContFrame,
+    next: ?*Cont,
+};
+
+/// Result of one CPS evaluation step. Drives the trampoline loop in `eval.zig`.
+pub const EvalStep = union(enum) {
+    eval: struct { ast: Value, env: *Environment, k: *Cont },
+    apply: struct { k: *Cont, val: Value },
+    done: Value,
+};
+
+/// A primitive function that has access to the current continuation.
+/// Used by call/cc, dynamic-wind, apply, and other forms that participate
+/// directly in the CPS-converted evaluator.
+pub const ContAwareFn = *const fn (
+    interp: *interpreter.Interpreter,
+    env: *Environment,
+    args: ValueList,
+    fuel: *u64,
+    k: *Cont,
+) ElzError!EvalStep;
+
 /// Represents a pair in an Element 0 list.
 pub const Pair = struct {
     /// The first element of the pair (the "contents of the address register").
@@ -421,6 +477,11 @@ pub const Value = union(enum) {
     macro: *Macro,
     /// A built-in (primitive) procedure.
     procedure: PrimitiveFn,
+    /// A primitive procedure that has access to the current continuation.
+    /// Used to implement call/cc, dynamic-wind, apply, etc.
+    cont_aware_procedure: ContAwareFn,
+    /// A first-class captured continuation (call/cc result).
+    continuation: *CapturedCont,
     /// A foreign function interface (FFI) procedure.
     foreign_procedure: *const fn (env: *Environment, args: ValueList) anyerror!Value,
     /// An opaque pointer to a value managed by foreign code.
@@ -474,7 +535,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .boolean, .character, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .string => |s| Value{ .string = try allocator.dupe(u8, s) },
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
