@@ -143,6 +143,37 @@ test "current_time_ms returns number" {
     try testing.expect(result.number > 1577836800000); // 2020-01-01 in ms
 }
 
+test "sleep_ms accepts zero" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = 0 });
+
+    const result = try sleep_ms(&interp, interp.root_env, args, undefined);
+    try std.testing.expect(result == .unspecified);
+}
+
+test "sleep_ms rejects negative milliseconds" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = -1 });
+
+    try std.testing.expectError(ElzError.InvalidArgument, sleep_ms(&interp, interp.root_env, args, undefined));
+}
+
+test "sleep_ms rejects fractional milliseconds" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = 1.5 });
+
+    try std.testing.expectError(ElzError.InvalidArgument, sleep_ms(&interp, interp.root_env, args, undefined));
+}
+
 test "time_to_components returns list" {
     const testing = std.testing;
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
