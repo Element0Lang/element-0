@@ -72,6 +72,12 @@ The `Interpreter` struct in `interpreter.zig` ties these together and manages th
 Zig functions can be registered with the interpreter via `env_setup.define_foreign_func()`.
 This is the primary extension mechanism for embedding use cases.
 
+`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus two variadic forms:
+`(std.mem.Allocator, []const core.Value)` and `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)`.
+Parameter types supported by `Caster`: `f64`, integers, `bool`, `[]const u8`, `?T`, `core.Value`, Zig structs
+(mapped to/from Elz hash-maps by field name), and `ElzCallback` (an Elz closure or procedure wrapped for
+invocation from Zig). `valueFromNative` converts Zig scalars, strings, optionals, and structs back to `core.Value`.
+
 ### Garbage Collection
 
 Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. The GC is linked as a C library dependency.

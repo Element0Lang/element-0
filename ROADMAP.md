@@ -59,7 +59,7 @@ It outlines the features to be implemented and their current status.
 * **Type Predicates**
     * [x] `null?`, `boolean?`, `symbol?`, `number?`, `list?`, `pair?`, `string?`
     * [x] `procedure?`, `char?`, `integer?`, `not`
-    * [x] `complex?`, `real?`, `rational?`, `exact?`, `inexact?` (truthful stubs over the f64-only domain)
+    * [x] `complex?`, `real?`, `rational?`, `exact?`, `inexact?`
 * **Pair and List Manipulation**
     * [x] `cons`, `car`, `cdr`, `pair?`
     * [x] `list`, `length`, `append`, `reverse`, `map`
@@ -76,7 +76,7 @@ It outlines the features to be implemented and their current status.
     * [x] `even?`, `odd?`, `zero?`, `positive?`, `negative?`
     * [x] `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (one and two-argument forms)
     * [x] `quotient`, `remainder`, `modulo`, `gcd`, `lcm`
-    * [x] `exact->inexact`, `inexact->exact` (identity until the numeric tower lands)
+    * [x] `exact->inexact`, `inexact->exact`
 * **Symbol Handling**
     * [x] `symbol->string`, `string->symbol`
 * **String and Character Manipulation**
