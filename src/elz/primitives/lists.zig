@@ -196,7 +196,10 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
         // Check if all lists are exhausted (stop at shortest).
         var all_done = true;
         for (cursors) |cur| {
-            if (cur != .nil) { all_done = false; break; }
+            if (cur != .nil) {
+                all_done = false;
+                break;
+            }
         }
         if (all_done) break;
         // Collect one element from each list.

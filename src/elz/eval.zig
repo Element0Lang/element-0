@@ -1551,15 +1551,20 @@ fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel: *u6
             } }, k.next.?);
             return .{ .eval = .{ .ast = rp.car, .env = er.env, .k = next_k } };
         },
-        .eval_rands => |*er| {
-            try er.done.append(val);
+        .eval_rands => |er| {
+            // Build a new args list from the existing done items plus val, rather than
+            // mutating er.done in-place. Mutation breaks continuation re-entry because
+            // the captured frame would have stale accumulated args on the second call.
+            var new_done = core.ValueList.init(er.env.allocator);
+            for (er.done.items) |v| try new_done.append(v);
+            try new_done.append(val);
             if (er.rest == .nil) {
-                return try applyProc(interp, er.proc, er.done, er.env, k.next.?, fuel);
+                return try applyProc(interp, er.proc, new_done, er.env, k.next.?, fuel);
             }
             const rp = er.rest.pair;
             const next_k = try allocCont(interp, .{ .eval_rands = .{
                 .proc = er.proc,
-                .done = er.done,
+                .done = new_done,
                 .rest = rp.cdr,
                 .env = er.env,
             } }, k.next.?);

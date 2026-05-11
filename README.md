@@ -20,7 +20,7 @@ A small embeddable Lisp for the Zig ecosystem λ
 ---
 
 Element 0 programming language is a new Lisp dialect inspired by Scheme.
-It aims to be compliant with the [R5RS](https://www-sop.inria.fr/indes/fp/Bigloo/doc/r5rs-7.html) standard to a good
+It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good
 degree, but not limited to it.
 
 This project provides an interpreter for the Element 0 language written in Zig.
