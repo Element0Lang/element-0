@@ -1,0 +1,13 @@
+; Compatibility shims required by the chibi-scheme r5rs test harness.
+
+; call-with-output-string: calls proc with current-output-port; output goes to
+; stdout and the returned "captured" string is always "".
+(define (call-with-output-string proc)
+  (proc (current-output-port))
+  "")
+
+; flush-output: no-op in Element 0 (output is unbuffered).
+(define (flush-output . args) #f)
+
+; Run the R5RS compliance test suite.
+(load "external/chibi-scheme/tests/r5rs-tests.scm")

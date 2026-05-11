@@ -46,7 +46,7 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 > [!IMPORTANT]
 > This project is in early development, so bugs and breaking changes are expected.
-> Please use the [issues page](https://github.com/Element0Lang/element-0/issues) to report bugs or request features.
+> Please use the [issue page](https://github.com/Element0Lang/element-0/issues) to report bugs or request features.
 
 ---
 
@@ -56,9 +56,14 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 1. Clone the repository
    ```sh
-   git clone https://github.com/Element0Lang/element-0.git
+   git clone --recurse-submodules https://github.com/Element0Lang/element-0.git
    cd element-0
-    ```
+   ```
+
+   If you cloned without `--recurse-submodules`, initialize the submodules with:
+   ```sh
+   git submodule update --init
+   ```
 
 2. Build and run the REPL
    ```sh

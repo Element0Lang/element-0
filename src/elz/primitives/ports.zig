@@ -117,13 +117,17 @@ pub fn char_ready_p(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 }
 
 /// `write_char` writes a single character to an output port as UTF-8.
-/// Syntax: (write-char char port)
-pub fn write_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+/// Syntax: (write-char char) or (write-char char port)
+pub fn write_char(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
     const char_val = args.items[0];
-    const port_val = args.items[1];
     if (char_val != .character) return ElzError.InvalidArgument;
+
+    const port_val: Value = if (args.items.len == 2)
+        args.items[1]
+    else
+        Value{ .port = interp.currentOutputPort() catch return ElzError.OutOfMemory };
     if (port_val != .port) return ElzError.InvalidArgument;
 
     const cp = char_val.character;

@@ -289,6 +289,11 @@ pub fn populate_ports(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "output-port?", core.Value{ .procedure = ports.is_output_port });
     try interp.root_env.set(interp, "port?", core.Value{ .procedure = ports.is_port });
     try interp.root_env.set(interp, "eof-object?", core.Value{ .procedure = ports.eof_object_p });
+    try interp.root_env.set(interp, "write-char", core.Value{ .procedure = ports.write_char });
+    try interp.root_env.set(interp, "current-input-port", core.Value{ .procedure = ports.current_input_port });
+    try interp.root_env.set(interp, "current-output-port", core.Value{ .procedure = ports.current_output_port });
+    try interp.root_env.set(interp, "peek-char", core.Value{ .procedure = ports.peek_char });
+    try interp.root_env.set(interp, "char-ready?", core.Value{ .procedure = ports.char_ready_p });
 }
 
 /// Defines a foreign function in the given environment.
