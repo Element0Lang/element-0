@@ -20,8 +20,8 @@ A small embeddable Lisp for the Zig ecosystem λ
 ---
 
 Element 0 programming language is a new Lisp dialect inspired by Scheme.
-It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good
-degree, but not limited to it.
+It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good degree,
+but not limited to it.
 
 This project provides an interpreter for the Element 0 language written in Zig.
 The interpreter is named Elz (pronounced "el-zee") and can be integrated into Zig applications as a scripting engine.
@@ -40,7 +40,7 @@ This lets you change parts of your application without the need to recompile the
 * A good level of R5RS compliance with a growing standard library (see [std.elz](src/stdlib/std.elz))
 * Easy to integrate into Zig projects as a lightweight and fast scripting engine
 * Easy to extend with Zig functions via the use of FFI or writing Element 0 code
-* Prepacked with a REPL for interactive development
+* Prepacked with a REPL (for interactive development)
 
 See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
 
@@ -194,35 +194,28 @@ Result of (* 10 5) is: 50
 Result of (zig-mul 7 6) is: 42
 ```
 
-> [!IMPORTANT]
-> Elz is implemented and tested in Zig 0.16.0.
-
 -----
 
 ### Documentation
 
 You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 
-Alternatively, you can use the `make docs` command to generate the API documentation for the current version of
-Elz from the source code.
+Alternatively, you can use the `make docs` command to generate the API documentation for the current version of Elz from the source code.
 This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
 and view in your web browser at [http://localhost:8000](http://localhost:8000).
 
 #### Standard Library
 
-See the [std.elz](src/stdlib/std.elz) file for the full list of available items (like functions, variables, etc.)
-in the standard library.
+See the [std.elz](src/stdlib/std.elz) file for the full list of available items (like functions, variables, etc.) in the standard library.
 
 #### Examples
 
-Check out the [examples](examples) directory for various usage examples,
-including both Element 0 code and Zig FFI examples.
+Check out the [examples](examples) directory for various usage examples, including both Element 0 code and Zig FFI examples.
 
 -----
 
 ### Contributing
 
-Contributions are always welcome!
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to make a contribution.
 
 ### License

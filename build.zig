@@ -133,9 +133,7 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate API documentation");
     const doc_install_path = "docs/api";
 
-    // Create docs directory if it doesn't exist
-    const mkdir_docs_cmd = b.addSystemCommand(&.{ "mkdir", "-p", "docs" });
-    _ = mkdir_docs_cmd;
+    b.build_root.handle.createDirPath(b.graph.io, doc_install_path) catch {};
 
     const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
         b.graph.zig_exe,
