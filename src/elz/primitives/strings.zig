@@ -4,6 +4,18 @@ const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
+/// Converts a numeric `Value` to a non-negative `usize` index.
+fn toIndex(v: Value) ElzError!usize {
+    return switch (v) {
+        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .number => |n| blk: {
+            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            break :blk @intFromFloat(n);
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
 /// `symbol_to_string` converts a symbol to a string.
 ///
 /// Parameters:
@@ -37,7 +49,7 @@ pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
     const str = args.items[0];
     if (str != .string) return ElzError.InvalidArgument;
     const len = std.unicode.utf8CountCodepoints(str.string) catch return ElzError.InvalidArgument;
-    return Value{ .number = @floatFromInt(len) };
+    return Value{ .exact_integer = @intCast(len) };
 }
 
 /// `string_append` concatenates multiple strings into a single string.
@@ -45,7 +57,7 @@ pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
 /// Parameters:
 /// - `args`: A `ValueList` of strings to be appended.
 pub fn string_append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    var buffer = std.ArrayListUnmanaged(u8){};
+    var buffer = std.ArrayListUnmanaged(u8).empty;
     defer buffer.deinit(env.allocator);
 
     for (args.items) |arg| {
@@ -111,17 +123,15 @@ pub fn char_to_integer(_: *interpreter.Interpreter, _: *core.Environment, args: 
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const c = args.items[0];
     if (c != .character) return ElzError.InvalidArgument;
-    return Value{ .number = @floatFromInt(c.character) };
+    return Value{ .exact_integer = @intCast(c.character) };
 }
 
 /// `integer_to_char` converts a Unicode code point to a character.
 pub fn integer_to_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const n = args.items[0];
-    if (n != .number) return ElzError.InvalidArgument;
-    const num = n.number;
-    if (num < 0 or @floor(num) != num or num > 0x10FFFF) return ElzError.InvalidArgument;
-    return Value{ .character = @intFromFloat(num) };
+    const idx = try toIndex(args.items[0]);
+    if (idx > 0x10FFFF) return ElzError.InvalidArgument;
+    return Value{ .character = @intCast(idx) };
 }
 
 /// `string_ref` returns the character at a given index in a string.
@@ -132,14 +142,8 @@ pub fn integer_to_char(_: *interpreter.Interpreter, _: *core.Environment, args: 
 pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    const idx = args.items[1];
     if (str != .string) return ElzError.InvalidArgument;
-    if (idx != .number) return ElzError.InvalidArgument;
-
-    const index = idx.number;
-    if (index < 0 or @floor(index) != index) return ElzError.InvalidArgument;
-
-    const idx_usize: usize = @intFromFloat(index);
+    const idx_usize = try toIndex(args.items[1]);
 
     // Iterate through UTF-8 codepoints to find the character at the given index
     var it = std.unicode.Utf8View.initUnchecked(str.string).iterator();
@@ -163,21 +167,9 @@ pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    const start_val = args.items[1];
-    const end_val = args.items[2];
-
     if (str != .string) return ElzError.InvalidArgument;
-    if (start_val != .number or end_val != .number) return ElzError.InvalidArgument;
-
-    const start = start_val.number;
-    const end = end_val.number;
-
-    if (start < 0 or end < 0 or @floor(start) != start or @floor(end) != end) {
-        return ElzError.InvalidArgument;
-    }
-
-    const start_idx: usize = @intFromFloat(start);
-    const end_idx: usize = @intFromFloat(end);
+    const start_idx = try toIndex(args.items[1]);
+    const end_idx = try toIndex(args.items[2]);
 
     if (start_idx > end_idx) return ElzError.InvalidArgument;
 
@@ -226,34 +218,100 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 }
 
 /// `number_to_string` converts a number to its string representation.
-/// Syntax: (number->string num)
+/// Syntax: (number->string num) or (number->string num radix)
 pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const num_val = args.items[0];
-    if (num_val != .number) return ElzError.InvalidArgument;
+    if (!num_val.isNumeric()) return ElzError.InvalidArgument;
 
-    const num = num_val.number;
+    // With an explicit radix, convert integers to that base.
+    if (args.items.len == 2) {
+        const radix_val = args.items[1];
+        const radix: u8 = switch (radix_val) {
+            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
+            .number => |f| blk: {
+                const n = @as(i64, @intFromFloat(f));
+                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
+            },
+            else => return ElzError.InvalidArgument,
+        };
+        const n: i64 = switch (num_val) {
+            .exact_integer => |i| i,
+            .number => |f| @intFromFloat(f),
+            else => return ElzError.InvalidArgument,
+        };
+        var buf: [128]u8 = undefined;
+        const len = std.fmt.printInt(&buf, n, radix, .lower, .{});
+        return Value{ .string = try env.allocator.dupe(u8, buf[0..len]) };
+    }
 
-    // Format the number, removing unnecessary decimal places for integers
-    var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return ElzError.OutOfMemory;
-
+    var buf: [128]u8 = undefined;
+    const formatted = switch (num_val) {
+        .number => |n| std.fmt.bufPrint(&buf, "{d}", .{n}) catch return ElzError.OutOfMemory,
+        .exact_integer => |i| std.fmt.bufPrint(&buf, "{d}", .{i}) catch return ElzError.OutOfMemory,
+        .rational => |r| std.fmt.bufPrint(&buf, "{d}/{d}", .{ r.numerator, r.denominator }) catch return ElzError.OutOfMemory,
+        .complex => |c| blk: {
+            const sep: u8 = if (c.imag >= 0 or std.math.isNan(c.imag)) '+' else 0;
+            if (sep == '+') {
+                break :blk std.fmt.bufPrint(&buf, "{d}+{d}i", .{ c.real, c.imag }) catch return ElzError.OutOfMemory;
+            } else {
+                break :blk std.fmt.bufPrint(&buf, "{d}{d}i", .{ c.real, c.imag }) catch return ElzError.OutOfMemory;
+            }
+        },
+        else => return ElzError.InvalidArgument,
+    };
     return Value{ .string = try env.allocator.dupe(u8, formatted) };
 }
 
 /// `string_to_number` converts a string to a number.
-/// Syntax: (string->number str)
+/// Syntax: (string->number str) or (string->number str radix)
 /// Returns #f if the string cannot be parsed as a number.
-pub fn string_to_number(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
 
     const str = str_val.string;
+
+    // With an explicit radix, parse as integer only.
+    if (args.items.len == 2) {
+        const radix_val = args.items[1];
+        const radix: u8 = switch (radix_val) {
+            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
+            .number => |f| blk: {
+                const n = @as(i64, @intFromFloat(f));
+                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
+            },
+            else => return ElzError.InvalidArgument,
+        };
+        if (std.fmt.parseInt(i64, str, radix) catch null) |n| {
+            return Value{ .exact_integer = n };
+        }
+        return Value{ .boolean = false };
+    }
+
+    // Try rational a/b
+    if (std.mem.indexOfScalar(u8, str, '/')) |slash_idx| {
+        if (slash_idx != 0 and slash_idx != str.len - 1) {
+            const num_part = str[0..slash_idx];
+            const den_part = str[slash_idx + 1 ..];
+            if (std.fmt.parseInt(i64, num_part, 10) catch null) |n| {
+                if (std.fmt.parseInt(i64, den_part, 10) catch null) |d| {
+                    if (d == 0) return Value{ .boolean = false };
+                    const math_prim = @import("math.zig");
+                    return math_prim.normalizeRational(n, d, env.allocator) catch return Value{ .boolean = false };
+                }
+            }
+        }
+    }
+    // Try integer
+    if (std.fmt.parseInt(i64, str, 10) catch null) |i| {
+        return Value{ .exact_integer = i };
+    }
+    // Try float
     const num = std.fmt.parseFloat(f64, str) catch {
         return Value{ .boolean = false };
     };
-
     return Value{ .number = num };
 }
 
@@ -274,7 +332,7 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
 
     // Build a list of substrings
     var result: Value = Value.nil;
-    var temp_parts = std.ArrayListUnmanaged([]const u8){};
+    var temp_parts = std.ArrayListUnmanaged([]const u8).empty;
     defer temp_parts.deinit(env.allocator);
 
     var it = std.mem.splitSequence(u8, str, delim);
@@ -297,18 +355,28 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
     return result;
 }
 
+/// `string_from_chars` creates a string from one or more characters.
+/// Syntax: (string char ...)
+pub fn string_from_chars(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    var bytes = std.ArrayListUnmanaged(u8).empty;
+    defer bytes.deinit(env.allocator);
+    for (args.items) |arg| {
+        if (arg != .character) return ElzError.InvalidArgument;
+        const cp: u21 = @intCast(arg.character);
+        if (!std.unicode.utf8ValidCodepoint(cp)) return ElzError.InvalidArgument;
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
+        try bytes.appendSlice(env.allocator, buf[0..len]);
+    }
+    return Value{ .string = try bytes.toOwnedSlice(env.allocator) };
+}
+
 /// `make_string` creates a string of k characters.
 /// Syntax: (make-string k) or (make-string k char)
 pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
-    const k_val = args.items[0];
-    if (k_val != .number) return ElzError.InvalidArgument;
-
-    const k = k_val.number;
-    if (k < 0 or @floor(k) != k) return ElzError.InvalidArgument;
-
-    const length: usize = @intFromFloat(k);
+    const length = try toIndex(args.items[0]);
 
     if (args.items.len == 2) {
         const char_val = args.items[1];
@@ -417,26 +485,26 @@ test "string primitives" {
 
     // Test symbol->string
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value{ .symbol = "foo" });
+    try args.append(Value{ .symbol = "foo" });
     var result = try symbol_to_string(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .string = "foo" });
+    try testing.expect(result == .string and std.mem.eql(u8, result.string, "foo"));
 
     // Test string->symbol
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .string = "bar" });
+    try args.append(Value{ .string = "bar" });
     result = try string_to_symbol(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .symbol = "bar" });
+    try testing.expect(result == .symbol and std.mem.eql(u8, result.symbol, "bar"));
 
     // Test string-length
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .string = "hello" });
+    try args.append(Value{ .string = "hello" });
     result = try string_length(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .number = 5 });
+    try testing.expect(result == .exact_integer and result.exact_integer == 5);
 
     // Test char=?
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .character = 'a' });
-    try args.append(interp.allocator, Value{ .character = 'a' });
+    try args.append(Value{ .character = 'a' });
+    try args.append(Value{ .character = 'a' });
     result = try char_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 }

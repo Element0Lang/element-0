@@ -1,7 +1,36 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("../core.zig");
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
+
+// 100-nanosecond intervals from 1601-01-01 (Windows FILETIME epoch) to 1970-01-01 (Unix epoch).
+const filetime_unix_offset: i64 = 116444736000000000;
+
+fn currentTimeMs() i64 {
+    if (comptime builtin.os.tag == .windows) {
+        const filetime = std.os.windows.ntdll.RtlGetSystemTimePrecise();
+        return @divFloor(filetime - filetime_unix_offset, 10_000);
+    } else {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
+    }
+}
+
+fn sleepNs(ns: u64) void {
+    if (comptime builtin.os.tag == .windows) {
+        // NtDelayExecution uses 100-ns intervals; negative value means relative delay.
+        const delay: std.os.windows.LARGE_INTEGER = -@as(i64, @intCast((ns + 99) / 100));
+        _ = std.os.windows.ntdll.NtDelayExecution(.FALSE, &delay);
+    } else {
+        const req: std.c.timespec = .{
+            .sec = @intCast(ns / 1_000_000_000),
+            .nsec = @intCast(ns % 1_000_000_000),
+        };
+        _ = std.c.nanosleep(&req, null);
+    }
+}
 
 /// `current_time` returns the current Unix timestamp in seconds.
 /// Syntax: (current-time)
@@ -9,8 +38,7 @@ const interpreter = @import("../interpreter.zig");
 pub fn current_time(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
 
-    const timestamp = std.time.timestamp();
-    return core.Value{ .number = @floatFromInt(timestamp) };
+    return core.Value{ .number = @floatFromInt(@divFloor(currentTimeMs(), 1000)) };
 }
 
 /// `current_time_ms` returns the current time in milliseconds since epoch.
@@ -19,9 +47,7 @@ pub fn current_time(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 pub fn current_time_ms(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
 
-    const timestamp_ns = std.time.nanoTimestamp();
-    const timestamp_ms = @divFloor(timestamp_ns, 1_000_000);
-    return core.Value{ .number = @floatFromInt(timestamp_ms) };
+    return core.Value{ .number = @floatFromInt(currentTimeMs()) };
 }
 
 /// `time_to_components` converts a Unix timestamp to date/time components.
@@ -86,7 +112,7 @@ pub fn sleep_ms(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
     if (ms < 0 or @floor(ms) != ms) return ElzError.InvalidArgument;
 
     const ns: u64 = @intFromFloat(ms * 1_000_000);
-    std.Thread.sleep(ns);
+    sleepNs(ns);
 
     return core.Value.unspecified;
 }
@@ -117,6 +143,37 @@ test "current_time_ms returns number" {
     try testing.expect(result.number > 1577836800000); // 2020-01-01 in ms
 }
 
+test "sleep_ms accepts zero" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = 0 });
+
+    const result = try sleep_ms(&interp, interp.root_env, args, undefined);
+    try std.testing.expect(result == .unspecified);
+}
+
+test "sleep_ms rejects negative milliseconds" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = -1 });
+
+    try std.testing.expectError(ElzError.InvalidArgument, sleep_ms(&interp, interp.root_env, args, undefined));
+}
+
+test "sleep_ms rejects fractional milliseconds" {
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(core.Value{ .number = 1.5 });
+
+    try std.testing.expectError(ElzError.InvalidArgument, sleep_ms(&interp, interp.root_env, args, undefined));
+}
+
 test "time_to_components returns list" {
     const testing = std.testing;
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
@@ -125,7 +182,7 @@ test "time_to_components returns list" {
     // Test with a known timestamp: 2024-01-15 12:30:45 UTC
     // Unix timestamp for this is approximately 1705321845
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = 1705321845 });
+    try args.append(core.Value{ .number = 1705321845 });
 
     const result = try time_to_components(&interp, interp.root_env, args, undefined);
 

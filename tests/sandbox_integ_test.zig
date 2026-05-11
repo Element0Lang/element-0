@@ -35,8 +35,8 @@ test "time limit does not trigger for fast operations" {
 
     var fuel: u64 = 100000;
     const result = try interp.evalString("(+ 1 2 3)", &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 6), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 6), result.exact_integer);
 }
 
 test "no time limit by default" {
@@ -48,6 +48,6 @@ test "no time limit by default" {
 
     var fuel: u64 = 10000;
     const result = try interp.evalString("(* 6 7)", &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 42), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), result.exact_integer);
 }

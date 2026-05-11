@@ -29,8 +29,8 @@ test "interpreter initializes with all features disabled" {
     // Basic evaluation should still work
     var fuel: u64 = 1000;
     const result = try interp.evalString("42", &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 42), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), result.exact_integer);
 }
 
 test "math disabled prevents arithmetic" {
@@ -51,8 +51,8 @@ test "evalString handles multiple expressions" {
 
     var fuel: u64 = 10000;
     const result = try interp.evalString("(define x 10) (define y 20) (+ x y)", &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 30), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 30), result.exact_integer);
 }
 
 test "evalString with lambda and closure" {
@@ -66,8 +66,8 @@ test "evalString with lambda and closure" {
         \\(define add5 (make-adder 5))
         \\(add5 10)
     , &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 15), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 15), result.exact_integer);
 }
 
 test "evalString with recursive function" {
@@ -81,8 +81,8 @@ test "evalString with recursive function" {
         \\      (* n (factorial (- n 1)))))
         \\(factorial 10)
     , &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 3628800), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 3628800), result.exact_integer);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,8 +140,8 @@ test "list operations" {
 
     var fuel: u64 = 10000;
     const result = try interp.evalString("(length '(1 2 3 4 5))", &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 5), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 5), result.exact_integer);
 }
 
 test "boolean operations" {
@@ -169,8 +169,8 @@ test "vector operations" {
         \\(define v (vector 10 20 30))
         \\(vector-ref v 1)
     , &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 20), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 20), result.exact_integer);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,8 +187,8 @@ test "stdlib functions available" {
     const result = try interp.evalString(
         \\(length (filter even? '(1 2 3 4 5 6)))
     , &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 3), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 3), result.exact_integer);
 }
 
 test "fold-left from stdlib" {
@@ -199,8 +199,8 @@ test "fold-left from stdlib" {
     const result = try interp.evalString(
         \\(fold-left + 0 '(1 2 3 4 5))
     , &fuel);
-    try testing.expect(result == .number);
-    try testing.expectEqual(@as(f64, 15), result.number);
+    try testing.expect(result == .exact_integer);
+    try testing.expectEqual(@as(i64, 15), result.exact_integer);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,8 +235,8 @@ test "quasiquote and unquote" {
     try testing.expect(result == .pair);
     try testing.expect(result.pair.car.is_symbol("a"));
     const second = result.pair.cdr.pair;
-    try testing.expect(second.car == .number);
-    try testing.expectEqual(@as(f64, 42), second.car.number);
+    try testing.expect(second.car == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), second.car.exact_integer);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ test "write produces valid output" {
     const value = try interp.evalString("'(1 2 3)", &fuel);
 
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try elz.write(value, fbs.writer());
-    try testing.expectEqualStrings("(1 2 3)", fbs.getWritten());
+    var w: std.Io.Writer = .fixed(&buf);
+    try elz.write(value, &w);
+    try testing.expectEqualStrings("(1 2 3)", w.buffered());
 }

@@ -51,6 +51,14 @@ pub fn populate_math(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "zero?", core.Value{ .procedure = math.zero_p });
     try interp.root_env.set(interp, "positive?", core.Value{ .procedure = math.positive_p });
     try interp.root_env.set(interp, "negative?", core.Value{ .procedure = math.negative_p });
+    try interp.root_env.set(interp, "abs", core.Value{ .procedure = math.abs_fn });
+    try interp.root_env.set(interp, "exact->inexact", core.Value{ .procedure = math.exact_to_inexact });
+    try interp.root_env.set(interp, "inexact->exact", core.Value{ .procedure = math.inexact_to_exact });
+    try interp.root_env.set(interp, "quotient", core.Value{ .procedure = math.quotient });
+    try interp.root_env.set(interp, "remainder", core.Value{ .procedure = math.remainder });
+    try interp.root_env.set(interp, "modulo", core.Value{ .procedure = math.modulo });
+    try interp.root_env.set(interp, "gcd", core.Value{ .procedure = math.gcd_fn });
+    try interp.root_env.set(interp, "lcm", core.Value{ .procedure = math.lcm_fn });
 }
 
 /// Populates the interpreter's root environment with list manipulation primitive functions.
@@ -93,6 +101,11 @@ pub fn populate_predicates(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "equal?", core.Value{ .procedure = predicates.is_equal });
     try interp.root_env.set(interp, "char?", core.Value{ .procedure = predicates.is_char });
     try interp.root_env.set(interp, "integer?", core.Value{ .procedure = predicates.is_integer });
+    try interp.root_env.set(interp, "exact?", core.Value{ .procedure = predicates.exact_p });
+    try interp.root_env.set(interp, "inexact?", core.Value{ .procedure = predicates.inexact_p });
+    try interp.root_env.set(interp, "rational?", core.Value{ .procedure = predicates.rational_p });
+    try interp.root_env.set(interp, "real?", core.Value{ .procedure = predicates.real_p });
+    try interp.root_env.set(interp, "complex?", core.Value{ .procedure = predicates.complex_p });
     try interp.root_env.set(interp, "not", core.Value{ .procedure = predicates.logical_not });
 }
 
@@ -124,6 +137,7 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "string<=?", core.Value{ .procedure = strings.string_le });
     try interp.root_env.set(interp, "string>=?", core.Value{ .procedure = strings.string_ge });
     try interp.root_env.set(interp, "gensym", core.Value{ .procedure = strings.gensym });
+    try interp.root_env.set(interp, "string", core.Value{ .procedure = strings.string_from_chars });
 }
 
 /// Populates the interpreter's root environment with control-related primitive functions.
@@ -135,6 +149,12 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "eval", core.Value{ .procedure = control.eval_proc });
     try interp.root_env.set(interp, "call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
     try interp.root_env.set(interp, "call/ec", core.Value{ .procedure = control.call_with_escape_continuation });
+    try interp.root_env.set(interp, "call-with-current-continuation", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
+    try interp.root_env.set(interp, "call/cc", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
+    try interp.root_env.set(interp, "dynamic-wind", core.Value{ .cont_aware_procedure = control.dynamic_wind });
+    try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
+    try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
+    try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
 }
 
 /// Populates the interpreter's root environment with I/O primitive functions.
@@ -273,6 +293,11 @@ pub fn populate_ports(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "output-port?", core.Value{ .procedure = ports.is_output_port });
     try interp.root_env.set(interp, "port?", core.Value{ .procedure = ports.is_port });
     try interp.root_env.set(interp, "eof-object?", core.Value{ .procedure = ports.eof_object_p });
+    try interp.root_env.set(interp, "write-char", core.Value{ .procedure = ports.write_char });
+    try interp.root_env.set(interp, "current-input-port", core.Value{ .procedure = ports.current_input_port });
+    try interp.root_env.set(interp, "current-output-port", core.Value{ .procedure = ports.current_output_port });
+    try interp.root_env.set(interp, "peek-char", core.Value{ .procedure = ports.peek_char });
+    try interp.root_env.set(interp, "char-ready?", core.Value{ .procedure = ports.char_ready_p });
 }
 
 /// Defines a foreign function in the given environment.

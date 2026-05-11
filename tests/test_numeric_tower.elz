@@ -1,0 +1,89 @@
+;;; ---------------------------------------
+;;; Element 0 Numeric Tower Test Suite
+;;; ---------------------------------------
+
+(display "Running Element 0 numeric tower tests...")
+(newline)
+
+(define *tests-run* 0)
+(define *tests-failed* 0)
+
+(define (test-case name test-expr)
+  (set! *tests-run* (+ *tests-run* 1))
+  (if (not (try test-expr (catch err #f)))
+      (begin
+        (set! *tests-failed* (+ *tests-failed* 1))
+        (display "[FAILED]: ") (display name) (newline))
+      (begin
+        (display "[PASSED]: ") (display name) (newline))))
+
+;; --- Predicates ---
+(test-case "number? on int" (number? 3))
+(test-case "number? on rational" (number? 1/2))
+(test-case "number? on float" (number? 3.0))
+(test-case "exact? on int" (exact? 3))
+(test-case "exact? on rational" (exact? 1/3))
+(test-case "inexact? on float" (inexact? 3.0))
+(test-case "integer? on int" (integer? 3))
+(test-case "integer? on float-integer" (integer? 3.0))
+(test-case "rational? on int" (rational? 3))
+(test-case "rational? on rational" (rational? 2/3))
+(test-case "real? on float" (real? 3.14))
+(test-case "not number? on bool" (not (number? #t)))
+
+;; --- Arithmetic ---
+(test-case "1 + 2 = 3 exact" (= (+ 1 2) 3))
+(test-case "exact - exact = exact" (= (- 5 2) 3))
+(test-case "exact * exact = exact" (= (* 3 4) 12))
+(test-case "1/3 is rational" (rational? (/ 1 3)))
+(test-case "1/3 + 1/3 = 2/3" (= (+ 1/3 1/3) 2/3))
+(test-case "1/2 + 1/2 = 1" (= (+ 1/2 1/2) 1))
+(test-case "exact + inexact -> inexact" (inexact? (+ 1 1.0)))
+(test-case "mixed 1 + 1.0 = 2.0" (= (+ 1 1.0) 2.0))
+
+;; --- Parser prefixes ---
+(test-case "#e3.0 is exact" (exact? #e3.0))
+(test-case "#i3 is inexact" (inexact? #i3))
+(test-case "#i3 == 3.0" (= #i3 3.0))
+
+;; --- Rational normalization ---
+(test-case "2/4 -> 1/2" (= 2/4 1/2))
+(test-case "negative denom normalized" (= (/ 1 -2) -1/2))
+
+;; --- Conversion ---
+(test-case "exact->inexact 1/2 = 0.5" (= (exact->inexact 1/2) 0.5))
+(test-case "inexact->exact 3.0 = 3" (= (inexact->exact 3.0) 3))
+(test-case "inexact->exact 3.0 is exact" (exact? (inexact->exact 3.0)))
+
+;; --- Floor/ceil/round on rational ---
+(test-case "floor 7/2 = 3" (= (floor 7/2) 3))
+(test-case "ceiling 7/2 = 4" (= (ceiling 7/2) 4))
+(test-case "truncate -7/2 = -3" (= (truncate -7/2) -3))
+
+;; --- gcd/lcm/quotient/remainder ---
+(test-case "gcd 12 18 = 6" (= (gcd 12 18) 6))
+(test-case "lcm 4 6 = 12" (= (lcm 4 6) 12))
+(test-case "quotient 7 2 = 3" (= (quotient 7 2) 3))
+(test-case "remainder 7 2 = 1" (= (remainder 7 2) 1))
+(test-case "modulo -7 2 = 1" (= (modulo -7 2) 1))
+
+;; --- sqrt of perfect square is exact ---
+(test-case "sqrt 16 is exact 4" (and (exact? (sqrt 16)) (= (sqrt 16) 4)))
+(test-case "sqrt 2 is inexact" (inexact? (sqrt 2)))
+
+;; --- abs ---
+(test-case "abs -3 = 3" (= (abs -3) 3))
+(test-case "abs -3/4 = 3/4" (= (abs -3/4) 3/4))
+
+;; --- Summary ---
+(newline)
+(display "--------------------") (newline)
+(display "Tests Finished.") (newline)
+(display "Total run: ") (display *tests-run*) (newline)
+(display "Passed: ") (display (- *tests-run* *tests-failed*)) (newline)
+(display "Failed: ") (display *tests-failed*) (newline)
+(newline)
+(if (> *tests-failed* 0)
+    (display "RESULT: FAILED")
+    (display "RESULT: PASSED"))
+(newline)

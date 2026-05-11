@@ -5,19 +5,26 @@ const Vector = core.Vector;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
+/// Converts a numeric `Value` to a non-negative `usize` index.
+/// Accepts `.exact_integer` (>= 0) and `.number` (non-negative integer-valued).
+fn toIndex(v: Value) ElzError!usize {
+    return switch (v) {
+        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .number => |n| blk: {
+            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            break :blk @intFromFloat(n);
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
 /// `make_vector` creates a new vector of a given length, optionally filled with a value.
 /// Syntax: (make-vector k) or (make-vector k fill)
 pub fn make_vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
-    const k_val = args.items[0];
-    if (k_val != .number) return ElzError.InvalidArgument;
-
-    const k = k_val.number;
-    if (k < 0 or @floor(k) != k) return ElzError.InvalidArgument;
-
-    const length: usize = @intFromFloat(k);
-    const fill: Value = if (args.items.len == 2) args.items[1] else Value{ .number = 0 };
+    const length = try toIndex(args.items[0]);
+    const fill: Value = if (args.items.len == 2) args.items[1] else Value{ .exact_integer = 0 };
 
     const vec = try env.allocator.create(Vector);
     const items = try env.allocator.alloc(Value, length);
@@ -52,7 +59,7 @@ pub fn vector_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
 
-    return Value{ .number = @floatFromInt(vec_val.vector.items.len) };
+    return Value{ .exact_integer = @intCast(vec_val.vector.items.len) };
 }
 
 /// `vector_ref` returns the element at a given index in a vector.
@@ -61,19 +68,10 @@ pub fn vector_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
-    const idx_val = args.items[1];
-
     if (vec_val != .vector) return ElzError.InvalidArgument;
-    if (idx_val != .number) return ElzError.InvalidArgument;
-
-    const idx = idx_val.number;
-    if (idx < 0 or @floor(idx) != idx) return ElzError.InvalidArgument;
-
-    const index: usize = @intFromFloat(idx);
+    const index = try toIndex(args.items[1]);
     const vec = vec_val.vector;
-
     if (index >= vec.items.len) return ElzError.InvalidArgument;
-
     return vec.items[index];
 }
 
@@ -83,18 +81,11 @@ pub fn vector_set(_: *interpreter.Interpreter, env: *core.Environment, args: cor
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
-    const idx_val = args.items[1];
     const obj = args.items[2];
 
     if (vec_val != .vector) return ElzError.InvalidArgument;
-    if (idx_val != .number) return ElzError.InvalidArgument;
-
-    const idx = idx_val.number;
-    if (idx < 0 or @floor(idx) != idx) return ElzError.InvalidArgument;
-
-    const index: usize = @intFromFloat(idx);
+    const index = try toIndex(args.items[1]);
     const vec = vec_val.vector;
-
     if (index >= vec.items.len) return ElzError.InvalidArgument;
 
     vec.items[index] = try obj.deep_clone(env.allocator);
@@ -171,17 +162,17 @@ test "vector primitives" {
 
     // Test make-vector
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value{ .number = 3 });
-    try args.append(interp.allocator, Value{ .number = 42 });
+    try args.append(Value{ .exact_integer = 3 });
+    try args.append(Value{ .exact_integer = 42 });
     const result = try make_vector(&interp, interp.root_env, args, &fuel);
     try std.testing.expect(result == .vector);
     try std.testing.expectEqual(@as(usize, 3), result.vector.items.len);
-    try std.testing.expectEqual(@as(f64, 42), result.vector.items[0].number);
+    try std.testing.expectEqual(@as(i64, 42), result.vector.items[0].exact_integer);
 
     // Test vector-length
     args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, result);
+    try args.append(result);
     const len_result = try vector_length(&interp, interp.root_env, args, &fuel);
-    try std.testing.expect(len_result == .number);
-    try std.testing.expectEqual(@as(f64, 3), len_result.number);
+    try std.testing.expect(len_result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 3), len_result.exact_integer);
 }

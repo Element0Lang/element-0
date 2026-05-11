@@ -60,4 +60,6 @@ pub const ElzError = error{
     TimeLimitExceeded,
     /// An escape continuation was invoked (internal, caught by call/ec).
     EscapeContinuationInvoked,
+    /// An arithmetic operation overflowed.
+    Overflow,
 };

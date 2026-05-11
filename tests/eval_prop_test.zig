@@ -33,8 +33,8 @@ test "property: addition is commutative" {
                 const r1 = interp.evalString(expr1, &fuel1) catch return;
                 const r2 = interp.evalString(expr2, &fuel2) catch return;
 
-                if (r1 != .number or r2 != .number) return error.TestUnexpectedResult;
-                if (r1.number != r2.number) return error.TestUnexpectedResult;
+                if (r1 != .exact_integer or r2 != .exact_integer) return error.TestUnexpectedResult;
+                if (r1.exact_integer != r2.exact_integer) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 100 },
@@ -71,8 +71,8 @@ test "property: multiplication is commutative" {
                 const r1 = interp.evalString(expr1, &fuel1) catch return;
                 const r2 = interp.evalString(expr2, &fuel2) catch return;
 
-                if (r1 != .number or r2 != .number) return error.TestUnexpectedResult;
-                if (r1.number != r2.number) return error.TestUnexpectedResult;
+                if (r1 != .exact_integer or r2 != .exact_integer) return error.TestUnexpectedResult;
+                if (r1.exact_integer != r2.exact_integer) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 100 },
@@ -100,8 +100,8 @@ test "property: number literals are self-evaluating" {
                 var fuel: u64 = 1000;
                 const result = interp.evalString(expr, &fuel) catch return;
 
-                if (result != .number) return error.TestUnexpectedResult;
-                if (result.number != @as(f64, @floatFromInt(n))) return error.TestUnexpectedResult;
+                if (result != .exact_integer) return error.TestUnexpectedResult;
+                if (result.exact_integer != @as(i64, n)) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 200 },
@@ -134,9 +134,8 @@ test "property: addition and subtraction are inverse" {
                 var fuel: u64 = 1000;
                 const result = interp.evalString(expr, &fuel) catch return;
 
-                if (result != .number) return error.TestUnexpectedResult;
-                const expected: f64 = @floatFromInt(a);
-                if (@abs(result.number - expected) > 1e-10) return error.TestUnexpectedResult;
+                if (result != .exact_integer) return error.TestUnexpectedResult;
+                if (result.exact_integer != @as(i64, a)) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 100 },
@@ -168,8 +167,8 @@ test "property: eval is deterministic" {
                 const r1 = interp1.evalString(expr, &fuel1) catch return;
                 const r2 = interp2.evalString(expr, &fuel2) catch return;
 
-                if (r1 != .number or r2 != .number) return error.TestUnexpectedResult;
-                if (r1.number != r2.number) return error.TestUnexpectedResult;
+                if (r1 != .exact_integer or r2 != .exact_integer) return error.TestUnexpectedResult;
+                if (r1.exact_integer != r2.exact_integer) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 100 },

@@ -24,9 +24,16 @@ test "property: JSON number roundtrip" {
                 var fuel: u64 = 10000;
                 const result = interp.evalString(expr, &fuel) catch return;
 
-                if (result != .number) return error.TestUnexpectedResult;
-                const expected: f64 = @floatFromInt(n);
-                if (result.number != expected) return error.TestUnexpectedResult;
+                switch (result) {
+                    .exact_integer => |i| {
+                        if (i != @as(i64, n)) return error.TestUnexpectedResult;
+                    },
+                    .number => |f| {
+                        const expected: f64 = @floatFromInt(n);
+                        if (f != expected) return error.TestUnexpectedResult;
+                    },
+                    else => return error.TestUnexpectedResult,
+                }
             }
         }.property,
         .{ .num_runs = 100 },

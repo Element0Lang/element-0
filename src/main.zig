@@ -35,8 +35,8 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
         var fuel: u64 = 1_000_000;
         last_result = elz.eval.eval(interpreter, &form, interpreter.root_env, &fuel) catch |err| {
             var buffer: [4096]u8 = undefined;
-            const stdout_file = std.fs.File.stdout();
-            var stdout_writer = stdout_file.writer(&buffer);
+            const stdout_file = std.Io.File.stdout();
+            var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
             const stdout = &stdout_writer.interface;
             try stdout.writeAll("--- Runtime Error ---\n");
             if (interpreter.last_error_message) |msg| {
@@ -53,8 +53,8 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
     }
 
     var buffer: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_writer = stdout_file.writer(&buffer);
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
     const stdout = &stdout_writer.interface;
     if (last_result != .unspecified) {
         try displayValue(interpreter, last_result, stdout);
@@ -92,8 +92,8 @@ fn repl(interpreter: *elz.Interpreter) !void {
             eval_line: {
                 var forms = elz.parser.readAll(line_slice, interpreter.allocator) catch |err| {
                     var buffer: [4096]u8 = undefined;
-                    const stdout_file = std.fs.File.stdout();
-                    var stdout_writer = stdout_file.writer(&buffer);
+                    const stdout_file = std.Io.File.stdout();
+                    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
                     const stdout = &stdout_writer.interface;
                     try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
                     try stdout.flush();
@@ -108,8 +108,8 @@ fn repl(interpreter: *elz.Interpreter) !void {
                     var fuel: u64 = 1_000_000;
                     last_result = elz.eval.eval(interpreter, &form, interpreter.root_env, &fuel) catch |err| {
                         var buffer: [4096]u8 = undefined;
-                        const stdout_file = std.fs.File.stdout();
-                        var stdout_writer = stdout_file.writer(&buffer);
+                        const stdout_file = std.Io.File.stdout();
+                        var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
                         const stdout = &stdout_writer.interface;
                         if (interpreter.last_error_message) |msg| {
                             try stdout.print("Error: {s}\n", .{msg});
@@ -121,8 +121,8 @@ fn repl(interpreter: *elz.Interpreter) !void {
                     };
                 }
                 var buffer: [4096]u8 = undefined;
-                const stdout_file = std.fs.File.stdout();
-                var stdout_writer = stdout_file.writer(&buffer);
+                const stdout_file = std.Io.File.stdout();
+                var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
                 const stdout = &stdout_writer.interface;
                 if (last_result != .unspecified) {
                     try displayValue(interpreter, last_result, stdout);
@@ -133,8 +133,8 @@ fn repl(interpreter: *elz.Interpreter) !void {
     } else {
         // Windows: REPL not supported, use file execution mode with -f flag
         var buffer: [4096]u8 = undefined;
-        const stdout_file = std.fs.File.stdout();
-        var stdout_writer = stdout_file.writer(&buffer);
+        const stdout_file = std.Io.File.stdout();
+        var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
         const stdout = &stdout_writer.interface;
         try stdout.writeAll("REPL mode is not available on Windows.\n");
         try stdout.writeAll("Please use file execution mode: elz-repl -f <filepath>\n");
@@ -157,17 +157,11 @@ fn rootExec(ctx: chilli.CommandContext) !void {
                 std.debug.print("[VERBOSE] Opening file: {s}\n", .{filename});
             }
 
-            const file = std.fs.cwd().openFile(filename, .{}) catch |err| {
-                std.debug.print("Error: Failed to open file '{s}': {s}\n", .{ filename, @errorName(err) });
-                return err;
-            };
-            defer file.close();
-
             if (verbose) {
                 std.debug.print("[VERBOSE] Reading file contents...\n", .{});
             }
 
-            const source = file.readToEndAlloc(interpreter.allocator, 1024 * 1024) catch |err| {
+            const source = std.Io.Dir.cwd().readFileAlloc(interpreter.io, filename, interpreter.allocator, .limited(1024 * 1024)) catch |err| {
                 std.debug.print("Error: Failed to read file '{s}': {s}\n", .{ filename, @errorName(err) });
                 return err;
             };
@@ -192,12 +186,12 @@ fn rootExec(ctx: chilli.CommandContext) !void {
 /// The main entry point for the `elz` executable.
 /// This function initializes the interpreter and the command-line interface.
 /// It can either start a REPL or execute a source file, based on the command-line arguments.
-pub fn main() anyerror!void {
+pub fn main(init: std.process.Init.Minimal) anyerror!void {
     const interpreter_ptr = try elz.gc.allocator.create(elz.Interpreter);
     interpreter_ptr.* = try elz.Interpreter.init(.{});
     elz.gc.add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var root_cmd = try chilli.Command.init(gpa.allocator(), .{
@@ -224,5 +218,5 @@ pub fn main() anyerror!void {
         .default_value = .{ .Bool = false },
     });
 
-    try root_cmd.run(interpreter_ptr);
+    try root_cmd.run(init.args, interpreter_ptr);
 }

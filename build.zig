@@ -1,9 +1,10 @@
 const std = @import("std");
-const fs = std.fs;
+const Io = std.Io;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const io = b.graph.io;
 
     // --- GC dependency ---
     const gc_module = b.createModule(.{
@@ -16,8 +17,8 @@ pub fn build(b: *std.Build) void {
         .root_module = gc_module,
     });
     {
-        var cflags: std.ArrayListUnmanaged([]const u8) = .{};
-        var src_files: std.ArrayListUnmanaged([]const u8) = .{};
+        var cflags: std.ArrayListUnmanaged([]const u8) = .empty;
+        var src_files: std.ArrayListUnmanaged([]const u8) = .empty;
         defer cflags.deinit(b.allocator);
         defer src_files.deinit(b.allocator);
 
@@ -47,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .windows => {
                 cflags.append(b.allocator, "-D_WIN32") catch unreachable;
                 src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
-                gc.linkSystemLibrary("user32");
+                gc_module.linkSystemLibrary("user32", .{});
             },
             .macos => {
                 // Required flags for POSIX/Darwin threading
@@ -60,12 +61,12 @@ pub fn build(b: *std.Build) void {
             },
         }
 
-        gc.linkLibC();
+        gc_module.linkSystemLibrary("c", .{});
         // Use bdwgc from Zig dependencies
         const bdwgc_dep = b.dependency("bdwgc", .{});
-        gc.addIncludePath(bdwgc_dep.path("include"));
+        gc_module.addIncludePath(bdwgc_dep.path("include"));
         for (src_files.items) |src| {
-            gc.addCSourceFile(.{ .file = bdwgc_dep.path(src), .flags = cflags.items });
+            gc_module.addCSourceFile(.{ .file = bdwgc_dep.path(src), .flags = cflags.items });
         }
     }
 
@@ -84,9 +85,9 @@ pub fn build(b: *std.Build) void {
     });
     // Use bdwgc from Zig dependencies
     const bdwgc_dep_lib = b.dependency("bdwgc", .{});
-    lib.addIncludePath(bdwgc_dep_lib.path("include"));
-    lib.linkLibrary(gc);
-    lib.linkSystemLibrary("c");
+    lib_module.addIncludePath(bdwgc_dep_lib.path("include"));
+    lib_module.linkLibrary(gc);
+    lib_module.linkSystemLibrary("c", .{});
     b.installArtifact(lib);
 
     // Export the module so downstream projects can use it
@@ -112,10 +113,10 @@ pub fn build(b: *std.Build) void {
     // --- Linenoise dependency (for POSIX only) ---
     if (target.query.os_tag orelse .linux != .windows) {
         const linenoise_dep = b.dependency("linenoise", .{});
-        repl_exe.addIncludePath(linenoise_dep.path(""));
-        repl_exe.addCSourceFile(.{ .file = linenoise_dep.path("linenoise.c") });
+        repl_module.addIncludePath(linenoise_dep.path(""));
+        repl_module.addCSourceFile(.{ .file = linenoise_dep.path("linenoise.c") });
     }
-    repl_exe.linkSystemLibrary("c");
+    repl_module.linkSystemLibrary("c", .{});
 
     // Add dependency on 'chilli' library
     const chilli_dep = b.dependency("chilli", .{});
@@ -133,7 +134,8 @@ pub fn build(b: *std.Build) void {
     const doc_install_path = "docs/api";
 
     // Create docs directory if it doesn't exist
-    fs.cwd().makePath("docs") catch {};
+    const mkdir_docs_cmd = b.addSystemCommand(&.{ "mkdir", "-p", "docs" });
+    _ = mkdir_docs_cmd;
 
     const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
         b.graph.zig_exe,
@@ -155,8 +157,8 @@ pub fn build(b: *std.Build) void {
     });
     // Use bdwgc from Zig dependencies for tests
     const bdwgc_dep_test = b.dependency("bdwgc", .{});
-    lib_unit_tests.addIncludePath(bdwgc_dep_test.path("include"));
-    lib_unit_tests.linkLibrary(gc);
+    test_module.addIncludePath(bdwgc_dep_test.path("include"));
+    test_module.linkLibrary(gc);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     const test_step = b.step("test", "Run unit tests");
@@ -169,16 +171,14 @@ pub fn build(b: *std.Build) void {
 
     {
         const tests_path = "tests";
-        var tests_dir = fs.cwd().openDir(tests_path, .{ .iterate = true }) catch |err| {
-            if (err == error.FileNotFound) {
-                @panic("Can't open 'tests' directory");
-            }
+        var tests_dir = Io.Dir.cwd().openDir(io, tests_path, .{ .iterate = true }) catch |err| {
+            std.debug.print("Can't open 'tests' directory: {s}\n", .{@errorName(err)});
             @panic("Can't open 'tests' directory");
         };
-        defer tests_dir.close();
+        defer tests_dir.close(io);
 
         var test_iter = tests_dir.iterate();
-        while (test_iter.next() catch @panic("Failed to iterate tests")) |entry| {
+        while (test_iter.next(io) catch @panic("Failed to iterate tests")) |entry| {
             if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
 
             const is_prop_test = std.mem.endsWith(u8, entry.name, "_prop_test.zig");
@@ -201,8 +201,8 @@ pub fn build(b: *std.Build) void {
 
             const t = b.addTest(.{ .root_module = t_module });
             const bdwgc_dep_t = b.dependency("bdwgc", .{});
-            t.addIncludePath(bdwgc_dep_t.path("include"));
-            t.linkLibrary(gc);
+            t_module.addIncludePath(bdwgc_dep_t.path("include"));
+            t_module.linkLibrary(gc);
 
             const run_t = b.addRunArtifact(t);
             if (is_prop_test) {
@@ -215,17 +215,18 @@ pub fn build(b: *std.Build) void {
 
     // --- Example Setup ---
     const examples_path = "examples/zig";
-    var examples_dir = fs.cwd().openDir(examples_path, .{ .iterate = true }) catch |err| {
+    var examples_dir = Io.Dir.cwd().openDir(io, examples_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return;
+        std.debug.print("Can't open 'examples/zig' directory: {s}\n", .{@errorName(err)});
         @panic("Can't open 'examples/zig' directory");
     };
-    defer examples_dir.close();
+    defer examples_dir.close(io);
 
     var dir_iter = examples_dir.iterate();
-    while (dir_iter.next() catch @panic("Failed to iterate examples")) |entry| {
+    while (dir_iter.next(io) catch @panic("Failed to iterate examples")) |entry| {
         if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
 
-        const exe_name = fs.path.stem(entry.name);
+        const exe_name = std.fs.path.stem(entry.name);
         const exe_path = b.fmt("{s}/{s}", .{ examples_path, entry.name });
 
         const exe_module = b.createModule(.{
@@ -239,7 +240,7 @@ pub fn build(b: *std.Build) void {
             .name = exe_name,
             .root_module = exe_module,
         });
-        exe.linkSystemLibrary("c");
+        exe_module.linkSystemLibrary("c", .{});
         b.installArtifact(exe);
 
         const run_cmd = b.addRunArtifact(exe);
@@ -253,16 +254,14 @@ pub fn build(b: *std.Build) void {
     const test_elz_step = b.step("test-elz", "Run the Element 0 language tests");
     {
         const tests_path = "tests";
-        var tests_dir = fs.cwd().openDir(tests_path, .{ .iterate = true }) catch |err| {
-            if (err == error.FileNotFound) {
-                @panic("Can't open 'tests' directory");
-            }
+        var tests_dir = Io.Dir.cwd().openDir(io, tests_path, .{ .iterate = true }) catch |err| {
+            std.debug.print("Can't open 'tests' directory: {s}\n", .{@errorName(err)});
             @panic("Can't open 'tests' directory");
         };
-        defer tests_dir.close();
+        defer tests_dir.close(io);
 
         var test_iter = tests_dir.iterate();
-        while (test_iter.next() catch @panic("Failed to iterate tests")) |entry| {
+        while (test_iter.next(io) catch @panic("Failed to iterate tests")) |entry| {
             if (!std.mem.startsWith(u8, entry.name, "test_")) continue;
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
 

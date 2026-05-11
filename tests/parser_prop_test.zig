@@ -25,12 +25,9 @@ test "property: number parse-write roundtrip" {
                 const alloc = std.heap.page_allocator;
                 const value = elz.parser.read(formatted, alloc) catch return;
 
-                // Should be a number
-                if (value != .number) return error.TestUnexpectedResult;
-
-                // Value should match
-                const expected: f64 = @floatFromInt(n);
-                if (value.number != expected) return error.TestUnexpectedResult;
+                // Integer literals now parse as exact_integer
+                if (value != .exact_integer) return error.TestUnexpectedResult;
+                if (value.exact_integer != @as(i64, n)) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 200 },

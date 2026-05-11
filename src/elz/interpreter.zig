@@ -1,14 +1,30 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("./core.zig");
 const env_setup = @import("./env_setup.zig");
 const eval = @import("./eval.zig");
 const parser = @import("./parser.zig");
 const gc = @import("gc.zig");
 
-var gc_once = std.once(init_gc);
+var gc_initialized = std.atomic.Value(bool).init(false);
 
-fn init_gc() void {
-    gc.init();
+const filetime_unix_offset: i64 = 116444736000000000;
+
+pub fn currentTimeMs() i64 {
+    if (comptime builtin.os.tag == .windows) {
+        const filetime = std.os.windows.ntdll.RtlGetSystemTimePrecise();
+        return @divFloor(filetime - filetime_unix_offset, 10_000);
+    } else {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
+    }
+}
+
+fn ensureGcInitialized() void {
+    if (gc_initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
+        gc.init();
+    }
 }
 
 /// `SandboxFlags` is a struct that defines the features to be enabled in the Elz interpreter.
@@ -33,6 +49,8 @@ pub const SandboxFlags = struct {
 pub const Interpreter = struct {
     /// The memory allocator used by the interpreter.
     allocator: std.mem.Allocator,
+    /// The I/O implementation used for file operations, sleeping, etc.
+    io: std.Io,
     /// The root environment of the interpreter, containing the built-in functions and variables.
     root_env: *core.Environment,
     /// A message describing the last error that occurred, if any.
@@ -53,6 +71,12 @@ pub const Interpreter = struct {
     escape_id: u64 = 0,
     /// Counter for generating unique escape continuation IDs.
     escape_id_counter: u64 = 0,
+    /// The innermost active dynamic-wind frame (null when none).
+    winders: ?*core.Winder = null,
+    /// The current input port. Populated lazily on first reference.
+    stdin_port: ?*core.Port = null,
+    /// The current output port. Populated lazily on first reference.
+    stdout_port: ?*core.Port = null,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -65,11 +89,12 @@ pub const Interpreter = struct {
     /// Returns:
     /// An initialized `Interpreter` instance, or an error if initialization fails.
     pub fn init(flags: SandboxFlags) !Interpreter {
-        gc_once.call();
+        ensureGcInitialized();
         const allocator = gc.allocator;
 
         var self: Interpreter = .{
             .allocator = allocator,
+            .io = std.Io.Threaded.global_single_threaded.io(),
             .root_env = undefined,
             .last_error_message = null,
             .module_cache = std.StringHashMap(*core.Module).init(allocator),
@@ -146,7 +171,7 @@ pub const Interpreter = struct {
 
         // Set the eval start time for time-limited execution
         if (self.time_limit_ms != null) {
-            self.eval_start_ms = std.time.milliTimestamp();
+            self.eval_start_ms = currentTimeMs();
             self.time_check_counter = 0;
         }
 
@@ -164,6 +189,24 @@ pub const Interpreter = struct {
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
     }
+
+    /// Returns the lazily initialized port that wraps the host's standard input stream.
+    pub fn currentInputPort(self: *Interpreter) !*core.Port {
+        if (self.stdin_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdin(), true, "<stdin>");
+        self.stdin_port = port;
+        return port;
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard output stream.
+    pub fn currentOutputPort(self: *Interpreter) !*core.Port {
+        if (self.stdout_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
+        self.stdout_port = port;
+        return port;
+    }
 };
 
 test "interpreter init and basic eval" {
@@ -177,8 +220,8 @@ test "interpreter init and basic eval" {
     // Test basic arithmetic
     var fuel: u64 = 1000;
     const result = try interp.evalString("(+ 1 2 3)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 6), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 6), result.exact_integer);
 }
 
 test "interpreter evalString with multiple expressions" {
@@ -188,8 +231,8 @@ test "interpreter evalString with multiple expressions" {
     var fuel: u64 = 1000;
     // Last expression is returned
     const result = try interp.evalString("(define x 10) (+ x 5)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 15), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 15), result.exact_integer);
 }
 
 test "interpreter sandbox flags" {
@@ -209,6 +252,6 @@ test "interpreter eval lambda" {
 
     var fuel: u64 = 1000;
     const result = try interp.evalString("((lambda (x) (* x x)) 5)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 25), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 25), result.exact_integer);
 }

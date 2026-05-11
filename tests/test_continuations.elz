@@ -59,4 +59,48 @@
            '(1 2 3 4 5))))
      3))
 
+;; ============================================================================
+;; call/cc tests
+;; ============================================================================
+
+(test-case "call/cc basic escape"
+  (= (+ 1 (call/cc (lambda (k) (+ 2 (k 10))))) 11))
+
+(test-case "call/cc normal return"
+  (= (call/cc (lambda (k) 42)) 42))
+
+(test-case "call/cc with string"
+  (equal? (call/cc (lambda (k) (k "hello"))) "hello"))
+
+(test-case "call-with-current-continuation full name"
+  (= (call-with-current-continuation (lambda (k) (k 7))) 7))
+
+;; ============================================================================
+;; dynamic-wind tests
+;; ============================================================================
+
+(test-case "dynamic-wind basic"
+  (let ((log '()))
+    (dynamic-wind
+      (lambda () (set! log (cons 'before log)))
+      (lambda () (set! log (cons 'body log)))
+      (lambda () (set! log (cons 'after log))))
+    (equal? (reverse log) '(before body after))))
+
+(test-case "dynamic-wind returns thunk result"
+  (= (dynamic-wind
+       (lambda () 0)
+       (lambda () 42)
+       (lambda () 0))
+     42))
+
+(test-case "dynamic-wind with escape runs after"
+  (let ((log '()))
+    (call/cc (lambda (k)
+      (dynamic-wind
+        (lambda () (set! log (cons 'before log)))
+        (lambda () (set! log (cons 'body log)) (k 'done))
+        (lambda () (set! log (cons 'after log))))))
+    (equal? (reverse log) '(before body after))))
+
 (report-summary)

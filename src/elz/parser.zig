@@ -17,7 +17,7 @@ const ElzError = @import("errors.zig").ElzError;
 /// Returns:
 /// An `ArrayList` of tokens, or an error if tokenization fails.
 fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]const u8) {
-    var tokens = std.ArrayListUnmanaged([]const u8){};
+    var tokens = std.ArrayListUnmanaged([]const u8).empty;
     errdefer tokens.deinit(allocator);
     var i: usize = 0;
     while (i < source.len) {
@@ -29,9 +29,18 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                 }
             },
             ' ', '\t', '\r', '\n' => i += 1,
-            '(', ')', '\'' => {
+            '(', ')', '\'', '`' => {
                 try tokens.append(allocator, source[i .. i + 1]);
                 i += 1;
+            },
+            ',' => {
+                if (i + 1 < source.len and source[i + 1] == '@') {
+                    try tokens.append(allocator, source[i .. i + 2]);
+                    i += 2;
+                } else {
+                    try tokens.append(allocator, source[i .. i + 1]);
+                    i += 1;
+                }
             },
             '"' => {
                 var j = i + 1;
@@ -47,12 +56,21 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                 i = j + 1;
             },
             else => {
-                var j = i;
-                while (j < source.len and !std.ascii.isWhitespace(source[j]) and source[j] != '(' and source[j] != ')' and source[j] != '\'' and source[j] != ';') {
-                    j += 1;
+                // #( is the vector literal prefix — emit it as a two-character token.
+                if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
+                    try tokens.append(allocator, source[i .. i + 2]);
+                    i += 2;
+                } else {
+                    var j = i;
+                    while (j < source.len) {
+                        const c = source[j];
+                        if (std.ascii.isWhitespace(c)) break;
+                        if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"') break;
+                        j += 1;
+                    }
+                    try tokens.append(allocator, source[i..j]);
+                    i = j;
                 }
-                try tokens.append(allocator, source[i..j]);
-                i = j;
             },
         }
     }
@@ -74,17 +92,45 @@ const Parser = struct {
         if (self.position >= self.tokens.items.len) return ElzError.UnexpectedEndOfInput;
         const token = self.tokens.items[self.position];
         self.position += 1;
-        if (std.mem.eql(u8, token, "'")) {
+        // Quote and quasiquote-family shorthand: each wraps the next form in a one-arg
+        // application of the corresponding special form.
+        const wrapper_name: ?[]const u8 = if (std.mem.eql(u8, token, "'"))
+            "quote"
+        else if (std.mem.eql(u8, token, "`"))
+            "quasiquote"
+        else if (std.mem.eql(u8, token, ","))
+            "unquote"
+        else if (std.mem.eql(u8, token, ",@"))
+            "unquote-splicing"
+        else
+            null;
+        if (wrapper_name) |name| {
             const next_form = try self.parse_form();
-            const quote_symbol = Value{ .symbol = "quote" };
+            const sym = Value{ .symbol = name };
             const p1 = try self.allocator.create(core.Pair);
             p1.* = .{ .car = next_form, .cdr = Value.nil };
             const p2 = try self.allocator.create(core.Pair);
-            p2.* = .{ .car = quote_symbol, .cdr = Value{ .pair = p1 } };
+            p2.* = .{ .car = sym, .cdr = Value{ .pair = p1 } };
             return Value{ .pair = p2 };
         }
+        if (std.mem.eql(u8, token, "#(")) {
+            var items = std.ArrayListUnmanaged(Value).empty;
+            defer items.deinit(self.allocator);
+            while (true) {
+                if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
+                const next = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next, ")")) {
+                    self.position += 1;
+                    break;
+                }
+                try items.append(self.allocator, try self.parse_form());
+            }
+            const vec = try self.allocator.create(core.Vector);
+            vec.* = core.Vector{ .items = try items.toOwnedSlice(self.allocator) };
+            return Value{ .vector = vec };
+        }
         if (std.mem.eql(u8, token, "(")) {
-            var values = std.ArrayListUnmanaged(Value){};
+            var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
                 if (self.position >= self.tokens.items.len) {
@@ -140,7 +186,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
     if (std.mem.eql(u8, token, "#t")) return Value{ .boolean = true };
     if (std.mem.eql(u8, token, "#f")) return Value{ .boolean = false };
     if (token.len >= 2 and token[0] == '"' and token[token.len - 1] == '"') {
-        var unescaped = std.ArrayListUnmanaged(u8){};
+        var unescaped = std.ArrayListUnmanaged(u8).empty;
         defer unescaped.deinit(allocator);
         var i: usize = 1;
         while (i < token.len - 1) {
@@ -172,9 +218,70 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         if (char_name.len == 1) return Value{ .character = char_name[0] };
         return ElzError.InvalidCharacterLiteral;
     }
-    const num = std.fmt.parseFloat(f64, token) catch {
+    // Handle exactness prefix: #e (exact) or #i (inexact)
+    var rest = token;
+    var force_exact: ?bool = null;
+    if (token.len >= 2 and token[0] == '#') {
+        switch (token[1]) {
+            'e', 'E' => {
+                force_exact = true;
+                rest = token[2..];
+            },
+            'i', 'I' => {
+                force_exact = false;
+                rest = token[2..];
+            },
+            else => {},
+        }
+    }
+
+    // Try rational literal p/q
+    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+        const num_str = rest[0..slash];
+        const den_str = rest[slash + 1 ..];
+        const numer = std.fmt.parseInt(i64, num_str, 10) catch null;
+        const denom = std.fmt.parseInt(i64, den_str, 10) catch null;
+        if (numer != null and denom != null and denom.? != 0) {
+            const rational_val = try core.normalizeRational(numer.?, denom.?, allocator);
+            if (force_exact == false) {
+                const f = switch (rational_val) {
+                    .exact_integer => |n| @as(f64, @floatFromInt(n)),
+                    .rational => |r| r.toFloat(),
+                    else => unreachable,
+                };
+                return Value{ .number = f };
+            }
+            return rational_val;
+        }
+    }
+
+    // Try integer (no decimal point, no exponent)
+    const is_int = blk: {
+        var s = rest;
+        if (s.len > 0 and (s[0] == '+' or s[0] == '-')) s = s[1..];
+        if (s.len == 0) break :blk false;
+        for (s) |c| {
+            if (c < '0' or c > '9') break :blk false;
+        }
+        break :blk true;
+    };
+    if (is_int) {
+        const n = std.fmt.parseInt(i64, rest, 10) catch null;
+        if (n != null) {
+            if (force_exact == false) return Value{ .number = @floatFromInt(n.?) };
+            return Value{ .exact_integer = n.? };
+        }
+    }
+
+    const num = std.fmt.parseFloat(f64, rest) catch {
+        if (force_exact != null) return ElzError.InvalidArgument;
         return Value{ .symbol = try allocator.dupe(u8, token) };
     };
+    if (force_exact == true) {
+        const as_int = @as(i64, @intFromFloat(num));
+        if (@as(f64, @floatFromInt(as_int)) == num) return Value{ .exact_integer = as_int };
+        return ElzError.InvalidArgument;
+    }
     return Value{ .number = num };
 }
 
@@ -215,7 +322,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         return err;
     };
     defer tokens.deinit(allocator);
-    if (tokens.items.len == 0) return .{};
+    if (tokens.items.len == 0) return .empty;
 
     var parser = Parser{
         .tokens = tokens,
@@ -223,7 +330,7 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         .allocator = allocator,
     };
 
-    var forms = std.ArrayListUnmanaged(Value){};
+    var forms = std.ArrayListUnmanaged(Value).empty;
     while (parser.position < parser.tokens.items.len) {
         try forms.append(allocator, try parser.parse_form());
     }
@@ -231,12 +338,18 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
 }
 
 test "parser" {
-    const allocator = std.testing.allocator;
+    // The parser allocates symbol, string, and pair values from the supplied allocator
+    // and never owns their lifetime in production (the GC does). An arena lets the test
+    // free everything in one shot.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const testing = std.testing;
 
     // Test parsing a number
     var value = try read("42", allocator);
-    try testing.expect(value == Value{ .number = 42 });
+    try testing.expect(value == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), value.exact_integer);
 
     // Test parsing a symbol
     value = try read("foo", allocator);
@@ -244,40 +357,32 @@ test "parser" {
 
     // Test parsing a string
     value = try read("\"hello world\"", allocator);
-    try testing.expect(value == Value{ .string = "hello world" });
+    try testing.expect(value == .string);
+    try testing.expectEqualStrings("hello world", value.string);
 
     // Test parsing a list
     value = try read("(+ 1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     var p = value.pair;
     try testing.expect(p.car.is_symbol("+"));
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test parsing a quoted expression
     value = try read("'(1 2)", allocator);
-    if (value != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{value});
-        return error.TestExpectedPair;
-    }
+    if (value != .pair) return error.TestExpectedPair;
     p = value.pair;
     try testing.expect(p.car.is_symbol("quote"));
     p = p.cdr.pair;
     const inner_list = p.car;
-    if (inner_list != .pair) {
-        testing.log.err("Expected a pair, got {any}", .{inner_list});
-        return error.TestExpectedPair;
-    }
+    if (inner_list != .pair) return error.TestExpectedPair;
     p = inner_list.pair;
-    try testing.expect(p.car == Value{ .number = 1 });
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == Value{ .number = 2 });
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test unterminated string error

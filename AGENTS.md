@@ -20,6 +20,15 @@ Priorities, in order:
 - Add comments only when they clarify non-obvious behavior.
 - Do not add features, error handling, or abstractions beyond what is needed for the current task.
 
+## Writing Style
+
+- Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
+- Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
+- Avoid colorful adjectives and adverbs. Write "garbage collector" not "efficient garbage collector", "parser" not "robust parser".
+- Use noun phrases for checklist items, not imperative verbs. Write "opcode timing table" not "build the opcode timing table".
+- Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
+  at, to, by, of) stay lowercase unless they are the first word.
+
 ## Repository Layout
 
 - `src/lib.zig`: Main public API export module for embedding Elz as a library.
@@ -34,11 +43,13 @@ Priorities, in order:
 - `src/elz/errors.zig`: Error types.
 - `src/elz/writer.zig`: Value serialization and display.
 - `src/elz/api_helpers.zig`: Public API helper functions.
-- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime, os, modules, and process).
+- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime,
+  os, modules, and process).
 - `src/stdlib/std.elz`: Standard library written in Element 0 itself.
 - `examples/zig/`: FFI examples showing how to call Zig functions from Element 0.
 - `examples/elz/`: Element 0 script examples.
-- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`, `test_module_lib.elz`).
+- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
+  `test_module_lib.elz`).
 - `.github/workflows/`: CI workflows (tests, lints, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
@@ -61,6 +72,12 @@ The `Interpreter` struct in `interpreter.zig` ties these together and manages th
 Zig functions can be registered with the interpreter via `env_setup.define_foreign_func()`.
 This is the primary extension mechanism for embedding use cases.
 
+`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus two variadic forms:
+`(std.mem.Allocator, []const core.Value)` and `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)`.
+Parameter types supported by `Caster`: `f64`, integers, `bool`, `[]const u8`, `?T`, `core.Value`, Zig structs
+(mapped to/from Elz hash-maps by field name), and `ElzCallback` (an Elz closure or procedure wrapped for
+invocation from Zig). `valueFromNative` converts Zig scalars, strings, optionals, and structs back to `core.Value`.
+
 ### Garbage Collection
 
 Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. The GC is linked as a C library dependency.
@@ -76,7 +93,7 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 ## Zig Conventions
 
-- Zig version: 0.15.2.
+- Zig version: 0.16.0.
 - Formatting is enforced by `zig fmt`. Run `make format` before committing.
 - Naming: `snake_case` for functions and variables, `PascalCase` for types and structs.
 - Element 0 symbols use `kebab-case` (e.g., `zig-mul`, `string-length`).
@@ -85,24 +102,33 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 Run all test suites for any change:
 
-| Target              | Command            | What It Runs                                                 |
-|---------------------|--------------------|--------------------------------------------------------------|
-| Zig unit tests      | `make test`        | Inline `test` blocks in `src/**/*.zig`                       |
-| Property tests      | `make test-prop`   | Property-based tests in `tests/*_prop_test.zig` (Minish)     |
-| Integration tests   | `make test-integ`  | Integration tests in `tests/*_integ_test.zig`                |
-| Language tests      | `make test-elz`    | Element 0 test files in `tests/test_*.elz`                   |
-| All tests           | `make test-all`    | Runs all of the above                                        |
-| Lint                | `make lint`        | Checks Zig formatting with `zig fmt --check`                 |
+| Target            | Command           | What It Runs                                             |
+|-------------------|-------------------|----------------------------------------------------------|
+| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                   |
+| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish) |
+| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`            |
+| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`               |
+| All tests         | `make test-all`   | Runs all of the above                                    |
+| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`             |
 
 For interactive exploration: `make repl`.
 
+Run the narrowest relevant target while iterating (e.g., `make test` for a Zig change, `make test-elz` for a language change). Only run
+`make test-all` before declaring done.
+
 ## First Contribution Flow
 
+Use red-green TDD:
+
 1. Read the relevant source module under `src/elz/`.
-2. Implement the smallest possible change.
-3. Add or update inline `test` blocks in the changed Zig module. Add Element 0 tests in `tests/` if language behavior changed.
-4. Run `make test-all`.
-5. Verify interactively with `make repl` if needed.
+2. Write a failing test that describes the expected behavior (red). For a Zig change, add an inline `test` block; for a language behavior change, add
+   a case to the appropriate `tests/test_*.elz` file. Run the narrowest target and confirm it fails for the right reason.
+3. Write the smallest implementation that makes the test pass (green).
+4. Refactor while keeping tests green.
+5. Run `make test-all` and `make lint` before declaring done.
+6. Verify interactively with `make repl` if needed.
+
+When uncertain about language behavior, add a case to `tests/test_edge_cases.elz` first, before touching any Zig.
 
 Good first tasks:
 
@@ -114,10 +140,21 @@ Good first tasks:
 ## Testing Expectations
 
 - Unit and regression tests live as inline `test` blocks in the module they cover (`src/elz/*.zig` and `src/elz/primitives/*.zig`).
-- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties, and crash resistance.
+- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties,
+  and crash resistance.
 - Integration tests live in `tests/*_integ_test.zig` and test the public embedding API (init, evalString, FFI, error propagation, sandboxing).
 - Language-level tests live in `tests/test_*.elz` and are run by the interpreter itself via `make test-elz`.
 - No language-facing change is complete without an Element 0 test.
+- Prefer targeted assertions (one value, one error variant, one edge) over broad output comparisons.
+- Keep tests deterministic: initialize only the state you need, drive the public API, and assert on observable behavior.
+- When uncertain about correct behavior, add or refine a test first.
+
+## Documentation Expectations
+
+- `src/lib.zig` is the public embedding API. Keep its doc comments current; do not re-export internal types (`Interpreter`, `Environment`,
+  `core.Value`) without deliberate intent.
+- User workflow changes should update `README.md`.
+- If you encounter stale docs while changing related code, fix them in the same patch.
 
 ## Change Design Checklist
 
@@ -129,9 +166,26 @@ Before coding:
 
 Before submitting:
 
-1. `make test && make test-elz` passes.
+1. `make test-all` passes.
 2. `make lint` passes.
 3. Docs updated if the public API surface changed.
+
+## Review Guidelines
+
+Review output should be concise and include only critical issues.
+
+- `P0`: must-fix defects (incorrect language behavior, broken build or test workflow, severe regression).
+- `P1`: high-priority defects (possible correctness bug, missing validation for a risky change, incorrect cross-platform handling).
+
+Use this format for each issue:
+
+1. Severity (`P0`/`P1`)
+2. `file:line`
+3. Issue
+4. Why it matters
+5. Minimal fix direction
+
+Do not include style-only feedback or broad praise.
 
 ## Commit and PR Hygiene
 
@@ -139,4 +193,4 @@ Before submitting:
 - PR descriptions should include:
     1. Behavioral change summary.
     2. Tests added or updated.
-    3. Interactive verification done (yes/no).
+    3. Interactive verification is done (yes/no).

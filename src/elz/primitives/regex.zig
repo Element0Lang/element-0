@@ -37,12 +37,12 @@ const Regex = struct {
 const MatchResult = struct { start: usize, end: usize };
 
 fn compile(pattern: []const u8, allocator: std.mem.Allocator) !Regex {
-    var nodes = std.ArrayListUnmanaged(Node){};
+    var nodes = std.ArrayListUnmanaged(Node).empty;
     errdefer nodes.deinit(allocator);
 
     // First pass: compile atoms into nodes without linking
     // We'll collect indices of the "atom" nodes and then link them
-    var atom_indices = std.ArrayListUnmanaged(usize){};
+    var atom_indices = std.ArrayListUnmanaged(usize).empty;
     defer atom_indices.deinit(allocator);
 
     var i: usize = 0;
@@ -298,7 +298,7 @@ pub fn regex_match(_: *interpreter.Interpreter, env: *core.Environment, args: co
     const pattern = args.items[0].string;
     const input = args.items[1].string;
 
-    var full = std.ArrayListUnmanaged(u8){};
+    var full = std.ArrayListUnmanaged(u8).empty;
     defer full.deinit(env.allocator);
     full.append(env.allocator, '^') catch return ElzError.OutOfMemory;
     full.appendSlice(env.allocator, pattern) catch return ElzError.OutOfMemory;
@@ -346,7 +346,7 @@ pub fn regex_replace(_: *interpreter.Interpreter, env: *core.Environment, args: 
     const regex = compile(pattern, env.allocator) catch return ElzError.InvalidArgument;
     defer env.allocator.free(regex.nodes);
 
-    var result = std.ArrayListUnmanaged(u8){};
+    var result = std.ArrayListUnmanaged(u8).empty;
     errdefer result.deinit(env.allocator);
     var pos: usize = 0;
 
@@ -389,7 +389,7 @@ pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: co
     const regex = compile(pattern, env.allocator) catch return ElzError.InvalidArgument;
     defer env.allocator.free(regex.nodes);
 
-    var parts = std.ArrayListUnmanaged(Value){};
+    var parts = std.ArrayListUnmanaged(Value).empty;
     defer parts.deinit(env.allocator);
     var pos: usize = 0;
 

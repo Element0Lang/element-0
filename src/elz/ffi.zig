@@ -4,6 +4,34 @@
 const std = @import("std");
 const core = @import("core.zig");
 const ElzError = @import("errors.zig").ElzError;
+const interpreter = @import("interpreter.zig");
+const eval_mod = @import("eval.zig");
+
+/// Thread-local pointer to the currently executing interpreter.
+/// Set by eval before each foreign procedure call so that ElzCallback can
+/// call back into the interpreter without requiring a separate parameter.
+pub threadlocal var active_interp: ?*interpreter.Interpreter = null;
+
+/// A wrapper around an Elz procedure value that can be called from Zig.
+/// This type enables passing Elz closures and procedures to host Zig code as callbacks.
+///
+/// Usage: declare an FFI parameter of type `ElzCallback`. When the host Zig code
+/// receives the callback, invoke it via `call`. This must only be called from within
+/// a foreign-function invocation (i.e. while the interpreter is running).
+pub const ElzCallback = struct {
+    proc: core.Value,
+
+    /// Invoke the callback. May only be called while an Elz evaluation is active
+    /// (i.e. from within a foreign function registered with `makeForeignFunc`).
+    pub fn call(self: ElzCallback, args: []const core.Value) ElzError!core.Value {
+        const interp = active_interp orelse return ElzError.InvalidArgument;
+        var arg_list = core.ValueList.init(interp.allocator);
+        defer arg_list.deinit();
+        for (args) |a| try arg_list.append(a);
+        var fuel: u64 = std.math.maxInt(u64);
+        return eval_mod.eval_proc(interp, self.proc, arg_list, interp.root_env, &fuel);
+    }
+};
 
 /// `Caster` is a generic struct that provides a `cast` function to convert a `core.Value`
 /// to a specified Zig type `T`. This is a core component of the FFI mechanism, used
@@ -23,11 +51,24 @@ pub fn Caster(comptime T: type) type {
         /// is of an incompatible type or out of range.
         pub fn cast(v: core.Value) ElzError!T {
             return switch (@typeInfo(T)) {
-                .float => switch (v) {
-                    .number => |n| @floatCast(n),
-                    else => ElzError.InvalidArgument,
+                .float => blk: {
+                    if (v.asFloat()) |n| break :blk @as(T, @floatCast(n));
+                    break :blk ElzError.InvalidArgument;
                 },
                 .int => |int_info| switch (v) {
+                    .exact_integer => |i| blk: {
+                        const min_val: i128 = if (int_info.signedness == .signed)
+                            -(@as(i128, 1) << @intCast(int_info.bits - 1))
+                        else
+                            0;
+                        const max_val: i128 = if (int_info.signedness == .signed)
+                            (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1
+                        else
+                            (@as(i128, 1) << @intCast(int_info.bits)) - 1;
+                        const wide: i128 = i;
+                        if (wide < min_val or wide > max_val) break :blk ElzError.InvalidArgument;
+                        break :blk @intCast(i);
+                    },
                     .number => |n| {
                         if (std.math.isNan(n) or std.math.isInf(n)) {
                             return ElzError.InvalidArgument;
@@ -52,7 +93,7 @@ pub fn Caster(comptime T: type) type {
                     else => ElzError.InvalidArgument,
                 },
                 .pointer => |ptr_info| {
-                    if (ptr_info.size == .Slice and ptr_info.child == u8) {
+                    if (ptr_info.size == .slice and ptr_info.child == u8) {
                         // []const u8 - extract from string value
                         return switch (v) {
                             .string => |s| s,
@@ -67,6 +108,34 @@ pub fn Caster(comptime T: type) type {
                     if (v == .nil) return null;
                     const InnerCaster = Caster(opt_info.child);
                     return InnerCaster.cast(v) catch return ElzError.InvalidArgument;
+                },
+                .@"struct" => |struct_info| {
+                    // Special-case ElzCallback: wrap any callable Elz value.
+                    if (T == ElzCallback) {
+                        return switch (v) {
+                            .closure, .procedure, .foreign_procedure, .cont_aware_procedure => ElzCallback{ .proc = v },
+                            else => ElzError.InvalidArgument,
+                        };
+                    }
+                    const hm = switch (v) {
+                        .hash_map => |h| h,
+                        else => return ElzError.InvalidArgument,
+                    };
+                    var result: T = undefined;
+                    inline for (struct_info.fields) |field| {
+                        if (hm.get(field.name)) |field_val| {
+                            @field(result, field.name) = try Caster(field.type).cast(field_val);
+                        } else if (comptime field.defaultValue()) |dv| {
+                            @field(result, field.name) = dv;
+                        } else {
+                            return ElzError.InvalidArgument;
+                        }
+                    }
+                    return result;
+                },
+                .@"union" => {
+                    if (T == core.Value) return v;
+                    @compileError("Unsupported union type for FFI casting: " ++ @typeName(T));
                 },
                 else => @compileError("Unsupported type for FFI casting: " ++ @typeName(T)),
             };
@@ -217,7 +286,7 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
         .int, .comptime_int => core.Value{ .number = @floatFromInt(value) },
         .bool => core.Value{ .boolean = value },
         .pointer => |ptr_info| {
-            if (ptr_info.size == .Slice and ptr_info.child == u8) {
+            if (ptr_info.size == .slice and ptr_info.child == u8) {
                 return core.Value{ .string = allocator.dupe(u8, value) catch return core.Value.nil };
             } else {
                 @compileError("Unsupported pointer return type for FFI: " ++ @typeName(T));
@@ -229,6 +298,19 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
             } else {
                 return core.Value.nil;
             }
+        },
+        .@"struct" => |struct_info| {
+            const hm_ptr = allocator.create(core.HashMap) catch return core.Value.nil;
+            hm_ptr.* = core.HashMap.init(allocator);
+            inline for (struct_info.fields) |field| {
+                const field_val = valueFromNative(allocator, @field(value, field.name));
+                hm_ptr.put(field.name, field_val) catch {
+                    hm_ptr.deinit();
+                    allocator.destroy(hm_ptr);
+                    return core.Value.nil;
+                };
+            }
+            return core.Value{ .hash_map = hm_ptr };
         },
         .@"union" => {
             if (T == core.Value) {
@@ -314,9 +396,9 @@ test "makeForeignFunc with 2-arg function" {
 
     // Create args list
     var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
-    try args.append(allocator, core.Value{ .number = 3 });
-    try args.append(allocator, core.Value{ .number = 4 });
+    defer args.deinit();
+    try args.append(core.Value{ .number = 3 });
+    try args.append(core.Value{ .number = 4 });
 
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);
@@ -401,10 +483,164 @@ test "makeForeignFunc with 1-arg function" {
     defer env.bindings.deinit();
 
     var args = core.ValueList.init(allocator);
-    defer args.deinit(allocator);
-    try args.append(allocator, core.Value{ .number = 5 });
+    defer args.deinit();
+    try args.append(core.Value{ .number = 5 });
 
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);
     try std.testing.expectEqual(@as(f64, 25), result.number);
+}
+
+const Point = struct { x: f64, y: f64 };
+
+fn makePoint(x: f64, y: f64) Point {
+    return .{ .x = x, .y = y };
+}
+
+fn distFromOrigin(p: Point) f64 {
+    return @sqrt(p.x * p.x + p.y * p.y);
+}
+
+test "valueFromNative struct -> hash_map" {
+    const allocator = std.testing.allocator;
+    const pt = Point{ .x = 3.0, .y = 4.0 };
+    const result = valueFromNative(allocator, pt);
+    defer allocator.destroy(result.hash_map);
+    defer result.hash_map.deinit();
+
+    try std.testing.expect(result == .hash_map);
+    try std.testing.expectEqual(@as(f64, 3.0), result.hash_map.get("x").?.number);
+    try std.testing.expectEqual(@as(f64, 4.0), result.hash_map.get("y").?.number);
+}
+
+test "Caster struct from hash_map" {
+    const allocator = std.testing.allocator;
+
+    const hm = try allocator.create(core.HashMap);
+    hm.* = core.HashMap.init(allocator);
+    defer allocator.destroy(hm);
+    defer hm.deinit();
+
+    try hm.put("x", core.Value{ .number = 3.0 });
+    try hm.put("y", core.Value{ .number = 4.0 });
+
+    const result = try Caster(Point).cast(core.Value{ .hash_map = hm });
+    try std.testing.expectEqual(@as(f64, 3.0), result.x);
+    try std.testing.expectEqual(@as(f64, 4.0), result.y);
+}
+
+test "makeForeignFunc struct return" {
+    const wrapped = makeForeignFunc(makePoint);
+    const allocator = std.testing.allocator;
+
+    const env = try allocator.create(core.Environment);
+    env.* = .{
+        .bindings = std.StringHashMap(core.Value).init(allocator),
+        .outer = null,
+        .allocator = allocator,
+    };
+    defer allocator.destroy(env);
+    defer env.bindings.deinit();
+
+    var args = core.ValueList.init(allocator);
+    defer args.deinit();
+    try args.append(core.Value{ .number = 3.0 });
+    try args.append(core.Value{ .number = 4.0 });
+
+    const result = try wrapped(env, args);
+    defer allocator.destroy(result.hash_map);
+    defer result.hash_map.deinit();
+
+    try std.testing.expect(result == .hash_map);
+    try std.testing.expectEqual(@as(f64, 3.0), result.hash_map.get("x").?.number);
+    try std.testing.expectEqual(@as(f64, 4.0), result.hash_map.get("y").?.number);
+}
+
+fn applyTwice(f: ElzCallback, x: core.Value) !core.Value {
+    const first = try f.call(&[_]core.Value{x});
+    return try f.call(&[_]core.Value{first});
+}
+
+fn applyToList(allocator: std.mem.Allocator, items: []const core.Value) !core.Value {
+    if (items.len != 2) return ElzError.WrongArgumentCount;
+    const f = try Caster(ElzCallback).cast(items[0]);
+    // Collect mapped values in order by traversing the Elz list
+    var buf: [64]core.Value = undefined;
+    var count: usize = 0;
+    var cur = items[1];
+    while (cur == .pair and count < buf.len) {
+        buf[count] = try f.call(&[_]core.Value{cur.pair.car});
+        count += 1;
+        cur = cur.pair.cdr;
+    }
+    // Build result list from back to front
+    var result: core.Value = core.Value.nil;
+    while (count > 0) {
+        count -= 1;
+        const p = allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        p.* = .{ .car = buf[count], .cdr = result };
+        result = core.Value{ .pair = p };
+    }
+    return result;
+}
+
+test "ElzCallback: apply closure twice via FFI" {
+    const interp_mod = @import("interpreter.zig");
+    var interp = try interp_mod.Interpreter.init(.{});
+    defer interp.deinit();
+
+    var fuel: u64 = 10000;
+    const wrapped = makeForeignFunc(applyTwice);
+    try interp.root_env.set(&interp, "apply-twice", core.Value{ .foreign_procedure = wrapped });
+
+    // (apply-twice (lambda (x) (* x 2)) 3) → 12 (3*2=6, 6*2=12)
+    const result = try interp.evalString("(apply-twice (lambda (x) (* x 2)) 3)", &fuel);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 12), result.exact_integer);
+}
+
+test "ElzCallback: map list via variadic FFI" {
+    const interp_mod = @import("interpreter.zig");
+    var interp = try interp_mod.Interpreter.init(.{});
+    defer interp.deinit();
+
+    var fuel: u64 = 10000;
+    const wrapped = makeForeignFunc(applyToList);
+    try interp.root_env.set(&interp, "native-map", core.Value{ .foreign_procedure = wrapped });
+
+    // (native-map (lambda (x) (+ x 1)) '(1 2 3)) → (2 3 4)
+    const result = try interp.evalString("(native-map (lambda (x) (+ x 1)) '(1 2 3))", &fuel);
+    try std.testing.expect(result == .pair);
+    try std.testing.expect(result.pair.car == .exact_integer and result.pair.car.exact_integer == 2);
+    try std.testing.expect(result.pair.cdr.pair.car == .exact_integer and result.pair.cdr.pair.car.exact_integer == 3);
+    try std.testing.expect(result.pair.cdr.pair.cdr.pair.car == .exact_integer and result.pair.cdr.pair.cdr.pair.car.exact_integer == 4);
+}
+
+test "makeForeignFunc struct param" {
+    const wrapped = makeForeignFunc(distFromOrigin);
+    const allocator = std.testing.allocator;
+
+    const env = try allocator.create(core.Environment);
+    env.* = .{
+        .bindings = std.StringHashMap(core.Value).init(allocator),
+        .outer = null,
+        .allocator = allocator,
+    };
+    defer allocator.destroy(env);
+    defer env.bindings.deinit();
+
+    const hm = try allocator.create(core.HashMap);
+    hm.* = core.HashMap.init(allocator);
+    defer allocator.destroy(hm);
+    defer hm.deinit();
+    try hm.put("x", core.Value{ .number = 3.0 });
+    try hm.put("y", core.Value{ .number = 4.0 });
+
+    var args = core.ValueList.init(allocator);
+    defer args.deinit();
+    try args.append(core.Value{ .hash_map = hm });
+
+    const result = try wrapped(env, args);
+    try std.testing.expect(result == .number);
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.number, 0.001);
 }

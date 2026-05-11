@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/Element0Lang/element-0/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-read-blue?style=flat&labelColor=282c34&logo=read-the-docs)](https://Element0Lang.github.io/element-0/)
 [![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/Element0Lang/element-0/tree/main/examples)
-[![Zig Version](https://img.shields.io/badge/Zig-0.15.2-orange?logo=zig&labelColor=282c34)](https://ziglang.org/download/)
+[![Zig](https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat&labelColor=282c34&logo=zig)](https://ziglang.org/download/)
 [![Release](https://img.shields.io/github/release/Element0Lang/element-0.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/Element0Lang/element-0/releases/latest)
 
 A small embeddable Lisp for the Zig ecosystem λ
@@ -20,7 +20,7 @@ A small embeddable Lisp for the Zig ecosystem λ
 ---
 
 Element 0 programming language is a new Lisp dialect inspired by Scheme.
-It aims to be compliant with the [R5RS](https://www-sop.inria.fr/indes/fp/Bigloo/doc/r5rs-7.html) standard to a good
+It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good
 degree, but not limited to it.
 
 This project provides an interpreter for the Element 0 language written in Zig.
@@ -46,7 +46,7 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 > [!IMPORTANT]
 > This project is in early development, so bugs and breaking changes are expected.
-> Please use the [issues page](https://github.com/Element0Lang/element-0/issues) to report bugs or request features.
+> Please use the [issue page](https://github.com/Element0Lang/element-0/issues) to report bugs or request features.
 
 ---
 
@@ -56,9 +56,14 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 1. Clone the repository
    ```sh
-   git clone https://github.com/Element0Lang/element-0.git
+   git clone --recurse-submodules https://github.com/Element0Lang/element-0.git
    cd element-0
-    ```
+   ```
+
+   If you cloned without `--recurse-submodules`, initialize the submodules with:
+   ```sh
+   git submodule update --init
+   ```
 
 2. Build and run the REPL
    ```sh
@@ -138,8 +143,12 @@ fn zig_multiply(a: f64, b: f64) f64 {
 pub fn main() !void {
     // 1. Initialize the Elz interpreter.
     var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
 
-    const stdout = std.io.getStdOut().writer();
+    var buffer: [4096]u8 = undefined;
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+    const stdout = &stdout_writer.interface;
 
     // --- Example 1: Evaluate a simple string of Elz code ---
     std.debug.print("--- Evaluating simple Elz code ---\n", .{});
@@ -150,7 +159,7 @@ pub fn main() !void {
     try stdout.print("Result of {s} is: ", .{source1});
     try elz.write(result1, stdout);
     try stdout.print("\n\n", .{});
-
+    try stdout.flush();
 
     // --- Example 2: Expose a Zig function to Elz and call it ---
     std.debug.print("--- Calling a Zig function from Elz ---\n", .{});
@@ -171,6 +180,7 @@ pub fn main() !void {
     try stdout.print("Result of {s} is: ", .{source2});
     try elz.write(result2, stdout);
     try stdout.print("\n", .{});
+    try stdout.flush();
 }
 ```
 
@@ -185,7 +195,7 @@ Result of (zig-mul 7 6) is: 42
 ```
 
 > [!IMPORTANT]
-> Elz is implemented and tested in Zig 0.15.2.
+> Elz is implemented and tested in Zig 0.16.0.
 
 -----
 

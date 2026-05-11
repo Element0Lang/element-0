@@ -46,7 +46,7 @@ test "exit rejects negative code" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = -1 });
+    try args.append(core.Value{ .number = -1 });
 
     const result = exit(&interp, interp.root_env, args, undefined);
     try std.testing.expectError(ElzError.InvalidArgument, result);
@@ -57,7 +57,7 @@ test "exit rejects code > 255" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = 256 });
+    try args.append(core.Value{ .number = 256 });
 
     const result = exit(&interp, interp.root_env, args, undefined);
     try std.testing.expectError(ElzError.InvalidArgument, result);
@@ -68,7 +68,7 @@ test "exit rejects fractional code" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = 1.5 });
+    try args.append(core.Value{ .number = 1.5 });
 
     const result = exit(&interp, interp.root_env, args, undefined);
     try std.testing.expectError(ElzError.InvalidArgument, result);
@@ -79,7 +79,7 @@ test "exit rejects NaN" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .number = std.math.nan(f64) });
+    try args.append(core.Value{ .number = std.math.nan(f64) });
 
     const result = exit(&interp, interp.root_env, args, undefined);
     try std.testing.expectError(ElzError.InvalidArgument, result);
@@ -101,7 +101,7 @@ test "exit rejects non-number" {
     defer interp.deinit();
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, core.Value{ .boolean = true });
+    try args.append(core.Value{ .boolean = true });
 
     const result = exit(&interp, interp.root_env, args, undefined);
     try std.testing.expectError(ElzError.InvalidArgument, result);

@@ -107,3 +107,5 @@ latest
 history.txt
 .history
 .claude/
+.codex
+zig-pkg/

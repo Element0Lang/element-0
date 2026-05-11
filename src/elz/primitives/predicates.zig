@@ -5,18 +5,24 @@ const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
 /// Checks if a value is a proper list (i.e., it ends with `nil`).
+/// Uses Floyd's tortoise-and-hare algorithm to detect cycles.
 fn isProperList(v: Value) bool {
-    var cur = v;
-    while (cur == .pair) {
-        cur = cur.pair.cdr;
+    var slow = v;
+    var fast = v;
+    while (true) {
+        if (fast != .pair) return fast == .nil;
+        fast = fast.pair.cdr;
+        if (fast != .pair) return fast == .nil;
+        fast = fast.pair.cdr;
+        slow = slow.pair.cdr;
+        if (slow == .pair and fast == .pair and slow.pair == fast.pair) return false;
     }
-    return cur == .nil;
 }
 
 /// An iterative implementation of `equal?` that is not vulnerable to stack
 /// overflow attacks.
 fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
-    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }){};
+    var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }).empty;
     defer stack.deinit(allocator);
     try stack.append(allocator, .{ .a = val1, .b = val2 });
 
@@ -53,6 +59,15 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
                 const c2 = b.cell;
                 try stack.append(allocator, .{ .a = c1.content, .b = c2.content });
             },
+            .vector => |v1| {
+                const v2 = b.vector;
+                if (v1.items.len != v2.items.len) return false;
+                var k = v1.items.len;
+                while (k > 0) {
+                    k -= 1;
+                    try stack.append(allocator, .{ .a = v1.items[k], .b = v2.items[k] });
+                }
+            },
             else => {
                 // For all other types, if they have the same type but are not
                 // `eqv?`, they are not `equal?`. This handles numbers, booleans,
@@ -76,6 +91,18 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .number => |av| switch (b) {
             .number => |bv| av == bv,
+            else => false,
+        },
+        .exact_integer => |av| switch (b) {
+            .exact_integer => |bv| av == bv,
+            else => false,
+        },
+        .rational => |av| switch (b) {
+            .rational => |bv| av.numerator == bv.numerator and av.denominator == bv.denominator,
+            else => false,
+        },
+        .complex => |av| switch (b) {
+            .complex => |bv| av.real == bv.real and av.imag == bv.imag,
             else => false,
         },
         .character => |av| switch (b) {
@@ -111,7 +138,7 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .symbol => |av| switch (b) {
-            .symbol => |bv| av.ptr == bv.ptr,
+            .symbol => |bv| std.mem.eql(u8, av, bv),
             else => false,
         },
         .cell => |av| switch (b) {
@@ -132,6 +159,26 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .port => |av| switch (b) {
             .port => |bv| av == bv,
+            else => false,
+        },
+        .cont_aware_procedure => |av| switch (b) {
+            .cont_aware_procedure => |bv| av == bv,
+            else => false,
+        },
+        .continuation => |av| switch (b) {
+            .continuation => |bv| av == bv,
+            else => false,
+        },
+        .promise => |av| switch (b) {
+            .promise => |bv| av == bv,
+            else => false,
+        },
+        .multi_values => |av| switch (b) {
+            .multi_values => |bv| av == bv,
+            else => false,
+        },
+        .syntax_rules => |av| switch (b) {
+            .syntax_rules => |bv| av == bv,
             else => false,
         },
         .unspecified => b == .unspecified,
@@ -171,7 +218,45 @@ pub fn is_symbol(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 /// - `args`: A `ValueList` containing a single value.
 pub fn is_number(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    return Value{ .boolean = args.items[0] == .number };
+    return Value{ .boolean = args.items[0].isNumeric() };
+}
+
+/// `exact_p` returns #t for exact numeric types.
+pub fn exact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .exact_integer or v == .rational };
+}
+
+/// `inexact_p` returns #t for inexact numeric types.
+pub fn inexact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .number or v == .complex };
+}
+
+/// `rational_p` returns #t for exact integer/rational and finite reals.
+pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = switch (v) {
+        .exact_integer, .rational => true,
+        .number => |n| std.math.isFinite(n),
+        else => false,
+    } };
+}
+
+/// `real_p` returns #t for any real numeric type.
+pub fn real_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .number or v == .exact_integer or v == .rational };
+}
+
+/// `complex_p` returns #t for any numeric type.
+pub fn complex_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0].isNumeric() };
 }
 
 /// `is_string` checks if a value is a string.
@@ -208,7 +293,11 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = (v == .procedure or v == .closure or v == .foreign_procedure) };
+    // exhaustive switch to ensure we cover every Value variant
+    return Value{ .boolean = switch (v) {
+        .procedure, .closure, .foreign_procedure, .cont_aware_procedure, .continuation => true,
+        else => false,
+    } };
 }
 
 /// `is_char` checks if a value is a character.
@@ -221,9 +310,11 @@ pub fn is_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 pub fn is_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    if (v != .number) return Value{ .boolean = false };
-    const n = v.number;
-    return Value{ .boolean = @floor(n) == n };
+    return Value{ .boolean = switch (v) {
+        .exact_integer => true,
+        .number => |n| std.math.isFinite(n) and @floor(n) == n,
+        else => false,
+    } };
 }
 
 /// `logical_not` returns #t if the argument is #f, and #f otherwise.
@@ -278,33 +369,33 @@ test "predicate primitives" {
 
     // Test is_null
     var args = core.ValueList.init(interp.allocator);
-    try args.append(interp.allocator, Value.nil);
+    try args.append(Value.nil);
     var result = try is_null(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 0 });
+    try args.append(Value{ .number = 0 });
     result = try is_null(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = false });
+    try testing.expect(result == .boolean and result.boolean == false);
 
     // Test is_boolean
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .boolean = true });
+    try args.append(Value{ .boolean = true });
     result = try is_boolean(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 
     // Test is_eq
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 1 });
-    try args.append(interp.allocator, Value{ .number = 1 });
+    try args.append(Value{ .number = 1 });
+    try args.append(Value{ .number = 1 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 
     args.clearRetainingCapacity();
-    try args.append(interp.allocator, Value{ .number = 1 });
-    try args.append(interp.allocator, Value{ .number = 2 });
+    try args.append(Value{ .number = 1 });
+    try args.append(Value{ .number = 2 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = false });
+    try testing.expect(result == .boolean and result.boolean == false);
 
     // Test is_equal
     args.clearRetainingCapacity();
@@ -316,8 +407,8 @@ test "predicate primitives" {
     p2.* = .{ .car = core.Value{ .number = 1 }, .cdr = .nil };
     const list2 = core.Value{ .pair = p2 };
 
-    try args.append(interp.allocator, list1);
-    try args.append(interp.allocator, list2);
+    try args.append(list1);
+    try args.append(list2);
     result = try is_equal(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == Value{ .boolean = true });
+    try testing.expect(result == .boolean and result.boolean == true);
 }

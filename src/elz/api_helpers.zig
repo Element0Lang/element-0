@@ -15,7 +15,7 @@ const Value = core.Value;
 /// Returns:
 /// A new slice containing the values from the list, or an error if the input is not a proper list.
 pub fn listToSlice(allocator: std.mem.Allocator, list_head: Value) ![]Value {
-    var items = std.ArrayListUnmanaged(Value){};
+    var items = std.ArrayListUnmanaged(Value).empty;
 
     var current_node = list_head;
     while (current_node != .nil) {

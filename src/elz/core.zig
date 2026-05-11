@@ -1,6 +1,6 @@
 const std = @import("std");
 const errors = @import("errors.zig");
-const ElzError = errors.ElzError;
+pub const ElzError = errors.ElzError;
 const interpreter = @import("interpreter.zig");
 
 const gc = @import("gc.zig");
@@ -20,6 +20,17 @@ pub const Cell = struct {
     /// The `Value` contained within the cell.
     content: Value,
 };
+
+/// Returns a `Value` whose inline slices (symbol name, string bytes) are owned by
+/// `allocator`, while heap-allocated reference variants pass through unchanged so that
+/// aliased bindings observe each other's mutations.
+fn own_value_slices(value: Value, allocator: std.mem.Allocator) !Value {
+    return switch (value) {
+        .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
+        .string => |s| Value{ .string = try allocator.dupe(u8, s) },
+        else => value,
+    };
+}
 
 /// `Environment` represents a lexical scope in the interpreter.
 /// It contains a set of bindings from symbols to values and a reference to an outer (enclosing) environment.
@@ -107,7 +118,11 @@ pub const Environment = struct {
     /// `void` or an error if memory allocation for the name or value fails.
     pub fn set(self: *Environment, interp: *interpreter.Interpreter, name: []const u8, value: Value) ElzError!void {
         const owned_name = try self.allocator.dupe(u8, name);
-        const owned_value = try value.deep_clone(self.allocator);
+        // Only the inline byte-slice variants need to own their backing memory; heap
+        // values (pair, vector, hash_map, port, cell, closure, ...) are shared by
+        // reference so that aliased bindings observe each other's mutations as R5RS
+        // requires for `(define w v)` style aliasing.
+        const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
         _ = interp;
     }
@@ -126,9 +141,10 @@ pub const Environment = struct {
         var current_env: ?*Environment = self;
         while (current_env) |env| {
             if (env.bindings.getEntry(name)) |entry| {
+                const owned = try own_value_slices(value, self.allocator);
                 switch (entry.value_ptr.*) {
-                    .cell => |c| c.content = try value.deep_clone(self.allocator),
-                    else => entry.value_ptr.* = try value.deep_clone(self.allocator),
+                    .cell => |c| c.content = owned,
+                    else => entry.value_ptr.* = owned,
                 }
                 return;
             }
@@ -141,8 +157,12 @@ pub const Environment = struct {
 
 /// Represents a user-defined procedure (lambda) in Elz.
 pub const UserDefinedProc = struct {
-    /// A list of parameter names (as `Value.symbol`).
+    /// Fixed parameter names (as `Value.symbol`). For variadic forms this is the prefix
+    /// before the rest parameter.
     params: ValueList,
+    /// Optional rest-parameter name. Set for `(lambda args body)` (with `params` empty)
+    /// and `(lambda (a b . rest) body)` (with `params` holding the prefix).
+    rest_param: ?[]const u8,
     /// The body of the procedure, which is a single `Value` (typically a list of expressions).
     body: Value,
     /// The environment in which the procedure was created, which provides its lexical scope.
@@ -162,8 +182,127 @@ pub const Macro = struct {
     env: *Environment,
 };
 
+/// One pattern/template pair from a `syntax-rules` form. The pattern starts with the
+/// macro keyword (or `_`) by R5RS convention.
+pub const SyntaxRule = struct {
+    pattern: Value,
+    template: Value,
+};
+
+/// Represents a `syntax-rules` macro transformer. Pattern matching uses literal
+/// identifiers for exact-name matching and binds remaining identifiers as pattern
+/// variables.
+pub const SyntaxRulesMacro = struct {
+    /// The macro name (for error messages).
+    name: []const u8,
+    /// Identifier names listed as literals in `(syntax-rules (literal ...) ...)`.
+    literals: [][]const u8,
+    /// Pattern/template rules, tried top-to-bottom.
+    rules: []SyntaxRule,
+    /// The environment captured at definition time. Used for hygiene in later slices.
+    env: *Environment,
+};
+
 /// A pointer to a native Zig function that can be called from Elz.
 pub const PrimitiveFn = *const fn (interp: *interpreter.Interpreter, env: *Environment, args: ValueList, fuel: *u64) ElzError!Value;
+
+/// An exact rational number stored in canonical form (GCD-reduced, positive denominator).
+pub const Rational = struct {
+    numerator: i64,
+    denominator: i64,
+
+    pub fn toFloat(self: Rational) f64 {
+        return @as(f64, @floatFromInt(self.numerator)) / @as(f64, @floatFromInt(self.denominator));
+    }
+};
+
+fn gcd_abs(a: i64, b: i64) i64 {
+    var x: i64 = if (a < 0) -a else a;
+    var y: i64 = if (b < 0) -b else b;
+    while (y != 0) {
+        const t = y;
+        y = @rem(x, y);
+        x = t;
+    }
+    return x;
+}
+
+/// Normalizes a rational number (n/d) into canonical form and returns the
+/// appropriate Value: `.exact_integer` if denominator reduces to 1, else
+/// `.rational` (heap-allocated). Returns `ElzError.DivisionByZero` if d == 0.
+pub fn normalizeRational(n: i64, d: i64, allocator: std.mem.Allocator) ElzError!Value {
+    if (d == 0) return ElzError.DivisionByZero;
+    const sign: i64 = if (d < 0) -1 else 1;
+    const g = gcd_abs(n, d);
+    const num = sign * @divTrunc(n, g);
+    const den = sign * @divTrunc(d, g);
+    if (den == 1) return Value{ .exact_integer = num };
+    const r = allocator.create(Rational) catch return ElzError.OutOfMemory;
+    r.* = .{ .numerator = num, .denominator = den };
+    return Value{ .rational = r };
+}
+
+/// A complex number with inexact real and imaginary parts.
+pub const Complex = struct {
+    real: f64,
+    imag: f64,
+};
+
+/// A dynamic-wind frame: a (before, after) pair pushed onto the interpreter
+/// dynamic winder chain. The chain is innermost-first.
+pub const Winder = struct {
+    before: Value,
+    after: Value,
+    next: ?*Winder,
+};
+
+/// A captured continuation, which holds the continuation chain plus the
+/// dynamic-wind context active when it was captured.
+pub const CapturedCont = struct {
+    k: *Cont,
+    winders: ?*Winder,
+};
+
+/// A single continuation frame in the CPS-converted evaluator.
+pub const ContFrame = union(enum) {
+    halt,
+    eval_rator: struct { rand_list: Value, env: *Environment },
+    eval_rands: struct { proc: Value, done: ValueList, rest: Value, env: *Environment },
+    if_branch: struct { consequent: Value, alternative: Value, env: *Environment },
+    begin_rest: struct { rest: Value, env: *Environment },
+    define_bind: struct { name: []const u8, env: *Environment },
+    set_bind: struct { name: []const u8, env: *Environment },
+    and_rest: struct { rest: Value, env: *Environment },
+    or_rest: struct { rest: Value, env: *Environment },
+    let_bind: struct { name: []const u8, remaining: Value, body: Value, new_env: *Environment, outer_env: *Environment, is_star: bool },
+    dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
+    dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
+    dyn_wind_after_done: struct { thunk_result: Value },
+};
+
+/// A continuation: a singly-linked list of frames.
+pub const Cont = struct {
+    frame: ContFrame,
+    next: ?*Cont,
+};
+
+/// Result of one CPS evaluation step. Drives the trampoline loop in `eval.zig`.
+pub const EvalStep = union(enum) {
+    eval: struct { ast: Value, env: *Environment, k: *Cont },
+    apply: struct { k: *Cont, val: Value },
+    done: Value,
+};
+
+/// A primitive function that has access to the current continuation.
+/// Used by call/cc, dynamic-wind, apply, and other forms that participate
+/// directly in the CPS-converted evaluator.
+pub const ContAwareFn = *const fn (
+    interp: *interpreter.Interpreter,
+    env: *Environment,
+    args: ValueList,
+    fuel: *u64,
+    k: *Cont,
+) ElzError!EvalStep;
 
 /// Represents a pair in an Element 0 list.
 pub const Pair = struct {
@@ -195,6 +334,10 @@ pub const HashMap = struct {
     }
 
     pub fn deinit(self: *HashMap) void {
+        var it = self.entries.keyIterator();
+        while (it.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
         self.entries.deinit(self.allocator);
     }
 
@@ -228,56 +371,79 @@ pub const HashMap = struct {
 /// Ports can be input (for reading) or output (for writing).
 pub const Port = struct {
     /// The underlying file handle.
-    file: std.fs.File,
+    file: std.Io.File,
+    /// The I/O implementation.
+    io: std.Io,
     /// Whether this is an input port (true) or output port (false).
     is_input: bool,
     /// Whether the port is open.
     is_open: bool,
     /// Name of the file (for error messages).
     name: []const u8,
+    /// One-byte lookahead buffer used by `peekChar`. Empty when no char has been peeked.
+    peek_buffer: ?u8 = null,
+    /// True when `close` should not invoke the underlying file's close. Used for stdin
+    /// and stdout ports that share a file handle with the host process.
+    persistent: bool = false,
 
-    pub fn openInput(allocator: std.mem.Allocator, name: []const u8) !Port {
-        const file = try std.fs.cwd().openFile(name, .{});
+    /// Wraps an already-open file as a port without taking ownership of the close.
+    pub fn fromStandard(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File, is_input: bool, name: []const u8) !Port {
         return .{
             .file = file,
-            .is_input = true,
+            .io = io,
+            .is_input = is_input,
             .is_open = true,
-            .name = try allocator.dupe(u8, name), // Clone to own the memory
+            .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
+            .persistent = true,
         };
     }
 
-    pub fn openOutput(allocator: std.mem.Allocator, name: []const u8) !Port {
-        const file = try std.fs.cwd().createFile(name, .{});
+    pub fn openInput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
+        const file = try std.Io.Dir.cwd().openFile(io, name, .{});
         return .{
             .file = file,
+            .io = io,
+            .is_input = true,
+            .is_open = true,
+            .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
+        };
+    }
+
+    pub fn openOutput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
+        const file = try std.Io.Dir.cwd().createFile(io, name, .{});
+        return .{
+            .file = file,
+            .io = io,
             .is_input = false,
             .is_open = true,
-            .name = try allocator.dupe(u8, name), // Clone to own the memory
+            .name = try allocator.dupe(u8, name),
+            .peek_buffer = null,
         };
     }
 
     pub fn close(self: *Port) void {
-        if (self.is_open) {
-            self.file.close();
-            self.is_open = false;
+        if (self.is_open and !self.persistent) {
+            self.file.close(self.io);
         }
+        self.is_open = false;
     }
 
     pub fn readLine(self: *Port, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.is_input or !self.is_open) return null;
         var buf: [4096]u8 = undefined;
-        var read_buf: [1]u8 = undefined;
         var len: usize = 0;
 
         while (len < buf.len - 1) {
-            const bytes_read = self.file.read(&read_buf) catch return null;
-            if (bytes_read == 0) {
-                // EOF
+            const c_opt = try self.readChar();
+            if (c_opt == null) {
                 if (len == 0) return null;
                 break;
             }
-            if (read_buf[0] == '\n') break;
-            buf[len] = read_buf[0];
+            const c = c_opt.?;
+            if (c == '\n') break;
+            buf[len] = c;
             len += 1;
         }
 
@@ -287,16 +453,53 @@ pub const Port = struct {
 
     pub fn readChar(self: *Port) !?u8 {
         if (!self.is_input or !self.is_open) return null;
+        if (self.peek_buffer) |c| {
+            self.peek_buffer = null;
+            return c;
+        }
         var buf: [1]u8 = undefined;
-        const bytes_read = self.file.read(&buf) catch return null;
+        const bytes_read = self.file.readStreaming(self.io, &.{&buf}) catch |err| switch (err) {
+            error.EndOfStream => return null,
+            else => return null,
+        };
         if (bytes_read == 0) return null;
         return buf[0];
     }
 
+    pub fn peekChar(self: *Port) !?u8 {
+        if (!self.is_input or !self.is_open) return null;
+        if (self.peek_buffer) |c| return c;
+        const c_opt = try self.readChar();
+        if (c_opt) |c| {
+            self.peek_buffer = c;
+            return c;
+        }
+        return null;
+    }
+
     pub fn writeString(self: *Port, str: []const u8) !void {
         if (self.is_input or !self.is_open) return error.InvalidPort;
-        _ = try self.file.write(str);
+        try self.file.writeStreamingAll(self.io, str);
     }
+};
+
+/// Represents zero or more return values produced by `values`. A continuation expecting
+/// a single value but receiving a `MultiValues` is an error in standard Scheme.
+pub const MultiValues = struct {
+    items: []Value,
+};
+
+/// Represents a delayed (lazy) computation. A promise is created by `delay` and forced
+/// by `force`. The result is memoized after the first force.
+pub const Promise = struct {
+    /// The thunk expression to evaluate. Unused once the promise is forced.
+    expr: Value,
+    /// The environment captured at `delay` time.
+    env: *Environment,
+    /// True once the promise has been forced and `result` is populated.
+    forced: bool,
+    /// The cached result, valid only when `forced` is true.
+    result: Value,
 };
 
 /// `Value` is the core data type in the Elz interpreter.
@@ -304,8 +507,14 @@ pub const Port = struct {
 pub const Value = union(enum) {
     /// An Element 0 symbol.
     symbol: []const u8,
-    /// A floating-point number.
+    /// A floating-point number (inexact real).
     number: f64,
+    /// An exact integer.
+    exact_integer: i64,
+    /// An exact rational number (heap-allocated, GCD-reduced).
+    rational: *Rational,
+    /// A complex number with inexact real and imaginary parts.
+    complex: *Complex,
     /// A pair, the building block of lists.
     pair: *Pair,
     /// A single character.
@@ -320,6 +529,11 @@ pub const Value = union(enum) {
     macro: *Macro,
     /// A built-in (primitive) procedure.
     procedure: PrimitiveFn,
+    /// A primitive procedure that has access to the current continuation.
+    /// Used to implement call/cc, dynamic-wind, apply, etc.
+    cont_aware_procedure: ContAwareFn,
+    /// A first-class captured continuation (call/cc result).
+    continuation: *CapturedCont,
     /// A foreign function interface (FFI) procedure.
     foreign_procedure: *const fn (env: *Environment, args: ValueList) anyerror!Value,
     /// An opaque pointer to a value managed by foreign code.
@@ -334,6 +548,12 @@ pub const Value = union(enum) {
     hash_map: *HashMap,
     /// A port (file I/O stream).
     port: *Port,
+    /// A delayed computation produced by `delay`.
+    promise: *Promise,
+    /// Zero or more return values produced by `values`.
+    multi_values: *MultiValues,
+    /// A `syntax-rules` based macro transformer.
+    syntax_rules: *SyntaxRulesMacro,
     /// The `nil` or empty list value.
     nil,
     /// An unspecified or void value.
@@ -354,6 +574,22 @@ pub const Value = union(enum) {
         };
     }
 
+    /// Returns the numeric value as f64 if this is any numeric type, or null otherwise.
+    pub fn asFloat(self: Value) ?f64 {
+        return switch (self) {
+            .number => |n| n,
+            .exact_integer => |n| @floatFromInt(n),
+            .rational => |r| @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator)),
+            .complex => |c| c.real,
+            else => null,
+        };
+    }
+
+    /// Returns true if this value is any numeric type.
+    pub fn isNumeric(self: Value) bool {
+        return self == .number or self == .exact_integer or self == .rational or self == .complex;
+    }
+
     /// Creates a deep copy of the `Value`.
     /// For composite types like pairs and strings, this function allocates new memory
     /// and recursively clones the contents. For simple types, it returns the value itself.
@@ -367,7 +603,17 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .boolean, .character, .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .rational => |r| blk: {
+                const new_r = try allocator.create(Rational);
+                new_r.* = r.*;
+                break :blk Value{ .rational = new_r };
+            },
+            .complex => |c| blk: {
+                const new_c = try allocator.create(Complex);
+                new_c.* = c.*;
+                break :blk Value{ .complex = new_c };
+            },
             .string => |s| Value{ .string = try allocator.dupe(u8, s) },
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
@@ -404,7 +650,7 @@ pub const Value = union(enum) {
     pub fn from(allocator: std.mem.Allocator, v: anytype) !Value {
         return switch (@typeInfo(@TypeOf(v))) {
             .float => Value{ .number = v },
-            .int => Value{ .number = @floatFromInt(v) },
+            .int => Value{ .exact_integer = @intCast(v) },
             .bool => Value{ .boolean = v },
             .pointer => |p| switch (p.size) {
                 .slice => blk: {
@@ -419,10 +665,18 @@ pub const Value = union(enum) {
 };
 
 test "core environment" {
-    const allocator = std.testing.allocator;
+    // Element 0 environments and values allocate their backing storage from the
+    // interpreter's GC allocator in production. Inside this unit test we use an arena
+    // backed by `std.testing.allocator` so every allocation is freed by `arena.deinit()`
+    // without having to traverse the environment's binding map and free each entry by
+    // hand.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
         .allocator = allocator,
+        .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,
         .last_error_message = null,
         .module_cache = undefined,
@@ -432,19 +686,20 @@ test "core environment" {
     var env = try Environment.init(allocator, null);
     try env.set(&interp_stub, "x", Value{ .number = 42 });
     var value = try env.get("x", &interp_stub);
-    try testing.expect(value == Value{ .number = 42 });
+    try testing.expect(value == .number);
+    try testing.expectEqual(@as(f64, 42), value.number);
 
     // Test get from outer environment
     var outer_env = try Environment.init(allocator, null);
     try outer_env.set(&interp_stub, "y", Value{ .string = "hello" });
     var inner_env = try Environment.init(allocator, outer_env);
     value = try inner_env.get("y", &interp_stub);
-    try testing.expect(value == Value{ .string = "hello" });
+    try testing.expectEqualStrings("hello", value.string);
 
     // Test update on outer environment
     try inner_env.update(&interp_stub, "y", Value{ .string = "world" });
     value = try outer_env.get("y", &interp_stub);
-    try testing.expect(value == Value{ .string = "world" });
+    try testing.expectEqualStrings("world", value.string);
 
     // Test update on symbol not found
     const err = inner_env.update(&interp_stub, "z", Value{ .number = 0 });

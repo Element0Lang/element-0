@@ -7,7 +7,7 @@
                        (if (= counter 0)
                            accumulator
                            (fact-iter (- counter 1) (* accumulator counter))))))
-    (fact-iter n 1)))
+    (fact-iter n 1.0)))
 
 ;; This call will work with a large number, proving TCO is implemented.
 ;; Without TCO, it would cause a stack overflow.

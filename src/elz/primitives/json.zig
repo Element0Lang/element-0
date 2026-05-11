@@ -8,9 +8,8 @@ const interpreter = @import("../interpreter.zig");
 
 const ParseResult = struct { value: Value, pos: usize };
 
-/// Serializes a Value to JSON format and appends to the buffer.
-fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) !void {
-    const w = buf.writer(allocator);
+/// Serializes a Value to JSON format and writes to the writer.
+fn serializeValue(value: Value, w: *std.Io.Writer) !void {
     switch (value) {
         .number => |n| {
             // Handle special float values
@@ -20,6 +19,9 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
                 try w.print("{d}", .{n});
             }
         },
+        .exact_integer => |n| try w.print("{d}", .{n}),
+        .rational => |r| try w.print("{d}", .{@as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator))}),
+        .complex => return error.OutOfMemory,
         .string => |s| {
             try w.writeByte('"');
             for (s) |c| {
@@ -50,13 +52,13 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             while (current == .pair) {
                 if (!first) try w.writeByte(',');
                 first = false;
-                try serializeValue(current.pair.car, buf, allocator);
+                try serializeValue(current.pair.car, w);
                 current = current.pair.cdr;
             }
             // If improper list, serialize the cdr too
             if (current != .nil) {
                 if (!first) try w.writeByte(',');
-                try serializeValue(current, buf, allocator);
+                try serializeValue(current, w);
             }
             try w.writeByte(']');
         },
@@ -64,7 +66,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             try w.writeByte('[');
             for (v.items, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
-                try serializeValue(item, buf, allocator);
+                try serializeValue(item, w);
             }
             try w.writeByte(']');
         },
@@ -86,7 +88,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
                 }
                 try w.writeByte('"');
                 try w.writeByte(':');
-                try serializeValue(entry.value_ptr.*, buf, allocator);
+                try serializeValue(entry.value_ptr.*, w);
             }
             try w.writeByte('}');
         },
@@ -118,7 +120,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
             try w.writeByte('"');
         },
         // Non-serializable types
-        .closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .unspecified => {
+        .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .unspecified => {
             return error.OutOfMemory; // Signal unsupported type
         },
     }
@@ -128,7 +130,7 @@ fn serializeValue(value: Value, buf: *std.ArrayListUnmanaged(u8), allocator: std
 fn parseJsonString(json: []const u8, start: usize, allocator: std.mem.Allocator) !ParseResult {
     if (start >= json.len or json[start] != '"') return error.OutOfMemory;
     var i = start + 1;
-    var result = std.ArrayListUnmanaged(u8){};
+    var result = std.ArrayListUnmanaged(u8).empty;
     errdefer result.deinit(allocator);
 
     while (i < json.len and json[i] != '"') {
@@ -197,7 +199,7 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
             i += 1;
             i = skipWhitespace(json, i);
 
-            var elements = std.ArrayListUnmanaged(Value){};
+            var elements = std.ArrayListUnmanaged(Value).empty;
             defer elements.deinit(allocator);
 
             if (i < json.len and json[i] == ']') {
@@ -275,7 +277,20 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
                 if ((json[end] == '-' or json[end] == '+') and end > i + 1 and json[end - 1] != 'e' and json[end - 1] != 'E') break;
                 end += 1;
             }
-            const num = std.fmt.parseFloat(f64, json[i..end]) catch return error.OutOfMemory;
+            const token = json[i..end];
+            var is_float = false;
+            for (token) |c| {
+                if (c == '.' or c == 'e' or c == 'E') {
+                    is_float = true;
+                    break;
+                }
+            }
+            if (!is_float) {
+                if (std.fmt.parseInt(i64, token, 10)) |n| {
+                    return .{ .value = Value{ .exact_integer = n }, .pos = end };
+                } else |_| {}
+            }
+            const num = std.fmt.parseFloat(f64, token) catch return error.OutOfMemory;
             return .{ .value = Value{ .number = num }, .pos = end };
         },
         else => return error.OutOfMemory,
@@ -288,12 +303,12 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
 pub fn json_serialize(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
-    var buf = std.ArrayListUnmanaged(u8){};
     const allocator = env.allocator;
-    errdefer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
 
-    serializeValue(args.items[0], &buf, allocator) catch return ElzError.InvalidArgument;
-    return Value{ .string = buf.toOwnedSlice(allocator) catch return ElzError.OutOfMemory };
+    serializeValue(args.items[0], &aw.writer) catch return ElzError.InvalidArgument;
+    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
 }
 
 /// `json-deserialize` parses a JSON string into a Value.
@@ -367,8 +382,8 @@ test "json deserialize number" {
 
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-deserialize \"42\")", &fuel);
-    try testing.expect(r == .number);
-    try testing.expectEqual(@as(f64, 42), r.number);
+    try testing.expect(r == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), r.exact_integer);
 }
 
 test "json deserialize string" {
@@ -390,8 +405,8 @@ test "json deserialize array" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-deserialize \"[1,2,3]\")", &fuel);
     try testing.expect(r == .pair);
-    try testing.expect(r.pair.car == .number);
-    try testing.expectEqual(@as(f64, 1), r.pair.car.number);
+    try testing.expect(r.pair.car == .exact_integer);
+    try testing.expectEqual(@as(i64, 1), r.pair.car.exact_integer);
 }
 
 test "json roundtrip" {
@@ -402,8 +417,8 @@ test "json roundtrip" {
     var fuel: u64 = 10000;
     // Serialize then deserialize a number
     const r1 = try interp.evalString("(json-deserialize (json-serialize 42))", &fuel);
-    try testing.expect(r1 == .number);
-    try testing.expectEqual(@as(f64, 42), r1.number);
+    try testing.expect(r1 == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), r1.exact_integer);
 
     // Serialize then deserialize a string
     fuel = 10000;
