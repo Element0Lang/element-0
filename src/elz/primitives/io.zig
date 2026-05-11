@@ -171,8 +171,8 @@ test "io primitives" {
     _ = try load(&interp, interp.root_env, args, &fuel);
 
     const x = try interp.root_env.get("x", &interp);
-    try testing.expect(x == .number);
-    try testing.expectEqual(@as(f64, 42), x.number);
+    try testing.expect(x == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), x.exact_integer);
 
     std.Io.Dir.cwd().deleteFile(interp.io, filename) catch {};
 }

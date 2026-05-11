@@ -333,7 +333,7 @@ test "apply with empty list" {
     try args.append(core.Value.nil);
 
     const result = try apply(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result.number == 42);
+    try testing.expect(result == .exact_integer and result.exact_integer == 42);
 }
 
 test "apply memory leak regression" {

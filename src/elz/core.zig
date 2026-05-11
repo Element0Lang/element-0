@@ -206,6 +206,48 @@ pub const SyntaxRulesMacro = struct {
 /// A pointer to a native Zig function that can be called from Elz.
 pub const PrimitiveFn = *const fn (interp: *interpreter.Interpreter, env: *Environment, args: ValueList, fuel: *u64) ElzError!Value;
 
+/// An exact rational number stored in canonical form (GCD-reduced, positive denominator).
+pub const Rational = struct {
+    numerator: i64,
+    denominator: i64,
+
+    pub fn toFloat(self: Rational) f64 {
+        return @as(f64, @floatFromInt(self.numerator)) / @as(f64, @floatFromInt(self.denominator));
+    }
+};
+
+fn gcd_abs(a: i64, b: i64) i64 {
+    var x: i64 = if (a < 0) -a else a;
+    var y: i64 = if (b < 0) -b else b;
+    while (y != 0) {
+        const t = y;
+        y = @rem(x, y);
+        x = t;
+    }
+    return x;
+}
+
+/// Normalizes a rational number (n/d) into canonical form and returns the
+/// appropriate Value: `.exact_integer` if denominator reduces to 1, else
+/// `.rational` (heap-allocated). Returns `ElzError.DivisionByZero` if d == 0.
+pub fn normalizeRational(n: i64, d: i64, allocator: std.mem.Allocator) ElzError!Value {
+    if (d == 0) return ElzError.DivisionByZero;
+    const sign: i64 = if (d < 0) -1 else 1;
+    const g = gcd_abs(n, d);
+    const num = sign * @divTrunc(n, g);
+    const den = sign * @divTrunc(d, g);
+    if (den == 1) return Value{ .exact_integer = num };
+    const r = allocator.create(Rational) catch return ElzError.OutOfMemory;
+    r.* = .{ .numerator = num, .denominator = den };
+    return Value{ .rational = r };
+}
+
+/// A complex number with inexact real and imaginary parts.
+pub const Complex = struct {
+    real: f64,
+    imag: f64,
+};
+
 /// A dynamic-wind frame: a (before, after) pair pushed onto the interpreter
 /// dynamic winder chain. The chain is innermost-first.
 pub const Winder = struct {
@@ -292,6 +334,10 @@ pub const HashMap = struct {
     }
 
     pub fn deinit(self: *HashMap) void {
+        var it = self.entries.keyIterator();
+        while (it.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
         self.entries.deinit(self.allocator);
     }
 
@@ -461,8 +507,14 @@ pub const Promise = struct {
 pub const Value = union(enum) {
     /// An Element 0 symbol.
     symbol: []const u8,
-    /// A floating-point number.
+    /// A floating-point number (inexact real).
     number: f64,
+    /// An exact integer.
+    exact_integer: i64,
+    /// An exact rational number (heap-allocated, GCD-reduced).
+    rational: *Rational,
+    /// A complex number with inexact real and imaginary parts.
+    complex: *Complex,
     /// A pair, the building block of lists.
     pair: *Pair,
     /// A single character.
@@ -522,6 +574,22 @@ pub const Value = union(enum) {
         };
     }
 
+    /// Returns the numeric value as f64 if this is any numeric type, or null otherwise.
+    pub fn asFloat(self: Value) ?f64 {
+        return switch (self) {
+            .number => |n| n,
+            .exact_integer => |n| @floatFromInt(n),
+            .rational => |r| @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator)),
+            .complex => |c| c.real,
+            else => null,
+        };
+    }
+
+    /// Returns true if this value is any numeric type.
+    pub fn isNumeric(self: Value) bool {
+        return self == .number or self == .exact_integer or self == .rational or self == .complex;
+    }
+
     /// Creates a deep copy of the `Value`.
     /// For composite types like pairs and strings, this function allocates new memory
     /// and recursively clones the contents. For simple types, it returns the value itself.
@@ -535,7 +603,17 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .rational => |r| blk: {
+                const new_r = try allocator.create(Rational);
+                new_r.* = r.*;
+                break :blk Value{ .rational = new_r };
+            },
+            .complex => |c| blk: {
+                const new_c = try allocator.create(Complex);
+                new_c.* = c.*;
+                break :blk Value{ .complex = new_c };
+            },
             .string => |s| Value{ .string = try allocator.dupe(u8, s) },
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
@@ -572,7 +650,7 @@ pub const Value = union(enum) {
     pub fn from(allocator: std.mem.Allocator, v: anytype) !Value {
         return switch (@typeInfo(@TypeOf(v))) {
             .float => Value{ .number = v },
-            .int => Value{ .number = @floatFromInt(v) },
+            .int => Value{ .exact_integer = @intCast(v) },
             .bool => Value{ .boolean = v },
             .pointer => |p| switch (p.size) {
                 .slice => blk: {

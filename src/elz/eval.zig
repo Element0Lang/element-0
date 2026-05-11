@@ -435,6 +435,9 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
 fn is_eqv(a: Value, b: Value) bool {
     return switch (a) {
         .number => |n| if (b == .number) n == b.number else false,
+        .exact_integer => |n| if (b == .exact_integer) n == b.exact_integer else false,
+        .rational => |r| if (b == .rational) r.numerator == b.rational.numerator and r.denominator == b.rational.denominator else false,
+        .complex => |c| if (b == .complex) c.real == b.complex.real and c.imag == b.complex.imag else false,
         .boolean => |bl| if (b == .boolean) bl == b.boolean else false,
         .character => |c| if (b == .character) c == b.character else false,
         .symbol => |s| if (b == .symbol) std.mem.eql(u8, s, b.symbol) else false,
@@ -1156,7 +1159,7 @@ fn bindClosureArgs(
 
 fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
     switch (ast) {
-        .number, .boolean, .character, .nil, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified, .promise, .multi_values, .syntax_rules => {
+        .number, .exact_integer, .rational, .complex, .boolean, .character, .nil, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified, .promise, .multi_values, .syntax_rules => {
             return .{ .apply = .{ .k = k, .val = ast } };
         },
         .string => |s| {
@@ -1655,6 +1658,10 @@ pub fn applyProc(interp: *interpreter.Interpreter, proc: Value, args: core.Value
             return try invokeCapturedCont(interp, cap, arg_val, fuel);
         },
         .foreign_procedure => |ff| {
+            const ffi = @import("ffi.zig");
+            const prev_interp = ffi.active_interp;
+            ffi.active_interp = interp;
+            defer ffi.active_interp = prev_interp;
             const result = ff(env, args) catch |err| {
                 interp.last_error_message = @errorName(err);
                 return ElzError.ForeignFunctionError;
@@ -1791,8 +1798,8 @@ test "eval simple values" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("42", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 42), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 42), result.exact_integer);
 }
 
 test "eval quote" {
@@ -1810,8 +1817,8 @@ test "eval if true branch" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(if #t 1 2)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 1), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 1), result.exact_integer);
 }
 
 test "eval if false branch" {
@@ -1820,8 +1827,8 @@ test "eval if false branch" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(if #f 1 2)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 2), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 2), result.exact_integer);
 }
 
 test "eval nested if - regression for TCO bug" {
@@ -1830,8 +1837,8 @@ test "eval nested if - regression for TCO bug" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(if #t (if #t (if #t 42 0) 0) 0)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 42), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 42), result.exact_integer);
 }
 
 test "eval cond" {
@@ -1840,8 +1847,8 @@ test "eval cond" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(cond (#f 1) (#t 2) (else 3))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 2), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 2), result.exact_integer);
 }
 
 test "eval and" {
@@ -1850,8 +1857,8 @@ test "eval and" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(and 1 2 3)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 3), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 3), result.exact_integer);
 }
 
 test "eval or" {
@@ -1860,8 +1867,8 @@ test "eval or" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(or #f 5)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 5), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 5), result.exact_integer);
 }
 
 test "eval define and lookup" {
@@ -1871,8 +1878,8 @@ test "eval define and lookup" {
 
     _ = try interp.evalString("(define x 100)", &fuel);
     const result = try interp.evalString("x", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 100), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 100), result.exact_integer);
 }
 
 test "eval set!" {
@@ -1883,8 +1890,8 @@ test "eval set!" {
     _ = try interp.evalString("(define y 5)", &fuel);
     _ = try interp.evalString("(set! y 10)", &fuel);
     const result = try interp.evalString("y", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 10), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 10), result.exact_integer);
 }
 
 test "eval lambda" {
@@ -1893,8 +1900,8 @@ test "eval lambda" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("((lambda (x) (* x 2)) 7)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 14), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 14), result.exact_integer);
 }
 
 test "eval begin" {
@@ -1903,8 +1910,8 @@ test "eval begin" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(begin 1 2 3)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 3), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 3), result.exact_integer);
 }
 
 test "eval let" {
@@ -1913,8 +1920,8 @@ test "eval let" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(let ((x 5) (y 10)) (+ x y))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 15), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 15), result.exact_integer);
 }
 
 test "eval let*" {
@@ -1923,8 +1930,8 @@ test "eval let*" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(let* ((x 5) (y x)) (+ x y))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 10), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 10), result.exact_integer);
 }
 
 test "eval letrec for recursion" {
@@ -1936,8 +1943,8 @@ test "eval letrec for recursion" {
         "(letrec ((factorial (lambda (n) (if (<= n 1) 1 (* n (factorial (- n 1))))))) (factorial 5))",
         &fuel,
     );
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 120), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 120), result.exact_integer);
 }
 
 test "eval try/catch success" {
@@ -1946,8 +1953,8 @@ test "eval try/catch success" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(try (+ 1 2) (catch err 0))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 3), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 3), result.exact_integer);
 }
 
 test "eval try/catch error" {
@@ -1956,8 +1963,8 @@ test "eval try/catch error" {
     var fuel: u64 = 1000;
 
     const result = try interp.evalString("(try (/ 1 0) (catch err 42))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 42), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 42), result.exact_integer);
 }
 
 test "eval fuel exhaustion" {
@@ -1975,8 +1982,8 @@ test "eval call/cc basic escape" {
     var fuel: u64 = 10000;
 
     const result = try interp.evalString("(+ 1 (call/cc (lambda (k) (+ 2 (k 10)))))", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 11), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 11), result.exact_integer);
 }
 
 test "eval dynamic-wind basic" {

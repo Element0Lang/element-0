@@ -137,13 +137,13 @@ It outlines the features to be implemented and their current status.
 * [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
 * [x] `define-macro` (simple procedural macros)
 * [x] `dynamic-wind`, `call/cc` (`call-with-current-continuation`): full CPS evaluator with winder chain management.
-* [ ] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
+* [x] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
 
 ### 5. Better Host Integration and Embeddability
 
 * **Advanced FFI**
-    * [ ] Support for passing complex Zig structs.
-    * [ ] Ability to pass Elz closures to Zig as callbacks.
+    * [x] Support for passing complex Zig structs.
+    * [x] Ability to pass Elz closures to Zig as callbacks.
     * [x] Automatic type conversions for `bool`, `[]const u8`, and `?T` (optional) types.
 * **Sandboxing and Security**
     * [x] A sandboxed mode to restrict access to I/O and other sensitive operations.

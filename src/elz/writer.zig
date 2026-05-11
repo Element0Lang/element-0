@@ -26,6 +26,12 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
     switch (value) {
         .symbol => |s| try writer.print("{s}", .{s}),
         .number => |n| try writer.print("{d}", .{n}),
+        .exact_integer => |n| try writer.print("{d}", .{n}),
+        .rational => |r| try writer.print("{d}/{d}", .{ r.numerator, r.denominator }),
+        .complex => |c| if (c.imag >= 0)
+            try writer.print("{d}+{d}i", .{ c.real, c.imag })
+        else
+            try writer.print("{d}{d}i", .{ c.real, c.imag }),
         .boolean => |b| try writer.writeAll(if (b) "#t" else "#f"),
         .nil => try writer.writeAll("()"),
         .character => |c| {

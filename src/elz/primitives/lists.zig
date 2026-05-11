@@ -81,7 +81,7 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 /// The length of the list as a `Value.number`.
 pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    var count: f64 = 0;
+    var count: i64 = 0;
     var current = args.items[0];
     while (current != .nil) {
         const p = switch (current) {
@@ -91,7 +91,19 @@ pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core
         count += 1;
         current = p.cdr;
     }
-    return Value{ .number = count };
+    return Value{ .exact_integer = count };
+}
+
+/// Helper for converting a numeric `Value` to a non-negative `usize` index.
+fn toIndex(v: Value) ElzError!usize {
+    return switch (v) {
+        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .number => |n| blk: {
+            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            break :blk @intFromFloat(n);
+        },
+        else => ElzError.InvalidArgument,
+    };
 }
 
 /// `append` concatenates multiple lists into a single list.
@@ -203,12 +215,7 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
 pub fn list_ref(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
-    const k_val = args.items[1];
-    if (k_val != .number) return ElzError.InvalidArgument;
-    const k = k_val.number;
-    if (k < 0 or @floor(k) != k) return ElzError.InvalidArgument;
-
-    var idx: usize = @intFromFloat(k);
+    var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
         if (current != .pair) return ElzError.InvalidArgument;
@@ -223,12 +230,7 @@ pub fn list_ref(_: *interpreter.Interpreter, env: *core.Environment, args: core.
 pub fn list_tail(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
-    const k_val = args.items[1];
-    if (k_val != .number) return ElzError.InvalidArgument;
-    const k = k_val.number;
-    if (k < 0 or @floor(k) != k) return ElzError.InvalidArgument;
-
-    var idx: usize = @intFromFloat(k);
+    var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
         if (current != .pair) return ElzError.InvalidArgument;
@@ -262,6 +264,9 @@ fn eqCheck(a: Value, b: Value) bool {
         .nil => b == .nil,
         .boolean => |av| if (b == .boolean) av == b.boolean else false,
         .number => |av| if (b == .number) av == b.number else false,
+        .exact_integer => |av| if (b == .exact_integer) av == b.exact_integer else false,
+        .rational => |av| if (b == .rational) (av.numerator == b.rational.numerator and av.denominator == b.rational.denominator) else false,
+        .complex => |av| if (b == .complex) (av.real == b.complex.real and av.imag == b.complex.imag) else false,
         .character => |av| if (b == .character) av == b.character else false,
         .symbol => |av| if (b == .symbol) std.mem.eql(u8, av, b.symbol) else false,
         .pair => |av| if (b == .pair) av == b.pair else false,
@@ -324,53 +329,55 @@ test "list primitives" {
 
     // Test list
     var args = core.ValueList.init(interp.allocator);
-    try args.append(Value{ .number = 1 });
-    try args.append(Value{ .number = 2 });
+    try args.append(Value{ .exact_integer = 1 });
+    try args.append(Value{ .exact_integer = 2 });
     const list_val = try list(&interp, interp.root_env, args, &fuel);
-    try testing.expectEqual(@as(f64, 1), list_val.pair.car.number);
-    try testing.expectEqual(@as(f64, 2), list_val.pair.cdr.pair.car.number);
+    try testing.expect(list_val.pair.car == .exact_integer);
+    try testing.expectEqual(@as(i64, 1), list_val.pair.car.exact_integer);
+    try testing.expect(list_val.pair.cdr.pair.car == .exact_integer);
+    try testing.expectEqual(@as(i64, 2), list_val.pair.cdr.pair.car.exact_integer);
 
     // Test cons
     args.clearRetainingCapacity();
-    try args.append(Value{ .number = 0 });
+    try args.append(Value{ .exact_integer = 0 });
     try args.append(list_val);
     const new_list = try cons(&interp, interp.root_env, args, &fuel);
-    try testing.expectEqual(@as(f64, 0), new_list.pair.car.number);
+    try testing.expect(new_list.pair.car == .exact_integer and new_list.pair.car.exact_integer == 0);
 
     // Test car
     args.clearRetainingCapacity();
     try args.append(new_list);
     const car_val = try car(&interp, interp.root_env, args, &fuel);
-    try testing.expectEqual(@as(f64, 0), car_val.number);
+    try testing.expect(car_val == .exact_integer and car_val.exact_integer == 0);
 
     // Test cdr
     args.clearRetainingCapacity();
     try args.append(new_list);
     const cdr_val = try cdr(&interp, interp.root_env, args, &fuel);
-    try testing.expect(cdr_val.pair.car == .number and cdr_val.pair.car.number == 1);
+    try testing.expect(cdr_val.pair.car == .exact_integer and cdr_val.pair.car.exact_integer == 1);
 
     // Test list-length
     args.clearRetainingCapacity();
     try args.append(new_list);
     const len_val = try list_length(&interp, interp.root_env, args, &fuel);
-    try testing.expect(len_val == .number and len_val.number == 3);
+    try testing.expect(len_val == .exact_integer and len_val.exact_integer == 3);
 
     // Test reverse
     args.clearRetainingCapacity();
     try args.append(list_val);
     const reversed_list = try reverse(&interp, interp.root_env, args, &fuel);
-    try testing.expect(reversed_list.pair.car == .number and reversed_list.pair.car.number == 2);
-    try testing.expect(reversed_list.pair.cdr.pair.car == .number and reversed_list.pair.cdr.pair.car.number == 1);
+    try testing.expect(reversed_list.pair.car == .exact_integer and reversed_list.pair.car.exact_integer == 2);
+    try testing.expect(reversed_list.pair.cdr.pair.car == .exact_integer and reversed_list.pair.cdr.pair.car.exact_integer == 1);
 
     // Test append
     args.clearRetainingCapacity();
     try args.append(list_val);
     try args.append(reversed_list);
     const appended_list = try append(&interp, interp.root_env, args, &fuel);
-    try testing.expect(appended_list.pair.car == .number and appended_list.pair.car.number == 1);
-    try testing.expect(appended_list.pair.cdr.pair.car == .number and appended_list.pair.cdr.pair.car.number == 2);
-    try testing.expect(appended_list.pair.cdr.pair.cdr.pair.car == .number and appended_list.pair.cdr.pair.cdr.pair.car.number == 2);
-    try testing.expect(appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car == .number and appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car.number == 1);
+    try testing.expect(appended_list.pair.car == .exact_integer and appended_list.pair.car.exact_integer == 1);
+    try testing.expect(appended_list.pair.cdr.pair.car == .exact_integer and appended_list.pair.cdr.pair.car.exact_integer == 2);
+    try testing.expect(appended_list.pair.cdr.pair.cdr.pair.car == .exact_integer and appended_list.pair.cdr.pair.cdr.pair.car.exact_integer == 2);
+    try testing.expect(appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car == .exact_integer and appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car.exact_integer == 1);
 
     // Test map
     const source = "(lambda (x) (* x 2))";
@@ -381,6 +388,6 @@ test "list primitives" {
     try args.append(proc_val);
     try args.append(list_val);
     const mapped_list = try map(&interp, interp.root_env, args, &fuel);
-    try testing.expect(mapped_list.pair.car == .number and mapped_list.pair.car.number == 2);
-    try testing.expect(mapped_list.pair.cdr.pair.car == .number and mapped_list.pair.cdr.pair.car.number == 4);
+    try testing.expect(mapped_list.pair.car == .exact_integer and mapped_list.pair.car.exact_integer == 2);
+    try testing.expect(mapped_list.pair.cdr.pair.car == .exact_integer and mapped_list.pair.cdr.pair.car.exact_integer == 4);
 }

@@ -196,9 +196,64 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         if (char_name.len == 1) return Value{ .character = char_name[0] };
         return ElzError.InvalidCharacterLiteral;
     }
-    const num = std.fmt.parseFloat(f64, token) catch {
+    // Handle exactness prefix: #e (exact) or #i (inexact)
+    var rest = token;
+    var force_exact: ?bool = null;
+    if (token.len >= 2 and token[0] == '#') {
+        switch (token[1]) {
+            'e', 'E' => { force_exact = true; rest = token[2..]; },
+            'i', 'I' => { force_exact = false; rest = token[2..]; },
+            else => {},
+        }
+    }
+
+    // Try rational literal p/q
+    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+        const num_str = rest[0..slash];
+        const den_str = rest[slash + 1 ..];
+        const numer = std.fmt.parseInt(i64, num_str, 10) catch null;
+        const denom = std.fmt.parseInt(i64, den_str, 10) catch null;
+        if (numer != null and denom != null and denom.? != 0) {
+            const rational_val = try core.normalizeRational(numer.?, denom.?, allocator);
+            if (force_exact == false) {
+                const f = switch (rational_val) {
+                    .exact_integer => |n| @as(f64, @floatFromInt(n)),
+                    .rational => |r| r.toFloat(),
+                    else => unreachable,
+                };
+                return Value{ .number = f };
+            }
+            return rational_val;
+        }
+    }
+
+    // Try integer (no decimal point, no exponent)
+    const is_int = blk: {
+        var s = rest;
+        if (s.len > 0 and (s[0] == '+' or s[0] == '-')) s = s[1..];
+        if (s.len == 0) break :blk false;
+        for (s) |c| {
+            if (c < '0' or c > '9') break :blk false;
+        }
+        break :blk true;
+    };
+    if (is_int) {
+        const n = std.fmt.parseInt(i64, rest, 10) catch null;
+        if (n != null) {
+            if (force_exact == false) return Value{ .number = @floatFromInt(n.?) };
+            return Value{ .exact_integer = n.? };
+        }
+    }
+
+    const num = std.fmt.parseFloat(f64, rest) catch {
+        if (force_exact != null) return ElzError.InvalidArgument;
         return Value{ .symbol = try allocator.dupe(u8, token) };
     };
+    if (force_exact == true) {
+        const as_int = @as(i64, @intFromFloat(num));
+        if (@as(f64, @floatFromInt(as_int)) == num) return Value{ .exact_integer = as_int };
+        return ElzError.InvalidArgument;
+    }
     return Value{ .number = num };
 }
 
@@ -265,8 +320,8 @@ test "parser" {
 
     // Test parsing a number
     var value = try read("42", allocator);
-    try testing.expect(value == .number);
-    try testing.expectEqual(@as(f64, 42), value.number);
+    try testing.expect(value == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), value.exact_integer);
 
     // Test parsing a symbol
     value = try read("foo", allocator);
@@ -283,9 +338,9 @@ test "parser" {
     var p = value.pair;
     try testing.expect(p.car.is_symbol("+"));
     p = p.cdr.pair;
-    try testing.expect(p.car == .number and p.car.number == 1);
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == .number and p.car.number == 2);
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test parsing a quoted expression
@@ -297,9 +352,9 @@ test "parser" {
     const inner_list = p.car;
     if (inner_list != .pair) return error.TestExpectedPair;
     p = inner_list.pair;
-    try testing.expect(p.car == .number and p.car.number == 1);
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 1);
     p = p.cdr.pair;
-    try testing.expect(p.car == .number and p.car.number == 2);
+    try testing.expect(p.car == .exact_integer and p.car.exact_integer == 2);
     try testing.expect(p.cdr == .nil);
 
     // Test unterminated string error

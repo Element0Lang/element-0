@@ -220,8 +220,8 @@ test "interpreter init and basic eval" {
     // Test basic arithmetic
     var fuel: u64 = 1000;
     const result = try interp.evalString("(+ 1 2 3)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 6), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 6), result.exact_integer);
 }
 
 test "interpreter evalString with multiple expressions" {
@@ -231,8 +231,8 @@ test "interpreter evalString with multiple expressions" {
     var fuel: u64 = 1000;
     // Last expression is returned
     const result = try interp.evalString("(define x 10) (+ x 5)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 15), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 15), result.exact_integer);
 }
 
 test "interpreter sandbox flags" {
@@ -252,6 +252,6 @@ test "interpreter eval lambda" {
 
     var fuel: u64 = 1000;
     const result = try interp.evalString("((lambda (x) (* x x)) 5)", &fuel);
-    try std.testing.expect(result == .number);
-    try std.testing.expectEqual(@as(f64, 25), result.number);
+    try std.testing.expect(result == .exact_integer);
+    try std.testing.expectEqual(@as(i64, 25), result.exact_integer);
 }

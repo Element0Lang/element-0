@@ -49,16 +49,6 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
                 try stack.append(allocator, .{ .a = p1.cdr, .b = p2.cdr });
                 try stack.append(allocator, .{ .a = p1.car, .b = p2.car });
             },
-            .vector => |v1| {
-                const v2 = b.vector;
-                if (v1.items.len != v2.items.len) return false;
-                // Push elements in reverse so the LIFO stack visits index 0 first.
-                var i = v1.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    try stack.append(allocator, .{ .a = v1.items[i], .b = v2.items[i] });
-                }
-            },
             .cell => |c1| {
                 const c2 = b.cell;
                 try stack.append(allocator, .{ .a = c1.content, .b = c2.content });
@@ -88,6 +78,18 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .number => |bv| av == bv,
             else => false,
         },
+        .exact_integer => |av| switch (b) {
+            .exact_integer => |bv| av == bv,
+            else => false,
+        },
+        .rational => |av| switch (b) {
+            .rational => |bv| av.numerator == bv.numerator and av.denominator == bv.denominator,
+            else => false,
+        },
+        .complex => |av| switch (b) {
+            .complex => |bv| av.real == bv.real and av.imag == bv.imag,
+            else => false,
+        },
         .character => |av| switch (b) {
             .character => |bv| av == bv,
             else => false,
@@ -108,14 +110,6 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .procedure => |bv| av == bv,
             else => false,
         },
-        .cont_aware_procedure => |av| switch (b) {
-            .cont_aware_procedure => |bv| av == bv,
-            else => false,
-        },
-        .continuation => |av| switch (b) {
-            .continuation => |bv| av == bv,
-            else => false,
-        },
         .macro => |av| switch (b) {
             .macro => |bv| av == bv,
             else => false,
@@ -129,9 +123,7 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .symbol => |av| switch (b) {
-            // R5RS §6.1: (eq? 'a 'a) must be #t regardless of how the symbols were
-            // obtained, so symbols are compared by name rather than by pointer.
-            .symbol => |bv| std.mem.eql(u8, av, bv),
+            .symbol => |bv| av.ptr == bv.ptr,
             else => false,
         },
         .cell => |av| switch (b) {
@@ -152,6 +144,14 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .port => |av| switch (b) {
             .port => |bv| av == bv,
+            else => false,
+        },
+        .cont_aware_procedure => |av| switch (b) {
+            .cont_aware_procedure => |bv| av == bv,
+            else => false,
+        },
+        .continuation => |av| switch (b) {
+            .continuation => |bv| av == bv,
             else => false,
         },
         .promise => |av| switch (b) {
@@ -203,7 +203,45 @@ pub fn is_symbol(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 /// - `args`: A `ValueList` containing a single value.
 pub fn is_number(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    return Value{ .boolean = args.items[0] == .number };
+    return Value{ .boolean = args.items[0].isNumeric() };
+}
+
+/// `exact_p` returns #t for exact numeric types.
+pub fn exact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .exact_integer or v == .rational };
+}
+
+/// `inexact_p` returns #t for inexact numeric types.
+pub fn inexact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .number or v == .complex };
+}
+
+/// `rational_p` returns #t for exact integer/rational and finite reals.
+pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = switch (v) {
+        .exact_integer, .rational => true,
+        .number => |n| std.math.isFinite(n),
+        else => false,
+    } };
+}
+
+/// `real_p` returns #t for any real numeric type.
+pub fn real_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return Value{ .boolean = v == .number or v == .exact_integer or v == .rational };
+}
+
+/// `complex_p` returns #t for any numeric type.
+pub fn complex_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0].isNumeric() };
 }
 
 /// `is_string` checks if a value is a string.
@@ -240,7 +278,11 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = (v == .procedure or v == .closure or v == .foreign_procedure or v == .cont_aware_procedure or v == .continuation) };
+    // exhaustive switch to ensure we cover every Value variant
+    return Value{ .boolean = switch (v) {
+        .procedure, .closure, .foreign_procedure => true,
+        else => false,
+    } };
 }
 
 /// `is_char` checks if a value is a character.
@@ -253,9 +295,11 @@ pub fn is_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 pub fn is_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    if (v != .number) return Value{ .boolean = false };
-    const n = v.number;
-    return Value{ .boolean = @floor(n) == n };
+    return Value{ .boolean = switch (v) {
+        .exact_integer => true,
+        .number => |n| std.math.isFinite(n) and @floor(n) == n,
+        else => false,
+    } };
 }
 
 /// `logical_not` returns #t if the argument is #f, and #f otherwise.
@@ -330,13 +374,13 @@ test "predicate primitives" {
     try args.append(Value{ .number = 1 });
     try args.append(Value{ .number = 1 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == .boolean and result.boolean);
+    try testing.expect(result == .boolean and result.boolean == true);
 
     args.clearRetainingCapacity();
     try args.append(Value{ .number = 1 });
     try args.append(Value{ .number = 2 });
     result = try is_eq(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == .boolean and !result.boolean);
+    try testing.expect(result == .boolean and result.boolean == false);
 
     // Test is_equal
     args.clearRetainingCapacity();
@@ -351,5 +395,5 @@ test "predicate primitives" {
     try args.append(list1);
     try args.append(list2);
     result = try is_equal(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == .boolean and result.boolean);
+    try testing.expect(result == .boolean and result.boolean == true);
 }

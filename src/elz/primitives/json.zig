@@ -19,6 +19,9 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
                 try w.print("{d}", .{n});
             }
         },
+        .exact_integer => |n| try w.print("{d}", .{n}),
+        .rational => |r| try w.print("{d}", .{@as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator))}),
+        .complex => return error.OutOfMemory,
         .string => |s| {
             try w.writeByte('"');
             for (s) |c| {
@@ -274,7 +277,17 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
                 if ((json[end] == '-' or json[end] == '+') and end > i + 1 and json[end - 1] != 'e' and json[end - 1] != 'E') break;
                 end += 1;
             }
-            const num = std.fmt.parseFloat(f64, json[i..end]) catch return error.OutOfMemory;
+            const token = json[i..end];
+            var is_float = false;
+            for (token) |c| {
+                if (c == '.' or c == 'e' or c == 'E') { is_float = true; break; }
+            }
+            if (!is_float) {
+                if (std.fmt.parseInt(i64, token, 10)) |n| {
+                    return .{ .value = Value{ .exact_integer = n }, .pos = end };
+                } else |_| {}
+            }
+            const num = std.fmt.parseFloat(f64, token) catch return error.OutOfMemory;
             return .{ .value = Value{ .number = num }, .pos = end };
         },
         else => return error.OutOfMemory,
@@ -366,8 +379,8 @@ test "json deserialize number" {
 
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-deserialize \"42\")", &fuel);
-    try testing.expect(r == .number);
-    try testing.expectEqual(@as(f64, 42), r.number);
+    try testing.expect(r == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), r.exact_integer);
 }
 
 test "json deserialize string" {
@@ -389,8 +402,8 @@ test "json deserialize array" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-deserialize \"[1,2,3]\")", &fuel);
     try testing.expect(r == .pair);
-    try testing.expect(r.pair.car == .number);
-    try testing.expectEqual(@as(f64, 1), r.pair.car.number);
+    try testing.expect(r.pair.car == .exact_integer);
+    try testing.expectEqual(@as(i64, 1), r.pair.car.exact_integer);
 }
 
 test "json roundtrip" {
@@ -401,8 +414,8 @@ test "json roundtrip" {
     var fuel: u64 = 10000;
     // Serialize then deserialize a number
     const r1 = try interp.evalString("(json-deserialize (json-serialize 42))", &fuel);
-    try testing.expect(r1 == .number);
-    try testing.expectEqual(@as(f64, 42), r1.number);
+    try testing.expect(r1 == .exact_integer);
+    try testing.expectEqual(@as(i64, 42), r1.exact_integer);
 
     // Serialize then deserialize a string
     fuel = 10000;

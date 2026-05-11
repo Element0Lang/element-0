@@ -96,7 +96,7 @@ pub fn hash_map_count(_: *interpreter.Interpreter, _: *core.Environment, args: c
     const hm_val = args.items[0];
     if (hm_val != .hash_map) return ElzError.InvalidArgument;
 
-    return Value{ .number = @floatFromInt(hm_val.hash_map.count()) };
+    return Value{ .exact_integer = @intCast(hm_val.hash_map.count()) };
 }
 
 /// `is_hash_map` checks if a value is a hash map.
@@ -151,8 +151,8 @@ test "hash_map primitives" {
     args.clearRetainingCapacity();
     try args.append(hm_val);
     const count_result = try hash_map_count(&interp, interp.root_env, args, &fuel);
-    try testing.expect(count_result == .number);
-    try testing.expectEqual(count_result.number, 1);
+    try testing.expect(count_result == .exact_integer);
+    try testing.expectEqual(@as(i64, 1), count_result.exact_integer);
 
     // Test is_hash_map
     const is_hm_result = try is_hash_map(&interp, interp.root_env, args, &fuel);
