@@ -24,11 +24,10 @@ Priorities, in order:
 
 - Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
 - Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
-- Avoid strong or colorful adjectives and adverbs. Write "TCP proxy" not "lightweight TCP proxy", "scoring components" not "transparent scoring
-  components".
-- Use noun phrases for checklist items, not imperative verbs. Write "redundant index detection" not "detect redundant indexes".
-- Headings in Markdown files must be in the title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in,
-  on, at, to, by, of) stay lowercase unless they are the first word.
+- Avoid colorful adjectives and adverbs. Write "instruction decoder" not "elegant instruction decoder".
+- Use noun phrases for checklist items, not imperative verbs. Write "opcode timing table" not "build the opcode timing table".
+- Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
+  at, to, by, of) stay lowercase unless they are the first word.
 
 ## Repository Layout
 
@@ -152,4 +151,4 @@ Before submitting:
 - PR descriptions should include:
     1. Behavioral change summary.
     2. Tests added or updated.
-    3. Interactive verification done (yes/no).
+    3. Interactive verification is done (yes/no).
