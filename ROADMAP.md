@@ -1,4 +1,4 @@
-## Feature Roadmap
+# Feature Roadmap
 
 This document includes the roadmap for the Element 0 programming language and Elz.
 It outlines the features to be implemented and their current status.
@@ -97,7 +97,8 @@ It outlines the features to be implemented and their current status.
 #### 2.4. Syntactic Extensions
 
 * [x] `quasiquote` (`` ` ``), `unquote` (`,`), `unquote-splicing` (`,@`)
-* [x] `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list ellipsis are not yet supported.
+* [x] `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list
+  ellipsis are not yet supported.
 
 #### 2.5. Advanced Control Flow
 
@@ -122,8 +123,10 @@ It outlines the features to be implemented and their current status.
 
 * [x] **Math Library**: More common mathematical functions (like trigonometric and logarithmic functions).
 * [x] **List Utilities**: `filter`, `fold-left`, `fold-right`, and other common list processing functions.
-* [x] **String Utilities**: `string-append`, `string-ref`, `substring`, `string-split`, `number->string`, `string->number`, `make-string`, `string=?`, `string<?`, `string>?`, `string<=?`, `string>=?`, `gensym` implemented.
-* [x] **Regular Expressions**: `regex-match?`, `regex-search`, `regex-replace`, `regex-split` implemented with NFA-based engine supporting literals, `.`, `*`, `+`, `?`, character classes, and anchors.
+* [x] **String Utilities**: `string-append`, `string-ref`, `substring`, `string-split`, `number->string`, `string->number`, `make-string`, `string=?`,
+  `string<?`, `string>?`, `string<=?`, `string>=?`, `gensym` implemented.
+* [x] **Regular Expressions**: `regex-match?`, `regex-search`, `regex-replace`, `regex-split` implemented with NFA-based engine supporting literals,
+  `.`, `*`, `+`, `?`, character classes, and anchors.
 * [x] **OS and Filesystem**: `getenv`, `file-exists?`, `delete-file`, `current-directory`, `directory-list`, `rename-file` implemented.
 * [x] **Advanced I/O**: `format` procedure with `~a`, `~s`, `~%`, `~~` directives, and `value->string` implemented.
 * [x] **Date and Time**: `current-time`, `current-time-ms`, `time->components`, `sleep-ms` implemented.
@@ -133,8 +136,6 @@ It outlines the features to be implemented and their current status.
 * [x] **Error Handling**: A mechanism for handling runtime errors, like `try/catch` or `with-handler`.
 * [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
 * [x] `define-macro` (simple procedural macros)
-* [x] `syntax-rules`, `define-syntax`, `let-syntax`, `letrec-syntax` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list ellipsis are deferred.
-* [x] `call-with-escape-continuation` (`call/ec`): Escape-only continuations for early returns. Full `call/cc` deferred pending CPS rewrite.
 * [ ] `dynamic-wind`: deferred until full `call/cc` lands.
 * [ ] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
 

@@ -24,7 +24,7 @@ Priorities, in order:
 
 - Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
 - Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
-- Avoid colorful adjectives and adverbs. Write "instruction decoder" not "elegant instruction decoder".
+- Avoid colorful adjectives and adverbs. Write "garbage collector" not "efficient garbage collector", "parser" not "robust parser".
 - Use noun phrases for checklist items, not imperative verbs. Write "opcode timing table" not "build the opcode timing table".
 - Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
   at, to, by, of) stay lowercase unless they are the first word.
@@ -87,7 +87,7 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 ## Zig Conventions
 
-- Zig version: 0.15.2.
+- Zig version: 0.16.0.
 - Formatting is enforced by `zig fmt`. Run `make format` before committing.
 - Naming: `snake_case` for functions and variables, `PascalCase` for types and structs.
 - Element 0 symbols use `kebab-case` (e.g., `zig-mul`, `string-length`).
@@ -107,13 +107,22 @@ Run all test suites for any change:
 
 For interactive exploration: `make repl`.
 
+Run the narrowest relevant target while iterating (e.g., `make test` for a Zig change, `make test-elz` for a language change). Only run
+`make test-all` before declaring done.
+
 ## First Contribution Flow
 
+Use red-green TDD:
+
 1. Read the relevant source module under `src/elz/`.
-2. Implement the smallest possible change.
-3. Add or update inline `test` blocks in the changed Zig module. Add Element 0 tests in `tests/` if language behavior changed.
-4. Run `make test-all`.
-5. Verify interactively with `make repl` if needed.
+2. Write a failing test that describes the expected behavior (red). For a Zig change, add an inline `test` block; for a language behavior change, add
+   a case to the appropriate `tests/test_*.elz` file. Run the narrowest target and confirm it fails for the right reason.
+3. Write the smallest implementation that makes the test pass (green).
+4. Refactor while keeping tests green.
+5. Run `make test-all` and `make lint` before declaring done.
+6. Verify interactively with `make repl` if needed.
+
+When uncertain about language behavior, add a case to `tests/test_edge_cases.elz` first, before touching any Zig.
 
 Good first tasks:
 
@@ -130,6 +139,16 @@ Good first tasks:
 - Integration tests live in `tests/*_integ_test.zig` and test the public embedding API (init, evalString, FFI, error propagation, sandboxing).
 - Language-level tests live in `tests/test_*.elz` and are run by the interpreter itself via `make test-elz`.
 - No language-facing change is complete without an Element 0 test.
+- Prefer targeted assertions (one value, one error variant, one edge) over broad output comparisons.
+- Keep tests deterministic: initialize only the state you need, drive the public API, and assert on observable behavior.
+- When uncertain about correct behavior, add or refine a test first.
+
+## Documentation Expectations
+
+- `src/lib.zig` is the public embedding API. Keep its doc comments current; do not re-export internal types (`Interpreter`, `Environment`,
+  `core.Value`) without deliberate intent.
+- User workflow changes should update `README.md`.
+- If you encounter stale docs while changing related code, fix them in the same patch.
 
 ## Change Design Checklist
 
@@ -141,9 +160,26 @@ Before coding:
 
 Before submitting:
 
-1. `make test && make test-elz` passes.
+1. `make test-all` passes.
 2. `make lint` passes.
 3. Docs updated if the public API surface changed.
+
+## Review Guidelines
+
+Review output should be concise and include only critical issues.
+
+- `P0`: must-fix defects (incorrect language behavior, broken build or test workflow, severe regression).
+- `P1`: high-priority defects (possible correctness bug, missing validation for a risky change, incorrect cross-platform handling).
+
+Use this format for each issue:
+
+1. Severity (`P0`/`P1`)
+2. `file:line`
+3. Issue
+4. Why it matters
+5. Minimal fix direction
+
+Do not include style-only feedback or broad praise.
 
 ## Commit and PR Hygiene
 
