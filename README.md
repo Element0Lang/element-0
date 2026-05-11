@@ -138,8 +138,12 @@ fn zig_multiply(a: f64, b: f64) f64 {
 pub fn main() !void {
     // 1. Initialize the Elz interpreter.
     var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
 
-    const stdout = std.io.getStdOut().writer();
+    var buffer: [4096]u8 = undefined;
+    const stdout_file = std.Io.File.stdout();
+    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+    const stdout = &stdout_writer.interface;
 
     // --- Example 1: Evaluate a simple string of Elz code ---
     std.debug.print("--- Evaluating simple Elz code ---\n", .{});
@@ -150,7 +154,7 @@ pub fn main() !void {
     try stdout.print("Result of {s} is: ", .{source1});
     try elz.write(result1, stdout);
     try stdout.print("\n\n", .{});
-
+    try stdout.flush();
 
     // --- Example 2: Expose a Zig function to Elz and call it ---
     std.debug.print("--- Calling a Zig function from Elz ---\n", .{});
@@ -171,6 +175,7 @@ pub fn main() !void {
     try stdout.print("Result of {s} is: ", .{source2});
     try elz.write(result2, stdout);
     try stdout.print("\n", .{});
+    try stdout.flush();
 }
 ```
 
