@@ -137,6 +137,7 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "string<=?", core.Value{ .procedure = strings.string_le });
     try interp.root_env.set(interp, "string>=?", core.Value{ .procedure = strings.string_ge });
     try interp.root_env.set(interp, "gensym", core.Value{ .procedure = strings.gensym });
+    try interp.root_env.set(interp, "string", core.Value{ .procedure = strings.string_from_chars });
 }
 
 /// Populates the interpreter's root environment with control-related primitive functions.
@@ -151,6 +152,9 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "call-with-current-continuation", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
     try interp.root_env.set(interp, "call/cc", core.Value{ .cont_aware_procedure = control.call_with_current_continuation });
     try interp.root_env.set(interp, "dynamic-wind", core.Value{ .cont_aware_procedure = control.dynamic_wind });
+    try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
+    try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
+    try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
 }
 
 /// Populates the interpreter's root environment with I/O primitive functions.

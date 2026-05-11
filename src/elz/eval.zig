@@ -51,7 +51,11 @@ fn evalQuasiquote(interp: *interpreter.Interpreter, rest: Value, env: *Environme
 fn expandQuasiquote(interp: *interpreter.Interpreter, template: Value, env: *Environment, fuel: *u64, level: usize) ElzError!Value {
     switch (template) {
         .pair => |p| {
-            if (p.car.is_symbol("unquote")) {
+            const unquote_is_free = if (p.car.is_symbol("unquote")) blk: {
+                _ = env.get("unquote", interp) catch break :blk true;
+                break :blk false;
+            } else false;
+            if (unquote_is_free) {
                 if (level == 1) {
                     const unquote_rest = switch (p.cdr) {
                         .pair => |up| up,
@@ -72,7 +76,11 @@ fn expandQuasiquote(interp: *interpreter.Interpreter, template: Value, env: *Env
                 return Value{ .pair = new_pair };
             } else if (p.car == .pair) {
                 const inner = p.car.pair;
-                if (inner.car.is_symbol("unquote-splicing") and level == 1) {
+                const splice_is_free = if (inner.car.is_symbol("unquote-splicing")) blk: {
+                    _ = env.get("unquote-splicing", interp) catch break :blk true;
+                    break :blk false;
+                } else false;
+                if (splice_is_free and level == 1) {
                     const splice_rest = switch (inner.cdr) {
                         .pair => |sp| sp,
                         else => return ElzError.InvalidArgument,
@@ -831,8 +839,9 @@ fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environmen
     const bindings_list = rest.pair.car;
     const body = rest.pair.cdr;
 
-    const new_env = try Environment.init(env.allocator, env);
-
+    // Syntax bindings go into the same environment as the body so that internal
+    // `define` forms in the body are visible to the surrounding scope (R5RS body
+    // semantics). The syntax keywords introduced here live alongside the body bindings.
     var node = bindings_list;
     while (node != .nil) {
         if (node != .pair) return ElzError.InvalidArgument;
@@ -847,8 +856,8 @@ fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environmen
         if (transformer_form != .pair) return ElzError.InvalidArgument;
         if (!transformer_form.pair.car.is_symbol("syntax-rules")) return ElzError.InvalidArgument;
 
-        const sr = try buildSyntaxRules(new_env, name_val.symbol, transformer_form.pair.cdr);
-        try new_env.set(interp, name_val.symbol, Value{ .syntax_rules = sr });
+        const sr = try buildSyntaxRules(env, name_val.symbol, transformer_form.pair.cdr);
+        try env.set(interp, name_val.symbol, Value{ .syntax_rules = sr });
         node = node.pair.cdr;
     }
 
@@ -857,7 +866,7 @@ fn evalLetSyntax(interp: *interpreter.Interpreter, rest: Value, env: *Environmen
     var last: Value = .unspecified;
     while (body_node != .nil) {
         if (body_node != .pair) return ElzError.InvalidArgument;
-        last = try eval(interp, &body_node.pair.car, new_env, fuel);
+        last = try eval(interp, &body_node.pair.car, env, fuel);
         body_node = body_node.pair.cdr;
     }
     return last;

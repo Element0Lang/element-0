@@ -218,11 +218,32 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 }
 
 /// `number_to_string` converts a number to its string representation.
-/// Syntax: (number->string num)
+/// Syntax: (number->string num) or (number->string num radix)
 pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const num_val = args.items[0];
     if (!num_val.isNumeric()) return ElzError.InvalidArgument;
+
+    // With an explicit radix, convert integers to that base.
+    if (args.items.len == 2) {
+        const radix_val = args.items[1];
+        const radix: u8 = switch (radix_val) {
+            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
+            .number => |f| blk: {
+                const n = @as(i64, @intFromFloat(f));
+                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
+            },
+            else => return ElzError.InvalidArgument,
+        };
+        const n: i64 = switch (num_val) {
+            .exact_integer => |i| i,
+            .number => |f| @intFromFloat(f),
+            else => return ElzError.InvalidArgument,
+        };
+        var buf: [128]u8 = undefined;
+        const len = std.fmt.printInt(&buf, n, radix, .lower, .{});
+        return Value{ .string = try env.allocator.dupe(u8, buf[0..len]) };
+    }
 
     var buf: [128]u8 = undefined;
     const formatted = switch (num_val) {
@@ -243,14 +264,32 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
 }
 
 /// `string_to_number` converts a string to a number.
-/// Syntax: (string->number str)
+/// Syntax: (string->number str) or (string->number str radix)
 /// Returns #f if the string cannot be parsed as a number.
 pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
 
     const str = str_val.string;
+
+    // With an explicit radix, parse as integer only.
+    if (args.items.len == 2) {
+        const radix_val = args.items[1];
+        const radix: u8 = switch (radix_val) {
+            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
+            .number => |f| blk: {
+                const n = @as(i64, @intFromFloat(f));
+                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
+            },
+            else => return ElzError.InvalidArgument,
+        };
+        if (std.fmt.parseInt(i64, str, radix) catch null) |n| {
+            return Value{ .exact_integer = n };
+        }
+        return Value{ .boolean = false };
+    }
+
     // Try rational a/b
     if (std.mem.indexOfScalar(u8, str, '/')) |slash_idx| {
         if (slash_idx != 0 and slash_idx != str.len - 1) {
@@ -314,6 +353,22 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
     }
 
     return result;
+}
+
+/// `string_from_chars` creates a string from one or more characters.
+/// Syntax: (string char ...)
+pub fn string_from_chars(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    var bytes = std.ArrayListUnmanaged(u8).empty;
+    defer bytes.deinit(env.allocator);
+    for (args.items) |arg| {
+        if (arg != .character) return ElzError.InvalidArgument;
+        const cp: u21 = @intCast(arg.character);
+        if (!std.unicode.utf8ValidCodepoint(cp)) return ElzError.InvalidArgument;
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
+        try bytes.appendSlice(env.allocator, buf[0..len]);
+    }
+    return Value{ .string = try bytes.toOwnedSlice(env.allocator) };
 }
 
 /// `make_string` creates a string of k characters.

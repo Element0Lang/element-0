@@ -5,12 +5,18 @@ const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
 /// Checks if a value is a proper list (i.e., it ends with `nil`).
+/// Uses Floyd's tortoise-and-hare algorithm to detect cycles.
 fn isProperList(v: Value) bool {
-    var cur = v;
-    while (cur == .pair) {
-        cur = cur.pair.cdr;
+    var slow = v;
+    var fast = v;
+    while (true) {
+        if (fast != .pair) return fast == .nil;
+        fast = fast.pair.cdr;
+        if (fast != .pair) return fast == .nil;
+        fast = fast.pair.cdr;
+        slow = slow.pair.cdr;
+        if (slow == .pair and fast == .pair and slow.pair == fast.pair) return false;
     }
-    return cur == .nil;
 }
 
 /// An iterative implementation of `equal?` that is not vulnerable to stack
@@ -52,6 +58,15 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
             .cell => |c1| {
                 const c2 = b.cell;
                 try stack.append(allocator, .{ .a = c1.content, .b = c2.content });
+            },
+            .vector => |v1| {
+                const v2 = b.vector;
+                if (v1.items.len != v2.items.len) return false;
+                var k = v1.items.len;
+                while (k > 0) {
+                    k -= 1;
+                    try stack.append(allocator, .{ .a = v1.items[k], .b = v2.items[k] });
+                }
             },
             else => {
                 // For all other types, if they have the same type but are not
@@ -123,7 +138,7 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .symbol => |av| switch (b) {
-            .symbol => |bv| av.ptr == bv.ptr,
+            .symbol => |bv| std.mem.eql(u8, av, bv),
             else => false,
         },
         .cell => |av| switch (b) {
@@ -280,7 +295,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .closure, .foreign_procedure => true,
+        .procedure, .closure, .foreign_procedure, .cont_aware_procedure, .continuation => true,
         else => false,
     } };
 }

@@ -56,15 +56,21 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                 i = j + 1;
             },
             else => {
-                var j = i;
-                while (j < source.len) {
-                    const c = source[j];
-                    if (std.ascii.isWhitespace(c)) break;
-                    if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"') break;
-                    j += 1;
+                // #( is the vector literal prefix — emit it as a two-character token.
+                if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
+                    try tokens.append(allocator, source[i .. i + 2]);
+                    i += 2;
+                } else {
+                    var j = i;
+                    while (j < source.len) {
+                        const c = source[j];
+                        if (std.ascii.isWhitespace(c)) break;
+                        if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"') break;
+                        j += 1;
+                    }
+                    try tokens.append(allocator, source[i..j]);
+                    i = j;
                 }
-                try tokens.append(allocator, source[i..j]);
-                i = j;
             },
         }
     }
@@ -106,6 +112,22 @@ const Parser = struct {
             const p2 = try self.allocator.create(core.Pair);
             p2.* = .{ .car = sym, .cdr = Value{ .pair = p1 } };
             return Value{ .pair = p2 };
+        }
+        if (std.mem.eql(u8, token, "#(")) {
+            var items = std.ArrayListUnmanaged(Value).empty;
+            defer items.deinit(self.allocator);
+            while (true) {
+                if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
+                const next = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next, ")")) {
+                    self.position += 1;
+                    break;
+                }
+                try items.append(self.allocator, try self.parse_form());
+            }
+            const vec = try self.allocator.create(core.Vector);
+            vec.* = core.Vector{ .items = try items.toOwnedSlice(self.allocator) };
+            return Value{ .vector = vec };
         }
         if (std.mem.eql(u8, token, "(")) {
             var values = std.ArrayListUnmanaged(Value).empty;

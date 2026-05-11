@@ -181,21 +181,33 @@ pub fn reverse(_: *interpreter.Interpreter, env: *core.Environment, args: core.V
 /// Returns:
 /// A new list containing the results of applying the procedure to each element of the input list.
 pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
     const proc = args.items[0];
-    const list_val = args.items[1];
+    const num_lists = args.items.len - 1;
     var result_head: core.Value = .nil;
     var result_tail: ?*core.Pair = null;
-    var arg_list = core.ValueList.init(env.allocator);
-    try arg_list.append(.nil);
-    var current_node = list_val;
-    while (current_node != .nil) {
-        const p_node = switch (current_node) {
-            .pair => |p| p,
-            else => return ElzError.InvalidArgument,
-        };
-        arg_list.items[0] = p_node.car;
-        const mapped_val = try eval.eval_proc(interp, proc, arg_list, env, fuel);
+    // current position in each input list
+    var cursors = try env.allocator.alloc(core.Value, num_lists);
+    defer env.allocator.free(cursors);
+    for (0..num_lists) |i| cursors[i] = args.items[i + 1];
+    var call_args = core.ValueList.init(env.allocator);
+    defer call_args.deinit();
+    while (true) {
+        // Check if all lists are exhausted (stop at shortest).
+        var all_done = true;
+        for (cursors) |cur| {
+            if (cur != .nil) { all_done = false; break; }
+        }
+        if (all_done) break;
+        // Collect one element from each list.
+        call_args.items.len = 0;
+        for (0..num_lists) |i| {
+            const cur = cursors[i];
+            if (cur != .pair) return ElzError.InvalidArgument;
+            try call_args.append(cur.pair.car);
+            cursors[i] = cur.pair.cdr;
+        }
+        const mapped_val = try eval.eval_proc(interp, proc, call_args, env, fuel);
         const new_pair = try env.allocator.create(core.Pair);
         new_pair.* = .{ .car = mapped_val, .cdr = .nil };
         if (result_tail) |tail| {
@@ -205,7 +217,6 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
             result_head = Value{ .pair = new_pair };
             result_tail = new_pair;
         }
-        current_node = p_node.cdr;
     }
     return result_head;
 }
@@ -303,21 +314,21 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 
 /// `set_car` modifies the car of a pair.
 /// Syntax: (set-car! pair obj)
-pub fn set_car(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    p.pair.car = try args.items[1].deep_clone(env.allocator);
+    p.pair.car = args.items[1];
     return Value.unspecified;
 }
 
 /// `set_cdr` modifies the cdr of a pair.
 /// Syntax: (set-cdr! pair obj)
-pub fn set_cdr(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    p.pair.cdr = try args.items[1].deep_clone(env.allocator);
+    p.pair.cdr = args.items[1];
     return Value.unspecified;
 }
 
