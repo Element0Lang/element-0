@@ -2,7 +2,7 @@
 ;; Element 0 Standard Library
 ;;
 
-(define *elz-stdlib-version* "0.1.0-alpha.7")
+(define *elz-stdlib-version* "0.1.0-alpha.6")
 
 ;;; ---------------------------------
 ;;; Logical and Boolean Functions
