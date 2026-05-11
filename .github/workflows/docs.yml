@@ -11,14 +11,16 @@ on:
       - '**.md'
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy-docs:
+  build-docs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -37,12 +39,18 @@ jobs:
       - name: Generate Documentation
         run: make docs
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/api
-          publish_branch: gh-pages
-          user_name: ${{ github.actor }}
-          user_email: ${{ github.actor }}@users.noreply.github.com
-          commit_message: "docs: Deploy documentation from ${{ github.sha }} by ${{ github.actor }}"
+          path: ./docs/api
+
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
