@@ -280,7 +280,10 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
             const token = json[i..end];
             var is_float = false;
             for (token) |c| {
-                if (c == '.' or c == 'e' or c == 'E') { is_float = true; break; }
+                if (c == '.' or c == 'e' or c == 'E') {
+                    is_float = true;
+                    break;
+                }
             }
             if (!is_float) {
                 if (std.fmt.parseInt(i64, token, 10)) |n| {

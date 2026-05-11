@@ -201,8 +201,14 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
     var force_exact: ?bool = null;
     if (token.len >= 2 and token[0] == '#') {
         switch (token[1]) {
-            'e', 'E' => { force_exact = true; rest = token[2..]; },
-            'i', 'I' => { force_exact = false; rest = token[2..]; },
+            'e', 'E' => {
+                force_exact = true;
+                rest = token[2..];
+            },
+            'i', 'I' => {
+                force_exact = false;
+                rest = token[2..];
+            },
             else => {},
         }
     }
