@@ -186,7 +186,7 @@ pub fn main() !void {
 
 When you build and run this program, the output will be:
 
-```bash
+```
 --- Evaluating simple Elz code ---
 Result of (* 10 5) is: 50
 
