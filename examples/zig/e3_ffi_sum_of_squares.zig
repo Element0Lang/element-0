@@ -20,8 +20,9 @@ fn sum_of_squares(
             else => return elz.ElzError.InvalidArgument,
         };
 
-        const num = switch (p.car) {
+        const num: f64 = switch (p.car) {
             .number => |n| n,
+            .exact_integer => |i| @floatFromInt(i),
             else => return elz.ElzError.InvalidArgument,
         };
 

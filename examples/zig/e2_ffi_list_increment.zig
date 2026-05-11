@@ -17,6 +17,7 @@ fn increment_list_elements(allocator: std.mem.Allocator, args: []const elz.Value
             .pair => |p| {
                 switch (p.car) {
                     .number => |n| try numbers.append(allocator, n),
+                    .exact_integer => |i| try numbers.append(allocator, @floatFromInt(i)),
                     else => return elz.ElzError.InvalidArgument,
                 }
                 current_node = p.cdr;
