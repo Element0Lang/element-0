@@ -36,6 +36,9 @@ pub fn populate_math(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "sin", core.Value{ .procedure = math.sin });
     try interp.root_env.set(interp, "cos", core.Value{ .procedure = math.cos });
     try interp.root_env.set(interp, "tan", core.Value{ .procedure = math.tan });
+    try interp.root_env.set(interp, "asin", core.Value{ .procedure = math.asin });
+    try interp.root_env.set(interp, "acos", core.Value{ .procedure = math.acos });
+    try interp.root_env.set(interp, "atan", core.Value{ .procedure = math.atan });
     try interp.root_env.set(interp, "log", core.Value{ .procedure = math.log });
     try interp.root_env.set(interp, "max", core.Value{ .procedure = math.max });
     try interp.root_env.set(interp, "min", core.Value{ .procedure = math.min });
@@ -123,6 +126,18 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "char>?", core.Value{ .procedure = strings.char_gt });
     try interp.root_env.set(interp, "char<=?", core.Value{ .procedure = strings.char_le });
     try interp.root_env.set(interp, "char>=?", core.Value{ .procedure = strings.char_ge });
+    try interp.root_env.set(interp, "char-ci=?", core.Value{ .procedure = strings.char_ci_eq });
+    try interp.root_env.set(interp, "char-ci<?", core.Value{ .procedure = strings.char_ci_lt });
+    try interp.root_env.set(interp, "char-ci>?", core.Value{ .procedure = strings.char_ci_gt });
+    try interp.root_env.set(interp, "char-ci<=?", core.Value{ .procedure = strings.char_ci_le });
+    try interp.root_env.set(interp, "char-ci>=?", core.Value{ .procedure = strings.char_ci_ge });
+    try interp.root_env.set(interp, "char-alphabetic?", core.Value{ .procedure = strings.char_alphabetic_p });
+    try interp.root_env.set(interp, "char-numeric?", core.Value{ .procedure = strings.char_numeric_p });
+    try interp.root_env.set(interp, "char-whitespace?", core.Value{ .procedure = strings.char_whitespace_p });
+    try interp.root_env.set(interp, "char-upper-case?", core.Value{ .procedure = strings.char_upper_case_p });
+    try interp.root_env.set(interp, "char-lower-case?", core.Value{ .procedure = strings.char_lower_case_p });
+    try interp.root_env.set(interp, "char-upcase", core.Value{ .procedure = strings.char_upcase });
+    try interp.root_env.set(interp, "char-downcase", core.Value{ .procedure = strings.char_downcase });
     try interp.root_env.set(interp, "char->integer", core.Value{ .procedure = strings.char_to_integer });
     try interp.root_env.set(interp, "integer->char", core.Value{ .procedure = strings.integer_to_char });
     try interp.root_env.set(interp, "string-ref", core.Value{ .procedure = strings.string_ref });
@@ -136,6 +151,16 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "string>?", core.Value{ .procedure = strings.string_gt });
     try interp.root_env.set(interp, "string<=?", core.Value{ .procedure = strings.string_le });
     try interp.root_env.set(interp, "string>=?", core.Value{ .procedure = strings.string_ge });
+    try interp.root_env.set(interp, "string-ci=?", core.Value{ .procedure = strings.string_ci_eq });
+    try interp.root_env.set(interp, "string-ci<?", core.Value{ .procedure = strings.string_ci_lt });
+    try interp.root_env.set(interp, "string-ci<=?", core.Value{ .procedure = strings.string_ci_le });
+    try interp.root_env.set(interp, "string-ci>?", core.Value{ .procedure = strings.string_ci_gt });
+    try interp.root_env.set(interp, "string-ci>=?", core.Value{ .procedure = strings.string_ci_ge });
+    try interp.root_env.set(interp, "string-copy", core.Value{ .procedure = strings.string_copy });
+    try interp.root_env.set(interp, "string->list", core.Value{ .procedure = strings.string_to_list });
+    try interp.root_env.set(interp, "list->string", core.Value{ .procedure = strings.list_to_string });
+    try interp.root_env.set(interp, "string-set!", core.Value{ .procedure = strings.string_set_bang });
+    try interp.root_env.set(interp, "string-fill!", core.Value{ .procedure = strings.string_fill_bang });
     try interp.root_env.set(interp, "gensym", core.Value{ .procedure = strings.gensym });
     try interp.root_env.set(interp, "string", core.Value{ .procedure = strings.string_from_chars });
 }
@@ -222,6 +247,7 @@ pub fn populate_vectors(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "vector?", core.Value{ .procedure = vectors.is_vector });
     try interp.root_env.set(interp, "list->vector", core.Value{ .procedure = vectors.list_to_vector });
     try interp.root_env.set(interp, "vector->list", core.Value{ .procedure = vectors.vector_to_list });
+    try interp.root_env.set(interp, "vector-fill!", core.Value{ .procedure = vectors.vector_fill_bang });
 }
 
 /// Populates the interpreter's root environment with hash map primitive functions.
@@ -298,6 +324,9 @@ pub fn populate_ports(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "current-output-port", core.Value{ .procedure = ports.current_output_port });
     try interp.root_env.set(interp, "peek-char", core.Value{ .procedure = ports.peek_char });
     try interp.root_env.set(interp, "char-ready?", core.Value{ .procedure = ports.char_ready_p });
+    try interp.root_env.set(interp, "set-current-output-port!", core.Value{ .procedure = ports.set_current_output_port_bang });
+    try interp.root_env.set(interp, "set-current-input-port!", core.Value{ .procedure = ports.set_current_input_port_bang });
+    try interp.root_env.set(interp, "read", core.Value{ .procedure = ports.read });
 }
 
 /// Defines a foreign function in the given environment.

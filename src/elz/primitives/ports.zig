@@ -301,6 +301,26 @@ pub fn current_output_port(interp: *interpreter.Interpreter, _: *core.Environmen
     return Value{ .port = port };
 }
 
+/// `set_current_output_port_bang` replaces the interpreter's current output port.
+/// Syntax: (set-current-output-port! port)
+pub fn set_current_output_port_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (v != .port) return ElzError.InvalidArgument;
+    interp.stdout_port = v.port;
+    return Value.unspecified;
+}
+
+/// `set_current_input_port_bang` replaces the interpreter's current input port.
+/// Syntax: (set-current-input-port! port)
+pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (v != .port) return ElzError.InvalidArgument;
+    interp.stdin_port = v.port;
+    return Value.unspecified;
+}
+
 /// `eof_object_p` checks if a value is the EOF object.
 /// Syntax: (eof-object? obj)
 pub fn eof_object_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {

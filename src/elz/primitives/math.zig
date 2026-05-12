@@ -369,6 +369,29 @@ pub fn tan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
     return Value{ .number = std.math.tan(f) };
 }
 
+pub fn asin(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
+    return Value{ .number = std.math.asin(f) };
+}
+
+pub fn acos(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
+    return Value{ .number = std.math.acos(f) };
+}
+
+pub fn atan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len == 2) {
+        const y = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
+        const x = args.items[1].asFloat() orelse return ElzError.InvalidArgument;
+        return Value{ .number = std.math.atan2(y, x) };
+    }
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
+    return Value{ .number = std.math.atan(f) };
+}
+
 pub fn log(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;

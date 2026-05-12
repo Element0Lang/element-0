@@ -201,6 +201,9 @@ pub const SyntaxRulesMacro = struct {
     rules: []SyntaxRule,
     /// The environment captured at definition time. Used for hygiene in later slices.
     env: *Environment,
+    /// The ellipsis marker (default "..."). Set to "" when "..." is lexically rebound,
+    /// or to a custom symbol for the R7RS `(syntax-rules <ellipsis> ...)` form.
+    ellipsis: []const u8,
 };
 
 /// A pointer to a native Zig function that can be called from Elz.
@@ -278,6 +281,10 @@ pub const ContFrame = union(enum) {
     dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
     dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
     dyn_wind_after_done: struct { thunk_result: Value },
+    // cond => arrow form: applied with the test result to decide branch or proceed.
+    cond_arrow_test_done: struct { proc_expr: Value, alternative: Value, env: *Environment },
+    // cond => arrow form: applied with the procedure value to call it on the saved test value.
+    cond_arrow_proc_done: struct { test_val: Value, env: *Environment },
 };
 
 /// A continuation: a singly-linked list of frames.

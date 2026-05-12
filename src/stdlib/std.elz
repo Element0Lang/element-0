@@ -543,3 +543,35 @@
     (let ((result (proc port)))
       (close-output-port port)
       result)))
+
+;;; (with-output-to-file path thunk)
+;;;
+;;; Opens path for output, installs it as the current output port for the duration
+;;; of thunk, then restores the previous port and closes the file.
+(define (with-output-to-file path thunk)
+  (let ((port (open-output-file path))
+        (saved #f))
+    (dynamic-wind
+      (lambda ()
+        (set! saved (current-output-port))
+        (set-current-output-port! port))
+      thunk
+      (lambda ()
+        (set-current-output-port! saved)
+        (close-output-port port)))))
+
+;;; (with-input-from-file path thunk)
+;;;
+;;; Opens path for input, installs it as the current input port for the duration
+;;; of thunk, then restores the previous port and closes the file.
+(define (with-input-from-file path thunk)
+  (let ((port (open-input-file path))
+        (saved #f))
+    (dynamic-wind
+      (lambda ()
+        (set! saved (current-input-port))
+        (set-current-input-port! port))
+      thunk
+      (lambda ()
+        (set-current-input-port! saved)
+        (close-input-port port)))))
