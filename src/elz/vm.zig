@@ -366,29 +366,29 @@ pub const VM = struct {
                         // Args were at stack[stack_top-argc..stack_top] before call
                         const arg_start = dbg_stack_top_before - argc;
                         for (arg_start..dbg_stack_top_before) |si| {
-                            std.debug.print("  arg[{}] tag={s}\n", .{si - arg_start, @tagName(self.stack[si])});
+                            std.debug.print("  arg[{}] tag={s}\n", .{ si - arg_start, @tagName(self.stack[si]) });
                         }
                         // Print proto constants to identify what's being called
                         std.debug.print("  proto constants ({}):\n", .{proto.constants.items.len});
                         for (proto.constants.items, 0..) |c, ci| {
                             switch (c) {
-                                .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ci, s}),
-                                .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ci, b}),
-                                .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ci, i}),
+                                .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ ci, s }),
+                                .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ ci, b }),
+                                .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ ci, i }),
                                 .nil => std.debug.print("    [{}] nil\n", .{ci}),
-                                else => std.debug.print("    [{}] other:{s}\n", .{ci, @tagName(c)}),
+                                else => std.debug.print("    [{}] other:{s}\n", .{ ci, @tagName(c) }),
                             }
                         }
                         // Print proto instructions around ip
                         const start_ip = if (frame.ip >= 5) frame.ip - 5 else 0;
-                        std.debug.print("  proto instructions [{}..{}]:\n", .{start_ip, frame.ip});
+                        std.debug.print("  proto instructions [{}..{}]:\n", .{ start_ip, frame.ip });
                         for (proto.instructions.items[start_ip..@min(frame.ip, proto.instructions.items.len)], start_ip..) |ins, iip| {
-                            std.debug.print("    [{}] op={s} a={} b={} bx={}\n", .{iip, @tagName(ins.op), ins.a, ins.b, ins.bx});
+                            std.debug.print("    [{}] op={s} a={} b={} bx={}\n", .{ iip, @tagName(ins.op), ins.a, ins.b, ins.bx });
                         }
                         var fi = self.frame_count;
                         while (fi > 0) {
                             fi -= 1;
-                            std.debug.print("  frame[{}] proto='{s}' ip={}\n", .{fi, self.frames[fi].closure.proto.name, self.frames[fi].ip});
+                            std.debug.print("  frame[{}] proto='{s}' ip={}\n", .{ fi, self.frames[fi].closure.proto.name, self.frames[fi].ip });
                         }
                         return e;
                     };
@@ -483,9 +483,9 @@ pub const VM = struct {
                                 std.debug.print("  sub_proto constants:\n", .{});
                                 for (sub_proto.constants.items, 0..) |c, ci| {
                                     switch (c) {
-                                        .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ci, s}),
-                                        .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ci, b}),
-                                        .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ci, i}),
+                                        .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ ci, s }),
+                                        .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ ci, b }),
+                                        .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ ci, i }),
                                         else => std.debug.print("    [{}] other\n", .{ci}),
                                     }
                                 }
