@@ -7,10 +7,10 @@
 const std = @import("std");
 const core = @import("core.zig");
 const chunk = @import("chunk.zig");
-// eval_mod is imported for compile-time macro expansion: define-macro and define-syntax
+// macros_mod is imported for compile-time macro expansion: define-macro and define-syntax
 // transformers must be evaluated (not just compiled) so their output can be used
 // immediately by the rest of the compilation pass.
-const eval_mod = @import("eval.zig");
+const macros_mod = @import("macros.zig");
 const parser = @import("parser.zig");
 const Value = core.Value;
 const ElzError = core.ElzError;
@@ -106,6 +106,11 @@ pub const Compiler = struct {
     enclosing: ?*Compiler,
     /// Interpreter reference for macro expansion.
     interp: *@import("interpreter.zig").Interpreter,
+    /// Tracked stack depth: number of values currently on the runtime stack above
+    /// frame.stack_base. Used to assign correct slot indices when allocating locals
+    /// inside inline expressions. Incremented by every push-emitting instruction and
+    /// decremented by every pop-emitting instruction.
+    stack_depth: u8 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -121,6 +126,7 @@ pub const Compiler = struct {
             .scope = Scope.init(allocator, null),
             .enclosing = enclosing,
             .interp = interp,
+            .stack_depth = 0,
         };
     }
 
@@ -189,7 +195,7 @@ pub const Compiler = struct {
     }
 
     // -----------------------------------------------------------------------
-    // Macro expansion (delegates to eval.zig at compile time)
+    // Macro expansion
     // -----------------------------------------------------------------------
 
     fn tryExpandMacro(self: *Compiler, head: Value, args: Value, env: *core.Environment, fuel: *u64) !?Value {
@@ -197,10 +203,10 @@ pub const Compiler = struct {
         const looked_up = env.get(head.symbol, self.interp) catch return null;
         switch (looked_up) {
             .syntax_rules => |sr| {
-                return try eval_mod.expandSyntaxRules(self.interp, sr, args, env, fuel);
+                return try macros_mod.expandSyntaxRules(self.interp, sr, args, env, fuel);
             },
             .macro => |m| {
-                return try eval_mod.expandMacro(self.interp, m, args, env, fuel);
+                return try macros_mod.expandMacro(self.interp, m, args, env, fuel);
             },
             else => return null,
         }
@@ -339,7 +345,24 @@ pub const Compiler = struct {
                 if (level == 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
                     return self.compileExpr(p.cdr.pair.car, env, false, fuel);
                 }
-                // (unquote-splicing ...) handled in list context below
+                // (unquote x) at level > 1 → produce (unquote (qq-expand x level-1))
+                if (level > 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
+                    const ci = try self.addConst(Value{ .symbol = "unquote" });
+                    _ = try self.emitBx(.load_const, ci);
+                    try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
+                    _ = try self.emitA(.make_list, 1);
+                    _ = try self.emitOp(.cons);
+                    return;
+                }
+                // (unquote-splicing x) at level > 1 → produce (unquote-splicing (qq-expand x level-1))
+                if (level > 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote-splicing")) {
+                    const ci = try self.addConst(Value{ .symbol = "unquote-splicing" });
+                    _ = try self.emitBx(.load_const, ci);
+                    try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
+                    _ = try self.emitA(.make_list, 1);
+                    _ = try self.emitOp(.cons);
+                    return;
+                }
                 // (quasiquote x) — increase level
                 if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "quasiquote")) {
                     // Wrap in (quasiquote ...)
@@ -383,7 +406,7 @@ pub const Compiler = struct {
         }
         const p = list.pair;
         const car = p.car;
-        // Check for (unquote-splicing x) at level 1
+        // Check for (unquote-splicing x) at level 1 — splice
         if (level == 1 and car == .pair and
             car.pair.car == .symbol and std.mem.eql(u8, car.pair.car.symbol, "unquote-splicing"))
         {
@@ -561,6 +584,23 @@ pub const Compiler = struct {
     }
 
     // -----------------------------------------------------------------------
+    // Helper: evaluate a transformer expression at compile time.
+    // If `expr` is a `(syntax-rules ...)` form, parse it directly using
+    // macros_mod.buildSyntaxRules so we never re-enter the compiler (which
+    // would create an infinite loop). For any other expression, delegate to
+    // interp.evalForm as before.
+    // -----------------------------------------------------------------------
+
+    fn evalTransformer(self: *Compiler, expr: Value, name: []const u8, env: *core.Environment) ElzError!Value {
+        if (expr == .pair and expr.pair.car == .symbol and std.mem.eql(u8, expr.pair.car.symbol, "syntax-rules")) {
+            const sr = try macros_mod.buildSyntaxRules(env, name, expr.pair.cdr);
+            return Value{ .syntax_rules = sr };
+        }
+        var f: u64 = 1_000_000;
+        return self.interp.evalForm(&expr, &f);
+    }
+
+    // -----------------------------------------------------------------------
     // define-macro / define-syntax
     // -----------------------------------------------------------------------
 
@@ -574,8 +614,7 @@ pub const Compiler = struct {
             if (first == .symbol) {
                 // Long form: evaluate the transformer expression.
                 const transformer_expr = args.pair.cdr.pair.car;
-                var f: u64 = 1_000_000;
-                break :blk try eval_mod.eval(self.interp, &transformer_expr, env, &f);
+                break :blk try evalTransformer(self, transformer_expr, first.symbol, env);
             } else if (first == .pair) {
                 // Shorthand: (define-macro (name params...) body)
                 const sig = first.pair;
@@ -614,8 +653,7 @@ pub const Compiler = struct {
         const name = name_val.symbol;
         const sr_expr = args.pair.cdr.pair.car;
 
-        var f: u64 = 1_000_000;
-        const sr_val = try eval_mod.eval(self.interp, &sr_expr, env, &f);
+        const sr_val = try evalTransformer(self, sr_expr, name, env);
         try env.set(self.interp, name, sr_val);
 
         _ = try self.emitOp(.load_unspecified);
@@ -633,6 +671,11 @@ pub const Compiler = struct {
 
         try self.compileExpr(val_expr, env, false, fuel);
         try self.compileVarStore(name);
+        // Pop the stored value: store_global/store_local/store_upval are all
+        // non-popping (the value stays on the stack). Since `set!` returns
+        // unspecified, we must pop the stored value before pushing unspecified,
+        // otherwise the leftover value corrupts subsequent local-variable slots.
+        _ = try self.emitOp(.pop);
         _ = try self.emitOp(.load_unspecified);
     }
 
@@ -753,47 +796,145 @@ pub const Compiler = struct {
         const bindings = first;
         const body = args.pair.cdr;
 
-        // Evaluate binding inits before adding locals.
-        var cur = bindings;
-        var count: u8 = 0;
-        while (cur != .nil) {
-            const binding = cur.pair.car;
-            const init_expr = binding.pair.cdr.pair.car;
-            try self.compileExpr(init_expr, env, false, fuel);
-            if (is_star) {
-                // For let*, each binding is immediately visible to subsequent inits.
-                const var_name = binding.pair.car.symbol;
-                const slot = try self.scope.addLocal(var_name);
-                _ = try self.emitA(.store_local, slot);
-            }
-            count += 1;
-            cur = cur.pair.cdr;
-        }
+        if (is_star) {
+            // let*: compile as nested immediately-invoked lambdas to ensure internal
+            // defines are local and bindings are sequential.
+            // (let* ((x e1) (y e2)) body) → ((lambda (x) ((lambda (y) body) e2)) e1)
+            // (let* () body) → ((lambda () body))
+            try self.compileLetStar(bindings, body, env, tail, fuel);
+        } else {
+            // Non-star let: compile as an immediately-invoked lambda.
+            // (let ((x e1) (y e2)) body) → ((lambda (x y) body) e1 e2)
+            //
+            // This guarantees correct slot allocation regardless of the stack context
+            // (the lambda creates a fresh frame starting at stack_top).
 
-        if (!is_star) {
-            // For let, the init values were pushed in order onto the stack and are
-            // already at the right positions (stack[base+0]=first, stack[base+1]=second, ...).
-            // Just record the name→slot mapping; no store_local needed.
-            cur = bindings;
+            // Build parameter list.
+            var param_list: std.ArrayListUnmanaged(Value) = .empty;
+            defer param_list.deinit(self.allocator);
+            var init_list: std.ArrayListUnmanaged(Value) = .empty;
+            defer init_list.deinit(self.allocator);
+
+            var cur = bindings;
             while (cur != .nil) {
                 const binding = cur.pair.car;
-                const var_name = binding.pair.car.symbol;
-                _ = try self.scope.addLocal(var_name);
+                try param_list.append(self.allocator, binding.pair.car); // name
+                try init_list.append(self.allocator, binding.pair.cdr.pair.car); // init
                 cur = cur.pair.cdr;
             }
-        }
 
-        try self.compileBegin(body, env, tail, fuel);
+            // Build the params list value (reversed).
+            var params: Value = .nil;
+            var pi = param_list.items.len;
+            while (pi > 0) {
+                pi -= 1;
+                params = try makePair(self.allocator, param_list.items[pi], params);
+            }
+
+            // Compile the lambda.
+            const lambda_body = try makePair(self.allocator, params, body);
+            try self.compileLambdaWithName(lambda_body, "<let>", env, fuel);
+
+            // Compile and push each init argument.
+            for (init_list.items) |init_expr| {
+                try self.compileExpr(init_expr, env, false, fuel);
+            }
+
+            // Call the lambda.
+            const argc: u8 = @intCast(init_list.items.len);
+            if (tail) {
+                _ = try self.emitA(.tail_call, argc);
+            } else {
+                _ = try self.emitA(.call, argc);
+            }
+        }
+    }
+
+    /// Compile `let*` as nested immediately-invoked lambdas so that:
+    ///   1. Internal `define` forms in the body are always local (never global), and
+    ///   2. Bindings are sequential (each init can see previous bindings).
+    ///
+    /// (let* ()              body) → ((lambda ()    body))
+    /// (let* ((x e1))        body) → ((lambda (x)   body) e1)
+    /// (let* ((x e1)(y e2))  body) → ((lambda (x) ((lambda (y) body) e2)) e1)
+    fn compileLetStar(self: *Compiler, bindings: Value, body: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        if (bindings == .nil) {
+            // Base case: compile as ((lambda () body...)).
+            const lambda_body = try makePair(self.allocator, Value.nil, body);
+            try self.compileLambdaWithName(lambda_body, "<let*>", env, fuel);
+            if (tail) {
+                _ = try self.emitA(.tail_call, 0);
+            } else {
+                _ = try self.emitA(.call, 0);
+            }
+        } else {
+            // Recursive case: ((lambda (var) inner-let*) init).
+            const binding = bindings.pair.car;
+            const var_name_val = binding.pair.car;
+            if (var_name_val != .symbol) return ElzError.InvalidArgument;
+            const init_expr = binding.pair.cdr.pair.car;
+            const rest_bindings = bindings.pair.cdr;
+
+            // Build the inner body: it recursively compiles (let* rest body).
+            // We do this by building a single-param lambda whose body is the recursive let*.
+            // The lambda body is compiled via a child Compiler just like compileLambdaWithName.
+            var child = try Compiler.init(self.allocator, self.interp, "<let*>", self);
+            defer child.deinit();
+            _ = try child.scope.addLocal(var_name_val.symbol);
+            child.proto.arity = 1;
+            child.proto.variadic = false;
+
+            // In the child, compile the rest of the let* as another nested lambda call,
+            // then return the result.
+            try child.compileLetStar(rest_bindings, body, env, false, fuel);
+            _ = try child.emitOp(.return_val);
+
+            // Finalize child proto.
+            for (child.scope.upval_descs.items) |desc| {
+                try child.proto.upval_descs.append(child.proto.allocator, desc);
+            }
+            child.proto.local_count = @intCast(child.scope.locals.items.len);
+
+            const sub_idx: u16 = @intCast(self.proto.sub_protos.items.len);
+            try self.proto.sub_protos.append(self.proto.allocator, child.proto);
+            child.proto = try self.allocator.create(FuncProto);
+            child.proto.* = FuncProto.init(self.allocator, "<unreachable>");
+
+            _ = try self.emitBx(.make_closure, sub_idx);
+            for (self.proto.sub_protos.items[sub_idx].upval_descs.items, 0..) |desc, fill_idx| {
+                _ = try self.emit(.{
+                    .op = if (desc.is_local) .capture_local else .capture_upval,
+                    .a = desc.index,
+                    .b = @intCast(fill_idx),
+                });
+            }
+
+            // Compile and push the init expression.
+            try self.compileExpr(init_expr, env, false, fuel);
+
+            if (tail) {
+                _ = try self.emitA(.tail_call, 1);
+            } else {
+                _ = try self.emitA(.call, 1);
+            }
+        }
     }
 
     fn compileNamedLet(self: *Compiler, name: []const u8, rest: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
-        _ = tail;
+        // (let name ((var init) ...) body...)
+        //
+        // Compile by creating a child compiler (fresh frame) that:
+        //   1. Allocates a local slot for `name` (with a placeholder).
+        //   2. Compiles the loop lambda (so `name` can be captured as upvalue).
+        //   3. Stores the closure into the slot and pops the extra value.
+        //   4. Loads `name`, compiles init args, calls it.
+        //
+        // Wrapping in a child compiler isolates the `name` local from the caller's
+        // stack, ensuring no extra locals pollute the outer frame.
         const bindings = rest.pair.car;
         const body = rest.pair.cdr;
 
         // Build params list and inits list.
-        var params: Value = .nil;
-        var inits: Value = .nil;
         var cur = bindings;
         var param_list: std.ArrayList(Value) = .empty;
         defer param_list.deinit(self.allocator);
@@ -806,29 +947,68 @@ pub const Compiler = struct {
             cur = cur.pair.cdr;
         }
 
-        // Build (lambda (params...) body) and compile it
-        params = .nil;
+        // Build (lambda (params...) body...)
+        var params: Value = .nil;
         var pi = param_list.items.len;
         while (pi > 0) {
             pi -= 1;
             params = try makePair(self.allocator, param_list.items[pi], params);
         }
-
         const lambda_body = try makePair(self.allocator, params, body);
-        try self.compileLambdaWithName(lambda_body, name, env, fuel);
 
-        // Bind in scope so recursive calls work
-        const slot = try self.scope.addLocal(name);
-        _ = try self.emitA(.store_local, slot);
+        // Create a child compiler for the wrapper that holds the `name` local.
+        var wrapper = try Compiler.init(self.allocator, self.interp, name, self);
+        defer wrapper.deinit();
+        wrapper.proto.arity = 0;
+        wrapper.proto.variadic = false;
 
-        // Compile inits and call
-        _ = try self.emitA(.load_local, slot);
+        // In the wrapper: allocate `name` slot and emit placeholder.
+        const slot = try wrapper.scope.addLocal(name);
+        _ = try wrapper.emitOp(.load_false); // placeholder
+
+        // Compile the loop lambda inside the wrapper so it can capture `name`.
+        try wrapper.compileLambdaWithName(lambda_body, name, env, fuel);
+
+        // Store closure into slot, pop the extra copy.
+        _ = try wrapper.emitA(.store_local, slot);
+        _ = try wrapper.emitOp(.pop);
+
+        // Load `name` and call with init values.
+        _ = try wrapper.emitA(.load_local, slot);
         for (init_list.items) |init_expr| {
-            try self.compileExpr(init_expr, env, false, fuel);
+            try wrapper.compileExpr(init_expr, env, false, fuel);
         }
-        _ = try self.emitA(.call, @intCast(init_list.items.len));
+        const argc: u8 = @intCast(init_list.items.len);
+        _ = try wrapper.emitA(.call, argc);
+        _ = try wrapper.emitOp(.return_val);
 
-        inits = .nil; // suppress unused
+        // Finalize wrapper proto.
+        for (wrapper.scope.upval_descs.items) |desc| {
+            try wrapper.proto.upval_descs.append(wrapper.proto.allocator, desc);
+        }
+        wrapper.proto.local_count = @intCast(wrapper.scope.locals.items.len);
+
+        const sub_idx: u16 = @intCast(self.proto.sub_protos.items.len);
+        try self.proto.sub_protos.append(self.proto.allocator, wrapper.proto);
+        wrapper.proto = try self.allocator.create(FuncProto);
+        wrapper.proto.* = FuncProto.init(self.allocator, "<unreachable>");
+
+        // Emit make_closure + captures for the wrapper.
+        _ = try self.emitBx(.make_closure, sub_idx);
+        for (self.proto.sub_protos.items[sub_idx].upval_descs.items, 0..) |desc, fill_idx| {
+            _ = try self.emit(.{
+                .op = if (desc.is_local) .capture_local else .capture_upval,
+                .a = desc.index,
+                .b = @intCast(fill_idx),
+            });
+        }
+
+        // Call the wrapper with 0 args.
+        if (tail) {
+            _ = try self.emitA(.tail_call, 0);
+        } else {
+            _ = try self.emitA(.call, 0);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -991,7 +1171,7 @@ pub const Compiler = struct {
             }
         }
 
-        // No clause matched (and no else): return nil to match R5RS / eval.zig behaviour.
+        // No clause matched (and no else): return nil per R5RS.
         if (!found_else) _ = try self.emitOp(.load_nil);
 
         for (jumps_to_end.items) |j| {
@@ -1005,13 +1185,17 @@ pub const Compiler = struct {
 
     fn compileCase(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
         // (case key ((datum...) body...) ... (else body...))
-        // Compile as: eval key, store in local, then chain of if-eqv? checks.
+        //
+        // Compile strategy: push the key once and keep it on the stack throughout
+        // all tests. For each datum, dup the key, call eqv?, and use jump_if_false
+        // to skip past this datum's body. When a datum matches, the key is on the
+        // stack below — pop it before running the body. This avoids any local-slot
+        // allocation so `case` is safe to use inside argument lists.
         const key_expr = args.pair.car;
         const clauses = args.pair.cdr;
 
+        // Push the key. Stack: [..., key]
         try self.compileExpr(key_expr, env, false, fuel);
-        const key_slot = try self.scope.addLocal("__case_key__");
-        _ = try self.emitA(.store_local, key_slot);
 
         var jumps_to_end: std.ArrayList(usize) = .empty;
         defer jumps_to_end.deinit(self.allocator);
@@ -1026,61 +1210,69 @@ pub const Compiler = struct {
             const body = clause.pair.cdr;
 
             if (datums == .symbol and std.mem.eql(u8, datums.symbol, "else")) {
+                // Pop key, then run else body, then jump to end.
+                _ = try self.emitOp(.pop);
                 try self.compileBegin(body, env, tail and is_last, fuel);
+                // Jump to end (past the "no match" fallthrough code).
+                try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
                 break;
             }
 
-            // Test: (eqv? key datum1) or (eqv? key datum2) ...
-            // Build OR of eqv? tests
-            var datum_jumps: std.ArrayList(usize) = .empty;
-            defer datum_jumps.deinit(self.allocator);
+            // For each datum in this clause, emit:
+            //   dup key, load eqv?, dup key, load datum, call 2 → bool
+            //   jump_if_false to_next_test_or_next_clause
+            //   (match found: jump to body)
+            //   <next test label>:
+            //
+            // After all datums fail: stack = [..., key], fall through to next clause.
+            // When a datum matches: jump to body_label, stack = [..., key].
+            //   body_label: pop key, run body, jump to end.
 
             var datum_cur = datums;
-            var is_first_datum = true;
+            var jumps_to_body: std.ArrayList(usize) = .empty;
+            defer jumps_to_body.deinit(self.allocator);
+
             while (datum_cur != .nil) {
-                if (!is_first_datum) {
-                    // If previous test passed, skip to body
-                    try datum_jumps.append(self.allocator, try self.emitJump(.jump));
-                }
                 const datum = datum_cur.pair.car;
-                _ = try self.emitA(.load_local, key_slot);
-                const ci = try self.addConst(datum);
-                _ = try self.emitBx(.load_const, ci);
-                // emit eqv? call
+                // Stack: [..., key]
+                // Build [eqv?, key_copy, datum] on top for call 2.
+                _ = try self.emitOp(.dup); // [..., key, key]
                 const eqv_ci = try self.addConst(Value{ .symbol = "eqv?" });
-                _ = try self.emitBx(.load_global, eqv_ci);
-                // Reorder: need [proc, arg1, arg2]
-                // Currently stack: key, datum, eqv?
-                // We need eqv? first... This is tricky with a stack VM.
-                // Simpler: load eqv? first, then key, then datum
-                // Let me redo this differently
-                _ = try self.emitOp(.pop); // pop eqv?
-                _ = try self.emitOp(.pop); // pop datum
-                _ = try self.emitOp(.pop); // pop key
+                _ = try self.emitBx(.load_global, eqv_ci); // [..., key, key, eqv?]
+                _ = try self.emitOp(.swap); // [..., key, eqv?, key]
+                const ci = try self.addConst(datum);
+                _ = try self.emitBx(.load_const, ci); // [..., key, eqv?, key, datum]
+                _ = try self.emitA(.call, 2); // eqv?(key, datum) → bool
+                // Stack: [..., key, bool]
 
-                // Load in correct order: eqv?, key, datum
-                _ = try self.emitBx(.load_global, eqv_ci);
-                _ = try self.emitA(.load_local, key_slot);
-                _ = try self.emitBx(.load_const, ci);
-                _ = try self.emitA(.call, 2);
+                // If false, skip to next datum (or fall through to next clause).
+                const jif_skip = try self.emitJump(.jump_if_false);
+                // Stack: [..., key]  (bool popped by jump_if_false)
+                // bool was true → jump to body.
+                try jumps_to_body.append(self.allocator, try self.emitJump(.jump));
+                // Patch jif_skip to here (next datum or end of datum list).
+                self.patchJump(jif_skip);
 
-                is_first_datum = false;
                 datum_cur = datum_cur.pair.cdr;
             }
+            // All datums failed: jump to next clause.
+            const jmp_to_next_clause = try self.emitJump(.jump);
 
-            // Check if any datum matched: jump_if_false to next clause
-            const jif = try self.emitJump(.jump_if_false);
-
-            // Patch "datum matched" jumps to here
-            for (datum_jumps.items) |j| {
+            // Body entry: patch all jumps_to_body here.
+            for (jumps_to_body.items) |j| {
                 self.patchJump(j);
             }
-
+            // Stack: [..., key]. Pop key before body.
+            _ = try self.emitOp(.pop);
             try self.compileBegin(body, env, tail and is_last, fuel);
             try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
-            self.patchJump(jif);
+
+            // Next clause entry.
+            self.patchJump(jmp_to_next_clause);
         }
 
+        // No clause matched (and no else clause): pop key, push unspecified.
+        _ = try self.emitOp(.pop);
         _ = try self.emitOp(.load_unspecified);
 
         for (jumps_to_end.items) |j| {
@@ -1123,86 +1315,112 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileDo(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
-        _ = tail;
-        // (do ((var init step) ...) (test result...) body...)
+        // (do ((var init step?) ...) (test result...) body...)
+        //
+        // Expand to a named-let so that loop variables live in their own frame
+        // (avoiding slot conflicts when `do` appears in expression position):
+        //
+        //   (let %%do-loop%% ((var init) ...)
+        //     (if test
+        //       (begin result...)
+        //       (begin body... (%%do-loop%% step-or-var...))))
+        //
+        // Building this as AST and compiling it via compileNamedLet handles all
+        // the stack-frame isolation and tail-call optimisation automatically.
         const var_specs = args.pair.car;
         const test_and_result = args.pair.cdr.pair.car;
-        const body = args.pair.cdr.pair.cdr;
+        const body_forms = args.pair.cdr.pair.cdr;
+        const test_expr = test_and_result.pair.car;
+        const result_exprs = test_and_result.pair.cdr;
 
-        // Allocate locals for loop variables
-        var var_list: std.ArrayList(struct { name: []const u8, slot: u8, step: ?Value }) = .empty;
+        // Collect (var init step?) triples.
+        const VarSpec = struct { name: Value, init: Value, step: Value };
+        var var_list: std.ArrayList(VarSpec) = .empty;
         defer var_list.deinit(self.allocator);
 
         var cur = var_specs;
         while (cur != .nil) {
             const spec = cur.pair.car;
-            const var_name = spec.pair.car.symbol;
-            const init_expr = spec.pair.cdr.pair.car;
-            const step_expr: ?Value = if (spec.pair.cdr.pair.cdr != .nil)
+            const var_name = spec.pair.car;
+            const init_e = spec.pair.cdr.pair.car;
+            // step defaults to the variable itself if omitted.
+            const step_e: Value = if (spec.pair.cdr.pair.cdr != .nil)
                 spec.pair.cdr.pair.cdr.pair.car
             else
-                null;
-
-            try self.compileExpr(init_expr, env, false, fuel);
-            const slot = try self.scope.addLocal(var_name);
-            _ = try self.emitA(.store_local, slot);
-            try var_list.append(self.allocator, .{ .name = var_name, .slot = slot, .step = step_expr });
+                var_name;
+            try var_list.append(self.allocator, .{ .name = var_name, .init = init_e, .step = step_e });
             cur = cur.pair.cdr;
         }
 
-        // Loop start
-        const loop_start = self.proto.instructions.items.len;
+        const loop_sym = Value{ .symbol = "%%do-loop%%" };
 
-        // Test
-        const test_expr = test_and_result.pair.car;
-        const result_exprs = test_and_result.pair.cdr;
-        try self.compileExpr(test_expr, env, false, fuel);
-        const jif_exit = try self.emitJump(.jump_if_false);
-
-        // Result expressions (exit path)
-        if (result_exprs == .nil) {
-            _ = try self.emitOp(.load_unspecified);
-        } else {
-            try self.compileBegin(result_exprs, env, false, fuel);
+        // Build the recursive call: (%%do-loop%% step-or-var...)
+        var recurse_call: Value = .nil;
+        var ri = var_list.items.len;
+        while (ri > 0) {
+            ri -= 1;
+            recurse_call = try makePair(self.allocator, var_list.items[ri].step, recurse_call);
         }
-        const jmp_exit = try self.emitJump(.jump);
+        recurse_call = try makePair(self.allocator, loop_sym, recurse_call);
 
-        self.patchJump(jif_exit);
-
-        // Body
-        if (body != .nil) {
-            try self.compileBegin(body, env, false, fuel);
-            _ = try self.emitOp(.pop);
-        }
-
-        // Step updates (evaluate all steps first, then store)
-        var step_vals: std.ArrayList(u8) = .empty;
-        defer step_vals.deinit(self.allocator);
-        for (var_list.items) |v| {
-            if (v.step) |step| {
-                try self.compileExpr(step, env, false, fuel);
-            } else {
-                _ = try self.emitA(.load_local, v.slot);
+        // Build the loop body: (begin body... (%%do-loop%% ...)) or just (%%do-loop%% ...)
+        var loop_body: Value = try makePair(self.allocator, recurse_call, Value.nil);
+        if (body_forms != .nil) {
+            // Append body forms before the recursive call.
+            // We need to build (begin body_form1 body_form2 ... recurse_call).
+            // Build a reversed list of body forms + recurse_call.
+            var forms: std.ArrayList(Value) = .empty;
+            defer forms.deinit(self.allocator);
+            var bc = body_forms;
+            while (bc != .nil) {
+                try forms.append(self.allocator, bc.pair.car);
+                bc = bc.pair.cdr;
+            }
+            try forms.append(self.allocator, recurse_call);
+            // Build list from back.
+            loop_body = Value.nil;
+            var fi = forms.items.len;
+            while (fi > 0) {
+                fi -= 1;
+                loop_body = try makePair(self.allocator, forms.items[fi], loop_body);
             }
         }
-        // Now store in reverse... actually store in order from bottom of stack
-        var vi = var_list.items.len;
-        while (vi > 0) {
-            vi -= 1;
-            // Store into temp then re-assign... this is tricky with stack ordering.
-            // Simple approach: store into a temporary slot, then copy back.
-            // Since we pushed all step values, the last one is on top.
-            // We need to store them in reverse order.
-            const v = var_list.items[var_list.items.len - 1 - (var_list.items.len - 1 - vi)];
-            _ = try self.emitA(.store_local, v.slot);
+        // Wrap in begin: (begin ...) — but compileBegin just iterates, so pass list directly.
+        // Actually the if-false branch needs a single expression, so use begin.
+        const begin_sym = Value{ .symbol = "begin" };
+        const false_branch = try makePair(self.allocator, begin_sym, loop_body);
+
+        // Build the if test:
+        //   (if test (begin result...) (begin body... (loop step...)))
+        // If result_exprs is nil, use unspecified.
+        const true_branch: Value = if (result_exprs == .nil)
+            Value.unspecified
+        else blk: {
+            const begin_result = try makePair(self.allocator, begin_sym, result_exprs);
+            break :blk begin_result;
+        };
+
+        const if_sym = Value{ .symbol = "if" };
+        var if_args = try makePair(self.allocator, false_branch, Value.nil);
+        if_args = try makePair(self.allocator, true_branch, if_args);
+        if_args = try makePair(self.allocator, test_expr, if_args);
+        const if_form = try makePair(self.allocator, if_sym, if_args);
+
+        // Build named-let bindings: ((var1 init1) (var2 init2) ...)
+        var bindings: Value = .nil;
+        ri = var_list.items.len;
+        while (ri > 0) {
+            ri -= 1;
+            const init_pair = try makePair(self.allocator, var_list.items[ri].init, Value.nil);
+            const binding = try makePair(self.allocator, var_list.items[ri].name, init_pair);
+            bindings = try makePair(self.allocator, binding, bindings);
         }
 
-        // Jump back to loop start
-        const current = self.proto.instructions.items.len;
-        const back_offset: i16 = -@as(i16, @intCast(current - loop_start + 1));
-        _ = try self.emit(Instruction.init_offset(.jump, back_offset));
+        // Build named-let form: (let %%do-loop%% bindings if-form)
+        const body_list = try makePair(self.allocator, if_form, Value.nil);
+        const named_let_rest = try makePair(self.allocator, bindings, body_list);
 
-        self.patchJump(jmp_exit);
+        try self.compileNamedLet(loop_sym.symbol, named_let_rest, env, tail, fuel);
     }
 
     // -----------------------------------------------------------------------
@@ -1246,8 +1464,7 @@ pub const Compiler = struct {
             const binding = cur.pair.car;
             const name = binding.pair.car.symbol;
             const transformer_expr = binding.pair.cdr.pair.car;
-            var f: u64 = 1_000_000;
-            const transformer = try eval_mod.eval(self.interp, &transformer_expr, env, &f);
+            const transformer = try evalTransformer(self, transformer_expr, name, env);
             try env.set(self.interp, name, transformer);
             cur = cur.pair.cdr;
         }
@@ -1261,10 +1478,10 @@ pub const Compiler = struct {
 
     fn compileSyntaxRules(self: *Compiler, head: Value, args: Value, env: *core.Environment) ElzError!void {
         _ = head;
-        // Evaluate at compile time and push as a constant.
-        var f: u64 = 1_000_000;
-        const form = try makePair(self.allocator, Value{ .symbol = "syntax-rules" }, args);
-        const result = try eval_mod.eval(self.interp, &form, env, &f);
+        // Build the SyntaxRulesMacro directly from the AST without calling evalForm
+        // (calling evalForm would recurse back into compileSyntaxRules indefinitely).
+        const sr = try macros_mod.buildSyntaxRules(env, "<anonymous>", args);
+        const result = Value{ .syntax_rules = sr };
         const ci = try self.addConst(result);
         _ = try self.emitBx(.load_const, ci);
     }
@@ -1274,11 +1491,14 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileImport(self: *Compiler, args: Value, env: *core.Environment) ElzError!void {
-        // (import module path) — evaluated at compile time via eval
-        var f: u64 = 1_000_000;
-        const form = try makePair(self.allocator, Value{ .symbol = "import" }, args);
-        _ = try eval_mod.eval(self.interp, &form, env, &f);
-        _ = try self.emitOp(.load_unspecified);
+        _ = env;
+        // (import "path") — load the module file at compile time and cache the result.
+        if (args == .nil or args != .pair) return ElzError.WrongArgumentCount;
+        const path_val = args.pair.car;
+        if (args.pair.cdr != .nil) return ElzError.WrongArgumentCount;
+        const module_val = try self.interp.importModule(path_val);
+        const ci = try self.addConst(module_val);
+        _ = try self.emitBx(.load_const, ci);
     }
 
     // -----------------------------------------------------------------------

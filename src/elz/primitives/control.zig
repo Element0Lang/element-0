@@ -1,8 +1,8 @@
 const std = @import("std");
 const core = @import("../core.zig");
-const eval = @import("../eval.zig");
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
+const vm_mod = @import("../vm.zig");
 
 /// `apply` is the implementation of the `apply` primitive function in Elz.
 /// It applies a procedure to a list of arguments. The last argument to `apply`
@@ -42,7 +42,7 @@ pub fn apply(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
         current_node = p.cdr;
     }
 
-    return eval.eval_proc(interp, proc, final_args, env, fuel);
+    return vm_mod.callProc(interp, proc, final_args, fuel);
 }
 
 /// `values` packages its arguments as a multi-values envelope. With one argument it
@@ -72,7 +72,7 @@ pub fn call_with_values(interp: *interpreter.Interpreter, env: *core.Environment
 
     var producer_args = core.ValueList.init(env.allocator);
     defer producer_args.deinit();
-    const produced = try eval.eval_proc(interp, producer, producer_args, env, fuel);
+    const produced = try vm_mod.callProc(interp, producer, producer_args, fuel);
 
     var consumer_args = core.ValueList.init(env.allocator);
     defer consumer_args.deinit();
@@ -83,7 +83,7 @@ pub fn call_with_values(interp: *interpreter.Interpreter, env: *core.Environment
     } else {
         try consumer_args.append(produced);
     }
-    return eval.eval_proc(interp, consumer, consumer_args, env, fuel);
+    return vm_mod.callProc(interp, consumer, consumer_args, fuel);
 }
 
 /// `with_input_from_file` opens `path` for reading, redirects the interpreter's current
@@ -108,7 +108,7 @@ pub fn with_input_from_file(interp: *interpreter.Interpreter, env: *core.Environ
 
     var thunk_args = core.ValueList.init(env.allocator);
     defer thunk_args.deinit();
-    return eval.eval_proc(interp, thunk, thunk_args, env, fuel);
+    return vm_mod.callProc(interp, thunk, thunk_args, fuel);
 }
 
 /// `with_output_to_file` is the output counterpart to `with_input_from_file`. Display,
@@ -132,7 +132,7 @@ pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environm
 
     var thunk_args = core.ValueList.init(env.allocator);
     defer thunk_args.deinit();
-    return eval.eval_proc(interp, thunk, thunk_args, env, fuel);
+    return vm_mod.callProc(interp, thunk, thunk_args, fuel);
 }
 
 /// `force` evaluates a delayed promise and memoizes the result. Subsequent calls return
@@ -147,7 +147,7 @@ pub fn force(interp: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (pr.forced) return pr.result;
 
     var expr = pr.expr;
-    const result = try eval.eval(interp, &expr, pr.env, fuel);
+    const result = try interp.evalForm(&expr, fuel);
     pr.result = result;
     pr.forced = true;
     return result;
@@ -170,18 +170,14 @@ pub fn force(interp: *interpreter.Interpreter, _: *core.Environment, args: core.
 pub fn eval_proc(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
+    _ = env;
     const expr = args.items[0];
 
-    // Use provided environment or current environment
-    const eval_env = if (args.items.len == 2) blk: {
-        const env_arg = args.items[1];
-        // For now, we only support evaluating in the current environment
-        // A full implementation would need first-class environments
-        _ = env_arg;
-        break :blk env;
-    } else env;
+    // An optional second argument specifies the environment; we evaluate in the
+    // interpreter root environment regardless (first-class environments are not supported).
+    if (args.items.len == 2) _ = args.items[1];
 
-    return eval.eval(interp, &expr, eval_env, fuel);
+    return interp.evalForm(&expr, fuel);
 }
 
 /// `call-with-escape-continuation` creates an escape continuation and passes it to the
@@ -214,7 +210,7 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     try call_args.append(core.Value{ .procedure = escape_fn });
 
     // Call the procedure with the escape continuation
-    const result = eval.eval_proc(interp, proc, call_args, env, fuel);
+    const result = vm_mod.callProc(interp, proc, call_args, fuel);
 
     if (result) |val| {
         return val;
@@ -236,16 +232,11 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
     const body_thunk = args.items[0];
     const handler_thunk = args.items[1];
 
-    const runner = interp.run_vm_closure orelse return ElzError.NotImplemented;
-
     // Run the body thunk with zero arguments.
     var no_args = core.ValueList.init(env.allocator);
     defer no_args.deinit();
 
-    const body_result: ElzError!core.Value = if (body_thunk == .vm_closure)
-        runner(interp, body_thunk.vm_closure, no_args)
-    else
-        eval.eval_proc(interp, body_thunk, no_args, env, fuel);
+    const body_result = vm_mod.callProc(interp, body_thunk, no_args, fuel);
 
     if (body_result) |val| {
         return val;
@@ -259,63 +250,53 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
         defer handler_args.deinit();
         try handler_args.append(err_val);
 
-        return if (handler_thunk == .vm_closure)
-            try runner(interp, handler_thunk.vm_closure, handler_args)
-        else
-            try eval.eval_proc(interp, handler_thunk, handler_args, env, fuel);
+        return vm_mod.callProc(interp, handler_thunk, handler_args, fuel);
     }
 }
 
-/// `call-with-current-continuation` (call/cc): captures the current continuation
-/// as a first-class value and passes it to the supplied procedure.
+/// `call-with-current-continuation` (call/cc): for upward-only (escape) uses this
+/// is equivalent to `call/ec`. Full first-class continuations are not supported.
 pub fn call_with_current_continuation(
     interp: *interpreter.Interpreter,
     env: *core.Environment,
     args: core.ValueList,
     fuel: *u64,
-    k: *core.Cont,
-) ElzError!core.EvalStep {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const cap = try env.allocator.create(core.CapturedCont);
-    cap.* = .{ .k = k, .winders = interp.cps.winders };
-    const k_val = core.Value{ .continuation = cap };
-    var call_args = core.ValueList.init(env.allocator);
-    try call_args.append(k_val);
-    return try eval.applyProc(interp, args.items[0], call_args, env, k, fuel);
+) ElzError!core.Value {
+    return call_with_escape_continuation(interp, env, args, fuel);
 }
 
 /// `dynamic-wind`: (dynamic-wind before thunk after)
 /// Calls `before`, then `thunk` (returning its value), then `after`.
-/// If a continuation is invoked that crosses the dynamic-wind boundary,
-/// `before` and `after` are re-invoked to maintain dynamic context.
+/// The `after` thunk is called even if the body exits via an escape continuation.
 pub fn dynamic_wind(
     interp: *interpreter.Interpreter,
     env: *core.Environment,
     args: core.ValueList,
     fuel: *u64,
-    k: *core.Cont,
-) ElzError!core.EvalStep {
+) ElzError!core.Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     const before = args.items[0];
     const thunk = args.items[1];
     const after_proc = args.items[2];
 
+    var no_args = core.ValueList.init(env.allocator);
+    defer no_args.deinit();
+
+    // Register winder so call/ec escape can find it.
     const winder = try env.allocator.create(core.Winder);
     winder.* = .{ .before = before, .after = after_proc, .next = interp.cps.winders };
+    const saved_winders = interp.cps.winders;
 
-    const k_thunk_done = try eval.allocCont(interp, .{ .dyn_wind_thunk_done = .{
-        .after_proc = after_proc,
-        .outer_winders = interp.cps.winders,
-    } }, k);
-    const k_before_done = try eval.allocCont(interp, .{ .dyn_wind_before_done = .{
-        .winder = winder,
-        .thunk = thunk,
-        .after_proc = after_proc,
-        .outer_winders = interp.cps.winders,
-    } }, k_thunk_done);
+    _ = try vm_mod.callProc(interp, before, no_args, fuel);
 
-    const no_args = core.ValueList.init(env.allocator);
-    return try eval.applyProc(interp, before, no_args, env, k_before_done, fuel);
+    interp.cps.winders = winder;
+    const thunk_result = vm_mod.callProc(interp, thunk, no_args, fuel);
+    interp.cps.winders = saved_winders;
+
+    // Always call after, even if thunk errored (e.g. escape continuation).
+    _ = vm_mod.callProc(interp, after_proc, no_args, fuel) catch {};
+
+    return thunk_result;
 }
 
 test "control primitives" {
@@ -329,10 +310,7 @@ test "control primitives" {
     var fuel: u64 = 1000;
 
     // Test apply with basic lambda
-    const source = "(lambda (x y) (+ x y))";
-    var forms = try @import("../parser.zig").readAll(source, allocator);
-    defer forms.deinit(allocator);
-    const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
+    const proc_val = try interp.evalString("(lambda (x y) (+ x y))", &fuel);
 
     var args = core.ValueList.init(allocator);
     defer args.deinit();
@@ -359,10 +337,7 @@ test "apply with empty list" {
     var fuel: u64 = 1000;
 
     // Create a lambda that takes no arguments
-    const source = "(lambda () 42)";
-    var forms = try @import("../parser.zig").readAll(source, allocator);
-    defer forms.deinit(allocator);
-    const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
+    const proc_val = try interp.evalString("(lambda () 42)", &fuel);
 
     var args = core.ValueList.init(allocator);
     defer args.deinit();
@@ -390,10 +365,7 @@ test "apply memory leak regression" {
     var fuel: u64 = 10000;
 
     // Create a simple lambda
-    const source = "(lambda (x) x)";
-    var forms = try @import("../parser.zig").readAll(source, allocator);
-    defer forms.deinit(allocator);
-    const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
+    const proc_val = try interp.evalString("(lambda (x) x)", &fuel);
 
     // Call apply many times to test for memory leaks
     // If the defer is missing, this would accumulate memory

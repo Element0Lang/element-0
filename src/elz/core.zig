@@ -170,32 +170,36 @@ pub const UserDefinedProc = struct {
 };
 
 /// A heap-allocated upvalue cell shared between a closure and the stack frame that owns the local.
-/// While the local is live the cell points into the stack (open); when the frame exits the value
-/// is copied into the cell itself (closed).
+/// While the local is live the cell holds a pointer directly into the stack slot (`open`).
+/// When the frame exits the value is copied into the cell itself (`closed`).
+/// Storing a `*Value` pointer (rather than a stack index) makes upvalue access correct across
+/// multiple VM instances: a primitive may call back into Elz via `callProc`, which creates a
+/// fresh VM with a different stack buffer. With a direct pointer, `get`/`set` always reach the
+/// right memory regardless of which VM is currently executing.
 pub const Upvalue = struct {
     state: union(enum) {
-        open: usize, // index into the VM stack
+        open: *Value, // pointer directly into the owning VM's stack slot
         closed: Value, // captured value after the owning frame exits
     },
     next: ?*Upvalue = null, // linked list of open upvalues in the VM
 
-    pub fn get(self: *const Upvalue, stack: []Value) Value {
+    pub fn get(self: *const Upvalue) Value {
         return switch (self.state) {
-            .open => |idx| stack[idx],
+            .open => |ptr| ptr.*,
             .closed => |v| v,
         };
     }
 
-    pub fn set(self: *Upvalue, stack: []Value, val: Value) void {
+    pub fn set(self: *Upvalue, val: Value) void {
         switch (self.state) {
-            .open => |idx| stack[idx] = val,
+            .open => |ptr| ptr.* = val,
             .closed => self.state = .{ .closed = val },
         }
     }
 
-    pub fn close(self: *Upvalue, stack: []Value) void {
+    pub fn close(self: *Upvalue) void {
         switch (self.state) {
-            .open => |idx| self.state = .{ .closed = stack[idx] },
+            .open => |ptr| self.state = .{ .closed = ptr.* },
             .closed => {},
         }
     }
@@ -339,7 +343,7 @@ pub const Cont = struct {
     next: ?*Cont,
 };
 
-/// Result of one CPS evaluation step. Drives the trampoline loop in `eval.zig`.
+/// Result of one CPS evaluation step (kept for ABI compatibility).
 pub const EvalStep = union(enum) {
     eval: struct { ast: Value, env: *Environment, k: *Cont },
     apply: struct { k: *Cont, val: Value },
@@ -347,8 +351,6 @@ pub const EvalStep = union(enum) {
 };
 
 /// A primitive function that has access to the current continuation.
-/// Used by call/cc, dynamic-wind, apply, and other forms that participate
-/// directly in the CPS-converted evaluator.
 pub const ContAwareFn = *const fn (
     interp: *interpreter.Interpreter,
     env: *Environment,

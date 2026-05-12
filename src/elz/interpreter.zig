@@ -45,8 +45,8 @@ pub const SandboxFlags = struct {
     time_limit_ms: ?u64 = null,
 };
 
-/// CPS trampoline state bundled away from the public Interpreter surface.
-/// All fields are implementation details of eval.zig and primitives/control.zig.
+/// CPS state bundled away from the public Interpreter surface.
+/// All fields are implementation details of primitives/control.zig.
 pub const CpsState = struct {
     /// Value carried by the most recently invoked escape continuation.
     escape_value: ?core.Value = null,
@@ -79,17 +79,14 @@ pub const Interpreter = struct {
     eval_start_ms: ?i64 = null,
     /// Step counter for throttling time checks (check every N steps).
     time_check_counter: u64 = 0,
-    /// CPS trampoline state: escape-continuation side-channel and dynamic-wind chain.
-    /// Only eval.zig and primitives/control.zig should read or write these fields.
+    /// CPS state: escape-continuation side-channel and dynamic-wind chain.
+    /// Only primitives/control.zig should read or write these fields.
     /// Embedders must not touch them.
     cps: CpsState = .{},
     /// The current input port. Populated lazily on first reference.
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
-    /// Hook set by vm.zig so that eval.zig can dispatch vm_closure values without
-    /// directly importing the VM. Registered during Interpreter.init.
-    run_vm_closure: ?*const fn (*Interpreter, *core.VmClosure, core.ValueList) core.ElzError!core.Value = null,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -153,10 +150,6 @@ pub const Interpreter = struct {
         try env_setup.populate_json(&self);
         try env_setup.populate_regex(&self);
 
-        // Register the VM hook before loading stdlib so vm_closure values dispatched
-        // during stdlib evaluation are handled correctly.
-        self.run_vm_closure = @import("vm.zig").runFromEval;
-
         const std_lib_source = @embedFile("../stdlib/std.elz");
         var std_lib_forms = try parser.readAll(std_lib_source, allocator);
         defer std_lib_forms.deinit(allocator);
@@ -209,6 +202,78 @@ pub const Interpreter = struct {
         return wrapEvalResult(self, machine.runProto(proto, fuel));
     }
 
+    /// Loads a module file, evaluates every form in it, and caches the result.
+    /// Returns the cached `core.Value.module` if the path was already loaded.
+    pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
+        if (path_val != .string) return core.ElzError.InvalidArgument;
+        const path_str = path_val.string;
+
+        if (self.module_cache.get(path_str)) |cached_mod_ptr| {
+            return core.Value{ .module = cached_mod_ptr };
+        }
+
+        const source_bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path_str, self.allocator, .limited(1024 * 1024)) catch {
+            self.last_error_message = "Failed to read module file.";
+            return core.ElzError.InvalidArgument;
+        };
+        defer self.allocator.free(source_bytes);
+
+        var forms = @import("parser.zig").readAll(source_bytes, self.allocator) catch {
+            self.last_error_message = "Failed to parse module file.";
+            return core.ElzError.InvalidArgument;
+        };
+        defer forms.deinit(self.allocator);
+
+        // Snapshot the set of keys already defined in root_env so we can identify
+        // the bindings added by the module.
+        var existing_keys = std.StringHashMapUnmanaged(void).empty;
+        defer existing_keys.deinit(self.allocator);
+        {
+            var it = self.root_env.bindings.iterator();
+            while (it.next()) |entry| {
+                try existing_keys.put(self.allocator, entry.key_ptr.*, {});
+            }
+        }
+
+        // Compile and run all module forms into root_env (globals always go there).
+        {
+            var local_fuel: u64 = std.math.maxInt(u64);
+            const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, &local_fuel);
+            var machine = try vm.VM.init(self);
+            defer machine.deinit();
+            _ = try machine.runProto(proto, &local_fuel);
+        }
+
+        const mod_ptr = try self.allocator.create(core.Module);
+        mod_ptr.* = .{
+            .exports = std.StringHashMap(core.Value).init(self.allocator),
+        };
+
+        var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }).empty;
+        defer temp.deinit(self.allocator);
+
+        // Collect all bindings that were added to root_env by the module.
+        {
+            var it = self.root_env.bindings.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (key.len > 0 and key[0] == '_') continue;
+                if (existing_keys.contains(key)) continue;
+                try temp.append(self.allocator, .{ .k = key, .v = entry.value_ptr.* });
+            }
+        }
+
+        try mod_ptr.exports.ensureTotalCapacity(@intCast(temp.items.len));
+        for (temp.items) |kv| {
+            try mod_ptr.exports.put(kv.k, kv.v);
+        }
+
+        const cached_name = try self.allocator.dupe(u8, path_str);
+        try self.module_cache.put(cached_name, mod_ptr);
+
+        return core.Value{ .module = mod_ptr };
+    }
+
     /// Evaluates a single pre-parsed Elz form in the interpreter's root environment.
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
@@ -240,7 +305,7 @@ pub const Interpreter = struct {
 
     /// Increments the time-check step counter and, every 256 steps, compares elapsed
     /// wall-clock time against the configured limit. Returns `TimeLimitExceeded` if over.
-    /// Both eval.zig and vm.zig call this instead of duplicating the logic.
+    /// Called by vm.zig and primitives to check the time budget without duplicating the logic.
     pub fn checkTimeBudget(self: *Interpreter) core.ElzError!void {
         self.time_check_counter +%= 1;
         if (self.time_check_counter & 0xFF == 0) {

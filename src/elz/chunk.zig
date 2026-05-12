@@ -31,6 +31,7 @@ pub const OpCode = enum(u8) {
     // --- Stack manipulation ---
     pop, // discard top of stack
     dup, // duplicate top of stack
+    swap, // swap top two stack values
 
     // --- Pair / list ---
     cons, // pops cdr then car (car pushed first), pushes pair

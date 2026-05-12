@@ -3,13 +3,12 @@
 /// Executes FuncProto bytecode produced by compiler.zig. The VM is
 /// stack-based with explicit call frames and upvalue support.
 ///
-/// Primitives (`.procedure`, `.cont_aware_procedure`) are invoked by
-/// building a ValueList from the stack — same calling convention as the
-/// old tree-walker, so all 188 primitives work unchanged.
+/// Primitives (`.procedure`) are invoked by building a ValueList from the
+/// stack — same calling convention as the old tree-walker, so all primitives
+/// work unchanged.
 const std = @import("std");
 const core = @import("core.zig");
 const chunk = @import("chunk.zig");
-const eval_mod = @import("eval.zig");
 const Value = core.Value;
 const ElzError = core.ElzError;
 const FuncProto = chunk.FuncProto;
@@ -87,14 +86,17 @@ pub const VM = struct {
 
     fn captureUpvalue(self: *VM, slot: usize) !*Upvalue {
         // Walk the sorted list to find or insert at the right position.
-        // List is sorted descending by slot so innermost (highest) slots come first.
+        // List is sorted descending by pointer address (via slot index) so innermost
+        // (highest) slots come first.
+        const ptr = &self.stack[slot];
         var prev: ?*Upvalue = null;
         var cur = self.open_upvalues;
         while (cur) |u| {
             switch (u.state) {
-                .open => |idx| {
-                    if (idx == slot) return u;
-                    if (idx < slot) break; // insertion point
+                .open => |p| {
+                    if (p == ptr) return u; // already captured
+                    // Compare pointers to maintain sorted order (higher addresses first).
+                    if (@intFromPtr(p) < @intFromPtr(ptr)) break;
                     prev = u;
                     cur = u.next;
                 },
@@ -105,7 +107,7 @@ pub const VM = struct {
             }
         }
         const new_uv = try self.interp.allocator.create(Upvalue);
-        new_uv.* = .{ .state = .{ .open = slot }, .next = cur };
+        new_uv.* = .{ .state = .{ .open = ptr }, .next = cur };
         if (prev) |p| {
             p.next = new_uv;
         } else {
@@ -115,14 +117,15 @@ pub const VM = struct {
     }
 
     fn closeUpvaluesAbove(self: *VM, slot: usize) void {
-        // Walk the full list and close all open upvalues at slot >= threshold.
+        // Walk the full list and close all open upvalues that point to stack slots >= threshold.
+        const threshold = &self.stack[slot];
         var prev: ?*Upvalue = null;
         var cur = self.open_upvalues;
         while (cur) |u| {
             const next = u.next;
             switch (u.state) {
-                .open => |idx| if (idx >= slot) {
-                    u.close(self.stack);
+                .open => |ptr| if (@intFromPtr(ptr) >= @intFromPtr(threshold)) {
+                    u.close();
                     // Remove from list.
                     if (prev) |p| {
                         p.next = next;
@@ -148,10 +151,6 @@ pub const VM = struct {
             .vm_closure => |cl| {
                 try self.callVmClosure(cl, argc, tail);
             },
-            .closure => |c| {
-                // Old-style UserDefinedProc: delegate to eval machinery.
-                try self.callOldClosure(c, argc);
-            },
             .procedure => |prim| {
                 var args = try self.buildArgList(argc); // pops args + callee
                 // Use max fuel so only the wall-clock time limit (checkTimeBudget) bounds execution.
@@ -159,10 +158,6 @@ pub const VM = struct {
                 const result = try prim(self.interp, self.interp.root_env, args, &prim_fuel);
                 args.deinit();
                 try self.push(result);
-            },
-            .cont_aware_procedure => |cap| {
-                // cont_aware procedures expect the CPS machinery. Delegate to eval.
-                try self.callContAware(cap, argc);
             },
             .foreign_procedure => |ff| {
                 var args = try self.buildArgList(argc);
@@ -274,30 +269,6 @@ pub const VM = struct {
         return args;
     }
 
-    fn callOldClosure(self: *VM, c: *core.UserDefinedProc, argc: u8) !void {
-        // Delegate to eval machinery for old-style closures.
-        var args = try self.buildArgList(argc);
-        defer args.deinit();
-        // Use max fuel so that only the shared wall-clock time limit (checked via
-        // interp.checkTimeBudget) bounds execution — avoids a hidden separate cap.
-        var fuel: u64 = std.math.maxInt(u64);
-        const halt = try eval_mod.allocCont(self.interp, .halt, null);
-        const call_env = try eval_mod.bindClosureArgs(self.interp, c, args, self.interp.root_env);
-        const step = try eval_mod.evalBodyStep(self.interp, c.body, call_env, halt);
-        const result = try runEvalLoop(self.interp, step, &fuel);
-        try self.push(result);
-    }
-
-    fn callContAware(self: *VM, cap: core.ContAwareFn, argc: u8) !void {
-        var args = try self.buildArgList(argc);
-        defer args.deinit();
-        var fuel: u64 = std.math.maxInt(u64);
-        const halt = try eval_mod.allocCont(self.interp, .halt, null);
-        const step = try cap(self.interp, self.interp.root_env, args, &fuel, halt);
-        const result = try runEvalLoop(self.interp, step, &fuel);
-        try self.push(result);
-    }
-
     // -----------------------------------------------------------------------
     // Main execution loop
     // -----------------------------------------------------------------------
@@ -344,11 +315,11 @@ pub const VM = struct {
                 },
                 .load_upval => {
                     const uv = frame.closure.upvals[instr.a];
-                    try self.push(uv.get(self.stack));
+                    try self.push(uv.get());
                 },
                 .store_upval => {
                     const uv = frame.closure.upvals[instr.a];
-                    uv.set(self.stack, self.peek(0));
+                    uv.set(self.peek(0));
                 },
                 .load_global => {
                     const name_val = proto.constants.items[instr.bx];
@@ -411,6 +382,12 @@ pub const VM = struct {
                 // --- Stack ---
                 .pop => _ = self.pop(),
                 .dup => try self.push(self.peek(0)),
+                .swap => {
+                    const a = self.pop();
+                    const b = self.pop();
+                    try self.push(a);
+                    try self.push(b);
+                },
 
                 // --- Pairs ---
                 .cons => {
@@ -518,7 +495,12 @@ pub const VM = struct {
         // Start with an empty working stack. The body code is responsible for
         // initialising its own locals (letrec emits load_false, let pushes init values).
         self.stack_top = 0;
-        return self.run();
+        const result = self.run();
+        // Close all open upvalues before the stack is freed: this copies any open
+        // upvalue values into the cell so subsequent accesses via the closed pointer
+        // (from callProc or runFromEval) see valid values.
+        self.closeUpvaluesAbove(0);
+        return result;
     }
 };
 
@@ -544,28 +526,40 @@ fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) !Value 
     return Value{ .pair = new_pair };
 }
 
-/// Run the old eval trampoline for a single EvalStep (used when delegating
-/// to the tree-walker for cont_aware procedures).
-fn runEvalLoop(interp: *@import("interpreter.zig").Interpreter, start: core.EvalStep, fuel: *u64) !Value {
-    var step = start;
-    while (true) {
-        step = switch (step) {
-            .eval => |e| try eval_mod.evalStep(interp, e.ast, e.env, e.k, fuel),
-            .apply => |a| try eval_mod.applyK(interp, a.k, a.val, fuel),
-            .done => |v| return v,
-        };
-    }
+/// Entry point that can be used to run a vm_closure with a given argument list.
+pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosure, args: core.ValueList) core.ElzError!Value {
+    var vm_inst = VM.init(interp) catch return core.ElzError.OutOfMemory;
+    defer vm_inst.deinit();
+    try vm_inst.push(Value{ .vm_closure = cl });
+    for (args.items) |arg| try vm_inst.push(arg);
+    try vm_inst.callVmClosure(cl, @intCast(args.items.len), false);
+    const result = vm_inst.run();
+    // Close all open upvalues before the stack is freed by deinit().
+    vm_inst.closeUpvaluesAbove(0);
+    return result;
 }
 
-/// Entry point registered on `Interpreter.run_vm_closure` so that `eval.zig` can
-/// dispatch `vm_closure` values without directly importing this module.
-pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosure, args: core.ValueList) core.ElzError!Value {
-    var vm = VM.init(interp) catch return core.ElzError.OutOfMemory;
-    defer vm.deinit();
-    try vm.push(Value{ .vm_closure = cl });
-    for (args.items) |arg| try vm.push(arg);
-    try vm.callVmClosure(cl, @intCast(args.items.len), false);
-    return vm.run();
+/// Call any Elz value as a procedure with the given argument list.
+/// Used by primitives that need to call back into Elz (e.g., `apply`, `map`,
+/// `dynamic-wind`, `for-each`).
+///
+/// Because upvalues now store a direct `*Value` pointer into the owning VM's stack,
+/// they remain valid across multiple VMs: the pointer still addresses the live stack
+/// memory of the outer VM (which is suspended in a primitive call).  When the outer
+/// VM's frame eventually exits, `closeUpvaluesAbove` will overwrite the open state
+/// with a closed copy — leaving the pointer dangling but the cell valid.
+pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, args: core.ValueList, fuel: ?*u64) ElzError!Value {
+    var machine = try VM.init(interp);
+    defer machine.deinit();
+    machine.fuel = fuel;
+    try machine.push(proc);
+    for (args.items) |arg| try machine.push(arg);
+    const argc: u8 = @intCast(args.items.len);
+    try machine.callValue(machine.peek(argc), argc, false);
+    const result = machine.run();
+    // Close all open upvalues before the stack is freed by deinit().
+    machine.closeUpvaluesAbove(0);
+    return result;
 }
 
 // ---------------------------------------------------------------------------

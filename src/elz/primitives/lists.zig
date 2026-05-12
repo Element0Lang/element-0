@@ -1,9 +1,9 @@
 const std = @import("std");
 const core = @import("../core.zig");
-const eval = @import("../eval.zig");
 const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
+const vm_mod = @import("../vm.zig");
 
 /// `cons` creates a new pair.
 ///
@@ -210,7 +210,7 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
             try call_args.append(cur.pair.car);
             cursors[i] = cur.pair.cdr;
         }
-        const mapped_val = try eval.eval_proc(interp, proc, call_args, env, fuel);
+        const mapped_val = try vm_mod.callProc(interp, proc, call_args, fuel);
         const new_pair = try env.allocator.create(core.Pair);
         new_pair.* = .{ .car = mapped_val, .cdr = .nil };
         if (result_tail) |tail| {
@@ -394,10 +394,7 @@ test "list primitives" {
     try testing.expect(appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car == .exact_integer and appended_list.pair.cdr.pair.cdr.pair.cdr.pair.car.exact_integer == 1);
 
     // Test map
-    const source = "(lambda (x) (* x 2))";
-    var forms = try @import("../parser.zig").readAll(source, interp.allocator);
-    defer forms.deinit(interp.allocator);
-    const proc_val = try eval.eval(&interp, &forms.items[0], interp.root_env, &fuel);
+    const proc_val = try interp.evalString("(lambda (x) (* x 2))", &fuel);
     args.clearRetainingCapacity();
     try args.append(proc_val);
     try args.append(list_val);

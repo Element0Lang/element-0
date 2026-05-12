@@ -5,7 +5,7 @@ const std = @import("std");
 const core = @import("core.zig");
 const ElzError = @import("errors.zig").ElzError;
 const interpreter = @import("interpreter.zig");
-const eval_mod = @import("eval.zig");
+const vm_mod = @import("vm.zig");
 
 /// Thread-local pointer to the currently executing interpreter.
 /// Set by eval before each foreign procedure call so that ElzCallback can
@@ -29,7 +29,7 @@ pub const ElzCallback = struct {
         defer arg_list.deinit();
         for (args) |a| try arg_list.append(a);
         var fuel: u64 = std.math.maxInt(u64);
-        return eval_mod.eval_proc(interp, self.proc, arg_list, interp.root_env, &fuel);
+        return vm_mod.callProc(interp, self.proc, arg_list, &fuel);
     }
 };
 
