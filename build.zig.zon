@@ -12,13 +12,13 @@
             .url = "https://github.com/bdwgc/bdwgc/archive/refs/tags/v8.2.12.tar.gz",
             .hash = "N-V-__8AACFbLwCc_S3bi22OQGduAL6tPehcttjX9PFqjkP-",
         },
-        .linenoise = .{
-            .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
-            .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
-        },
         .minish = .{
             .url = "https://github.com/CogitatorTech/minish/archive/refs/tags/v0.3.0.tar.gz",
             .hash = "minish-0.3.0-SQtSTYI3AgCxWdWbKxS_lvmfbp0wJk29ZW5C9CozJaxm",
+        },
+        .bestline = .{
+            .url = "https://github.com/jart/bestline/archive/395fa5d1680a1caaef60d903e71f7ee7a62d292b.tar.gz",
+            .hash = "N-V-__8AAE3fHQGvjfkDRURnfqgvr3qlTSIVqBJOKl6Eml_-",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },

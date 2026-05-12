@@ -3,9 +3,9 @@ const elz = @import("elz");
 const chilli = @import("chilli");
 
 const builtin = @import("builtin");
-const linenoise = if (builtin.os.tag != .windows) @cImport({
-    @cInclude("linenoise.h");
-}) else struct {};
+const bestline = @cImport({
+    @cInclude("bestline.h");
+});
 
 const filetime_unix_offset: i64 = 116444736000000000;
 
@@ -75,83 +75,55 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
 }
 
 fn repl(interpreter: *elz.Interpreter) !void {
-    if (builtin.os.tag != .windows) {
-        const history_path = "history.txt";
-        _ = linenoise.linenoiseHistoryLoad(history_path);
-        defer {
-            _ = linenoise.linenoiseHistorySave(history_path);
-        }
+    while (true) {
+        const line = bestline.bestlineWithHistory("> ", "history.txt");
+        if (line == null) return;
+        defer bestline.bestlineFree(line);
 
-        while (true) {
-            const line = linenoise.linenoise("> ");
-            if (line == null) {
-                return;
-            }
-            defer linenoise.linenoiseFree(line);
+        const line_slice = std.mem.sliceTo(line, 0);
+        if (line_slice.len == 0) continue;
+        if (std.mem.eql(u8, line_slice, ".exit")) return;
 
-            const line_slice = std.mem.sliceTo(line, 0);
-
-            if (line_slice.len == 0) {
-                continue;
-            }
-
-            if (std.mem.eql(u8, line_slice, ".exit")) {
-                return;
-            }
-
-            _ = linenoise.linenoiseHistoryAdd(line);
-
-            eval_line: {
-                var forms = elz.parser.readAll(line_slice, interpreter.allocator) catch |err| {
-                    var buffer: [4096]u8 = undefined;
-                    const stdout_file = std.Io.File.stdout();
-                    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
-                    const stdout = &stdout_writer.interface;
-                    try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
-                    try stdout.flush();
-                    break :eval_line;
-                };
-                defer forms.deinit(interpreter.allocator);
-
-                if (forms.items.len == 0) break :eval_line;
-
-                var last_result: elz.Value = .nil;
-                for (forms.items) |form| {
-                    var fuel: u64 = std.math.maxInt(u64);
-                    last_result = interpreter.evalForm(&form, &fuel) catch |err| {
-                        var buffer: [4096]u8 = undefined;
-                        const stdout_file = std.Io.File.stdout();
-                        var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
-                        const stdout = &stdout_writer.interface;
-                        if (interpreter.last_error_message) |msg| {
-                            try stdout.print("Error: {s}\n", .{msg});
-                        } else {
-                            try stdout.print("Error: {s}\n", .{@errorName(err)});
-                        }
-                        try stdout.flush();
-                        break :eval_line;
-                    };
-                }
+        eval_line: {
+            var forms = elz.parser.readAll(line_slice, interpreter.allocator) catch |err| {
                 var buffer: [4096]u8 = undefined;
                 const stdout_file = std.Io.File.stdout();
                 var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
                 const stdout = &stdout_writer.interface;
-                if (last_result != .unspecified) {
-                    try displayValue(interpreter, last_result, stdout);
+                try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
+                try stdout.flush();
+                break :eval_line;
+            };
+            defer forms.deinit(interpreter.allocator);
+
+            if (forms.items.len == 0) break :eval_line;
+
+            var last_result: elz.Value = .nil;
+            for (forms.items) |form| {
+                var fuel: u64 = std.math.maxInt(u64);
+                last_result = interpreter.evalForm(&form, &fuel) catch |err| {
+                    var buffer: [4096]u8 = undefined;
+                    const stdout_file = std.Io.File.stdout();
+                    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+                    const stdout = &stdout_writer.interface;
+                    if (interpreter.last_error_message) |msg| {
+                        try stdout.print("Error: {s}\n", .{msg});
+                    } else {
+                        try stdout.print("Error: {s}\n", .{@errorName(err)});
+                    }
                     try stdout.flush();
-                }
+                    break :eval_line;
+                };
+            }
+            var buffer: [4096]u8 = undefined;
+            const stdout_file = std.Io.File.stdout();
+            var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+            const stdout = &stdout_writer.interface;
+            if (last_result != .unspecified) {
+                try displayValue(interpreter, last_result, stdout);
+                try stdout.flush();
             }
         }
-    } else {
-        // Windows: REPL not supported, use file execution mode with -f flag
-        var buffer: [4096]u8 = undefined;
-        const stdout_file = std.Io.File.stdout();
-        var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
-        const stdout = &stdout_writer.interface;
-        try stdout.writeAll("REPL mode is not available on Windows.\n");
-        try stdout.writeAll("Please use file execution mode: elz-repl -f <filepath>\n");
-        try stdout.flush();
-        return;
     }
 }
 

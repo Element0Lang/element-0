@@ -86,8 +86,7 @@ jobs:
         if: runner.os != 'Windows' && matrix.can_test
         run: |
           echo "Running smoke test..."
-          echo '(+ 1 2 3)' | ./zig-out/bin/elz-repl --eval '(+ 1 2 3)' || \
-            ./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+          ./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
           echo "Smoke test passed!"
 
       - name: Smoke test - run a simple example (Windows)
@@ -112,7 +111,7 @@ jobs:
           cp zig-out/bin/elz-repl "$RELEASE_DIR/bin/"
 
           # Copy stdlib (required for REPL)
-          cp -r stdlib/* "$RELEASE_DIR/stdlib/" 2>/dev/null || true
+          cp -r src/stdlib/* "$RELEASE_DIR/stdlib/" 2>/dev/null || true
 
           # Copy examples
           cp -r examples/elz/* "$RELEASE_DIR/examples/" 2>/dev/null || true
@@ -137,8 +136,8 @@ jobs:
           Copy-Item zig-out\bin\elz-repl.exe "$RELEASE_DIR\bin\"
 
           # Copy stdlib (required for REPL)
-          if (Test-Path stdlib) {
-            Copy-Item -Recurse stdlib\* "$RELEASE_DIR\stdlib\" -ErrorAction SilentlyContinue
+          if (Test-Path src\stdlib) {
+            Copy-Item -Recurse src\stdlib\* "$RELEASE_DIR\stdlib\" -ErrorAction SilentlyContinue
           }
 
           # Copy examples

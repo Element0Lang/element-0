@@ -143,7 +143,7 @@ fn zig_multiply(a: f64, b: f64) f64 {
 }
 
 pub fn main() !void {
-    // 1. Initialize the Elz interpreter.
+    // 1. Initialize the Elz interpreter (the compiler and VM)
     var interpreter = try elz.Interpreter.init(.{});
     defer interpreter.deinit();
 
@@ -223,7 +223,7 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 ### Acknowledgements
 
 * The logo is made by [Conrad Barski, M.D.](https://www.lisperati.com/logo.html) with a few changes.
-* [Linenoise](https://github.com/antirez/linenoise) is used for the REPL's line editing and history features.
+* [Bestline](https://github.com/jart/bestline) is used for the REPL's line editing and history features.
 * [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) is used for the reference implementation of the R5RS standard.
 * [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
 * [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.

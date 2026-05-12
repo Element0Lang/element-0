@@ -110,12 +110,10 @@ pub fn build(b: *std.Build) void {
         .root_module = repl_module,
     });
 
-    // --- Linenoise dependency (for POSIX only) ---
-    if (target.query.os_tag orelse .linux != .windows) {
-        const linenoise_dep = b.dependency("linenoise", .{});
-        repl_module.addIncludePath(linenoise_dep.path(""));
-        repl_module.addCSourceFile(.{ .file = linenoise_dep.path("linenoise.c") });
-    }
+    // --- Bestline dependency (cross-platform line editing) ---
+    const bestline_dep = b.dependency("bestline", .{});
+    repl_module.addIncludePath(bestline_dep.path(""));
+    repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
     repl_module.linkSystemLibrary("c", .{});
 
     // Add dependency on 'chilli' library
