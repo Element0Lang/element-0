@@ -56,11 +56,11 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 1. Clone the repository
    ```sh
-   git clone --recurse-submodules https://github.com/Element0Lang/element-0.git
+   git clone --recurse https://github.com/Element0Lang/element-0.git
    cd element-0
    ```
 
-   If you cloned without `--recurse-submodules`, initialize the submodules with:
+   If you cloned without `--recurse`, initialize the submodules with:
    ```sh
    git submodule update --init
    ```
@@ -186,7 +186,7 @@ pub fn main() !void {
 
 When you build and run this program, the output will be:
 
-```bash
+```
 --- Evaluating simple Elz code ---
 Result of (* 10 5) is: 50
 

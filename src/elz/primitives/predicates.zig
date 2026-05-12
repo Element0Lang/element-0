@@ -121,6 +121,10 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .closure => |bv| av == bv,
             else => false,
         },
+        .vm_closure => |av| switch (b) {
+            .vm_closure => |bv| av == bv,
+            else => false,
+        },
         .procedure => |av| switch (b) {
             .procedure => |bv| av == bv,
             else => false,
@@ -295,7 +299,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .closure, .foreign_procedure, .cont_aware_procedure, .continuation => true,
+        .procedure, .closure, .vm_closure, .foreign_procedure, .cont_aware_procedure, .continuation => true,
         else => false,
     } };
 }

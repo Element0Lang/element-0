@@ -104,7 +104,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             }
             try writer.writeAll(")");
         },
-        .closure => try writer.writeAll("#<closure>"),
+        .closure, .vm_closure => try writer.writeAll("#<closure>"),
         .macro => |m| {
             try writer.writeAll("#<macro:");
             try writer.writeAll(m.name);

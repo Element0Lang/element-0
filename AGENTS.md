@@ -35,7 +35,9 @@ Priorities, in order:
 - `src/main.zig`: REPL entry point (`elz-repl` binary).
 - `src/elz/core.zig`: Core value types, Environment, and Module definitions.
 - `src/elz/interpreter.zig`: Main `Interpreter` struct.
-- `src/elz/eval.zig`: Evaluation engine.
+- `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
+- `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
+- `src/elz/vm.zig`: Stack-based bytecode VM; executes `FuncProto` chunks, manages call frames and upvalues.
 - `src/elz/parser.zig`: S-expression parser.
 - `src/elz/env_setup.zig`: Environment initialization and FFI setup.
 - `src/elz/ffi.zig`: Foreign function interface for calling Zig functions from Element 0.
@@ -58,7 +60,7 @@ Priorities, in order:
 
 ### Interpreter Pipeline
 
-Source code flows through: Parser (`parser.zig`) -> Evaluator (`eval.zig`) -> Writer (`writer.zig`).
+Source code flows through: Parser (`parser.zig`) -> Compiler (`compiler.zig`) -> VM (`vm.zig`) -> Writer (`writer.zig`).
 The `Interpreter` struct in `interpreter.zig` ties these together and manages the root environment.
 
 ### Core / Primitives Split

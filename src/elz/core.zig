@@ -169,6 +169,56 @@ pub const UserDefinedProc = struct {
     env: *Environment,
 };
 
+/// A heap-allocated upvalue cell shared between a closure and the stack frame that owns the local.
+/// While the local is live the cell holds a pointer directly into the stack slot (`open`).
+/// When the frame exits the value is copied into the cell itself (`closed`).
+/// Storing a `*Value` pointer (rather than a stack index) makes upvalue access correct across
+/// multiple VM instances: a primitive may call back into Elz via `callProc`, which creates a
+/// fresh VM with a different stack buffer. With a direct pointer, `get`/`set` always reach the
+/// right memory regardless of which VM is currently executing.
+pub const Upvalue = struct {
+    state: union(enum) {
+        open: *Value, // pointer directly into the owning VM's stack slot
+        closed: Value, // captured value after the owning frame exits
+    },
+    next: ?*Upvalue = null, // linked list of open upvalues in the VM
+
+    pub fn get(self: *const Upvalue) Value {
+        return switch (self.state) {
+            .open => |ptr| ptr.*,
+            .closed => |v| v,
+        };
+    }
+
+    pub fn set(self: *Upvalue, val: Value) void {
+        switch (self.state) {
+            .open => |ptr| ptr.* = val,
+            .closed => self.state = .{ .closed = val },
+        }
+    }
+
+    pub fn close(self: *Upvalue) void {
+        switch (self.state) {
+            .open => |ptr| self.state = .{ .closed = ptr.* },
+            .closed => {},
+        }
+    }
+};
+
+/// A VM-compiled closure: a `FuncProto` (bytecode + constants) paired with captured upvalue cells.
+pub const VmClosure = struct {
+    proto: *@import("chunk.zig").FuncProto,
+    upvals: []*Upvalue,
+};
+
+/// One call frame on the VM's call stack.
+pub const CallFrame = struct {
+    closure: *VmClosure,
+    ip: usize,
+    /// Index in the value stack where this frame's locals start.
+    stack_base: usize,
+};
+
 /// Represents a macro transformer in Element 0.
 /// Macros are procedures that transform code before evaluation.
 pub const Macro = struct {
@@ -201,6 +251,9 @@ pub const SyntaxRulesMacro = struct {
     rules: []SyntaxRule,
     /// The environment captured at definition time. Used for hygiene in later slices.
     env: *Environment,
+    /// The ellipsis marker (default "..."). Set to "" when "..." is lexically rebound,
+    /// or to a custom symbol for the R7RS `(syntax-rules <ellipsis> ...)` form.
+    ellipsis: []const u8,
 };
 
 /// A pointer to a native Zig function that can be called from Elz.
@@ -278,6 +331,10 @@ pub const ContFrame = union(enum) {
     dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
     dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
     dyn_wind_after_done: struct { thunk_result: Value },
+    // cond => arrow form: applied with the test result to decide branch or proceed.
+    cond_arrow_test_done: struct { proc_expr: Value, alternative: Value, env: *Environment },
+    // cond => arrow form: applied with the procedure value to call it on the saved test value.
+    cond_arrow_proc_done: struct { test_val: Value, env: *Environment },
 };
 
 /// A continuation: a singly-linked list of frames.
@@ -286,7 +343,7 @@ pub const Cont = struct {
     next: ?*Cont,
 };
 
-/// Result of one CPS evaluation step. Drives the trampoline loop in `eval.zig`.
+/// Result of one CPS evaluation step (kept for ABI compatibility).
 pub const EvalStep = union(enum) {
     eval: struct { ast: Value, env: *Environment, k: *Cont },
     apply: struct { k: *Cont, val: Value },
@@ -294,8 +351,6 @@ pub const EvalStep = union(enum) {
 };
 
 /// A primitive function that has access to the current continuation.
-/// Used by call/cc, dynamic-wind, apply, and other forms that participate
-/// directly in the CPS-converted evaluator.
 pub const ContAwareFn = *const fn (
     interp: *interpreter.Interpreter,
     env: *Environment,
@@ -525,6 +580,8 @@ pub const Value = union(enum) {
     boolean: bool,
     /// A user-defined procedure (lambda).
     closure: *UserDefinedProc,
+    /// A VM-compiled closure (bytecode + upvalues).
+    vm_closure: *VmClosure,
     /// A macro transformer (define-macro).
     macro: *Macro,
     /// A built-in (primitive) procedure.
@@ -603,7 +660,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .closure, .vm_closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

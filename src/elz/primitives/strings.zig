@@ -118,6 +118,88 @@ pub fn char_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     return Value{ .boolean = a.character >= b.character };
 }
 
+pub fn char_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) == std.ascii.toLower(@intCast(b.character)) };
+}
+
+pub fn char_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) < std.ascii.toLower(@intCast(b.character)) };
+}
+
+pub fn char_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) > std.ascii.toLower(@intCast(b.character)) };
+}
+
+pub fn char_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) <= std.ascii.toLower(@intCast(b.character)) };
+}
+
+pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .character or b != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) >= std.ascii.toLower(@intCast(b.character)) };
+}
+
+pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.isAlphabetic(@intCast(args.items[0].character)) };
+}
+
+pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.isDigit(@intCast(args.items[0].character)) };
+}
+
+pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.isWhitespace(@intCast(args.items[0].character)) };
+}
+
+pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.isUpper(@intCast(args.items[0].character)) };
+}
+
+pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .boolean = std.ascii.isLower(@intCast(args.items[0].character)) };
+}
+
+pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .character = std.ascii.toUpper(@intCast(args.items[0].character)) };
+}
+
+pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .character = std.ascii.toLower(@intCast(args.items[0].character)) };
+}
+
 /// `char_to_integer` converts a character to its Unicode code point.
 pub fn char_to_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
@@ -459,6 +541,145 @@ pub fn string_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     if (a != .string or b != .string) return ElzError.InvalidArgument;
     const order = std.mem.order(u8, a.string, b.string);
     return Value{ .boolean = order != .lt };
+}
+
+fn string_ci_compare(a: []const u8, b: []const u8) std.math.Order {
+    var ia = std.unicode.Utf8View.initUnchecked(a).iterator();
+    var ib = std.unicode.Utf8View.initUnchecked(b).iterator();
+    while (true) {
+        const ca = ia.nextCodepoint();
+        const cb = ib.nextCodepoint();
+        if (ca == null and cb == null) return .eq;
+        if (ca == null) return .lt;
+        if (cb == null) return .gt;
+        const la: u8 = std.ascii.toLower(@intCast(ca.?));
+        const lb: u8 = std.ascii.toLower(@intCast(cb.?));
+        if (la < lb) return .lt;
+        if (la > lb) return .gt;
+    }
+}
+
+pub fn string_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
+    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .eq };
+}
+
+pub fn string_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
+    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .lt };
+}
+
+pub fn string_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
+    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) != .gt };
+}
+
+pub fn string_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
+    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .gt };
+}
+
+pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
+    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) != .lt };
+}
+
+pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    return Value{ .string = try env.allocator.dupe(u8, args.items[0].string) };
+}
+
+pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    var it = std.unicode.Utf8View.initUnchecked(args.items[0].string).iterator();
+    var result: Value = .nil;
+    var chars = std.ArrayListUnmanaged(u21).empty;
+    defer chars.deinit(env.allocator);
+    while (it.nextCodepoint()) |cp| {
+        try chars.append(env.allocator, cp);
+    }
+    var i: usize = chars.items.len;
+    while (i > 0) {
+        i -= 1;
+        const pair = try env.allocator.create(core.Pair);
+        pair.* = .{ .car = Value{ .character = chars.items[i] }, .cdr = result };
+        result = Value{ .pair = pair };
+    }
+    return result;
+}
+
+pub fn list_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    var bytes = std.ArrayListUnmanaged(u8).empty;
+    defer bytes.deinit(env.allocator);
+    var node = args.items[0];
+    while (node == .pair) {
+        const c = node.pair.car;
+        if (c != .character) return ElzError.InvalidArgument;
+        const cp: u21 = @intCast(c.character);
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
+        try bytes.appendSlice(env.allocator, buf[0..len]);
+        node = node.pair.cdr;
+    }
+    if (node != .nil) return ElzError.InvalidArgument;
+    return Value{ .string = try bytes.toOwnedSlice(env.allocator) };
+}
+
+pub fn string_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 3) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    if (args.items[2] != .character) return ElzError.InvalidArgument;
+    const s = args.items[0].string;
+    const idx = try toIndex(args.items[1]);
+    const cp_new: u21 = @intCast(args.items[2].character);
+    var buf_new: [4]u8 = undefined;
+    const len_new = std.unicode.utf8Encode(cp_new, &buf_new) catch return ElzError.InvalidArgument;
+    // Find the byte range of the codepoint at idx.
+    var it = std.unicode.Utf8View.initUnchecked(s).iterator();
+    var cur: usize = 0;
+    var byte_start: usize = 0;
+    var byte_end: usize = 0;
+    var found = false;
+    while (it.nextCodepointSlice()) |slice| {
+        if (cur == idx) {
+            byte_end = byte_start + slice.len;
+            found = true;
+            break;
+        }
+        byte_start += slice.len;
+        cur += 1;
+    }
+    if (!found) return ElzError.InvalidArgument;
+    // The replacement must be the same byte width (ASCII-to-ASCII or same-width).
+    if (len_new != byte_end - byte_start) return ElzError.InvalidArgument;
+    const mutable: []u8 = @constCast(s);
+    @memcpy(mutable[byte_start..byte_end], buf_new[0..len_new]);
+    return Value.unspecified;
+}
+
+pub fn string_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    if (args.items[1] != .character) return ElzError.InvalidArgument;
+    const s = args.items[0].string;
+    const cp: u21 = @intCast(args.items[1].character);
+    var buf: [4]u8 = undefined;
+    const char_len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
+    if (s.len % char_len != 0) return ElzError.InvalidArgument;
+    const mutable: []u8 = @constCast(s);
+    var i: usize = 0;
+    while (i + char_len <= mutable.len) : (i += char_len) {
+        @memcpy(mutable[i .. i + char_len], buf[0..char_len]);
+    }
+    return Value.unspecified;
 }
 
 /// `gensym` generates a unique symbol.

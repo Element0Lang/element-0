@@ -2,7 +2,6 @@ const std = @import("std");
 const core = @import("../core.zig");
 const writer = @import("../writer.zig");
 const parser = @import("../parser.zig");
-const eval = @import("../eval.zig");
 const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
@@ -122,7 +121,7 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
 
     var last_result: Value = .unspecified;
     for (forms.items) |form| {
-        last_result = try eval.eval(interp, &form, env, fuel);
+        last_result = try interp.evalForm(&form, fuel);
     }
 
     return if (last_result == .unspecified) Value.unspecified else last_result;

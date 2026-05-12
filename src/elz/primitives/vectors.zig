@@ -130,6 +130,20 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
     return Value{ .vector = vec };
 }
 
+/// `vector_fill_bang` fills every slot of a vector with a given value.
+/// Syntax: (vector-fill! vec fill)
+pub fn vector_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const vec_val = args.items[0];
+    if (vec_val != .vector) return ElzError.InvalidArgument;
+    const fill = args.items[1];
+    const vec = vec_val.vector;
+    for (vec.items) |*slot| {
+        slot.* = try fill.deep_clone(env.allocator);
+    }
+    return Value.unspecified;
+}
+
 /// `vector_to_list` converts a vector to a list.
 /// Syntax: (vector->list vec)
 pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {

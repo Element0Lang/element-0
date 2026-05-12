@@ -109,3 +109,5 @@ history.txt
 .claude/
 .codex
 zig-pkg/
+.agent/
+.cursor/

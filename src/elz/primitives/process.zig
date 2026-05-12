@@ -14,11 +14,11 @@ pub fn exit(interp: *interpreter.Interpreter, _: *core.Environment, args: core.V
         return ElzError.WrongArgumentCount;
     }
     const code = args.items[0];
-    if (code != .number) {
+    if (!code.isNumeric()) {
         return ElzError.InvalidArgument;
     }
 
-    const num = code.number;
+    const num = code.asFloat() orelse return ElzError.InvalidArgument;
 
     // Check for NaN or Infinity
     if (std.math.isNan(num) or std.math.isInf(num)) {

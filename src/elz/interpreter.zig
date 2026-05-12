@@ -2,9 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("./core.zig");
 const env_setup = @import("./env_setup.zig");
-const eval = @import("./eval.zig");
 const parser = @import("./parser.zig");
 const gc = @import("gc.zig");
+const compiler = @import("./compiler.zig");
+const vm = @import("./vm.zig");
 
 var gc_initialized = std.atomic.Value(bool).init(false);
 
@@ -44,6 +45,19 @@ pub const SandboxFlags = struct {
     time_limit_ms: ?u64 = null,
 };
 
+/// CPS state bundled away from the public Interpreter surface.
+/// All fields are implementation details of primitives/control.zig.
+pub const CpsState = struct {
+    /// Value carried by the most recently invoked escape continuation.
+    escape_value: ?core.Value = null,
+    /// ID field reserved for future use (currently unused; kept for ABI stability).
+    escape_id: u64 = 0,
+    /// Counter for generating unique escape continuation IDs, passed to primitive fuel params.
+    escape_id_counter: u64 = 0,
+    /// Innermost active dynamic-wind frame, null when none is in effect.
+    winders: ?*core.Winder = null,
+};
+
 /// `Interpreter` is the main struct for the Elz interpreter.
 /// It holds the state of the interpreter, including the root environment, allocator, and module cache.
 pub const Interpreter = struct {
@@ -65,14 +79,10 @@ pub const Interpreter = struct {
     eval_start_ms: ?i64 = null,
     /// Step counter for throttling time checks (check every N steps).
     time_check_counter: u64 = 0,
-    /// Value carried by an escape continuation invocation.
-    escape_value: ?core.Value = null,
-    /// ID of the active escape continuation (for matching).
-    escape_id: u64 = 0,
-    /// Counter for generating unique escape continuation IDs.
-    escape_id_counter: u64 = 0,
-    /// The innermost active dynamic-wind frame (null when none).
-    winders: ?*core.Winder = null,
+    /// CPS state: escape-continuation side-channel and dynamic-wind chain.
+    /// Only primitives/control.zig should read or write these fields.
+    /// Embedders must not touch them.
+    cps: CpsState = .{},
     /// The current input port. Populated lazily on first reference.
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
@@ -144,9 +154,14 @@ pub const Interpreter = struct {
         var std_lib_forms = try parser.readAll(std_lib_source, allocator);
         defer std_lib_forms.deinit(allocator);
 
-        var fuel: u64 = 1_000_000;
-        for (std_lib_forms.items) |form| {
-            _ = try eval.eval(&self, &form, self.root_env, &fuel);
+        if (std_lib_forms.items.len > 0) {
+            var fuel: u64 = std.math.maxInt(u64);
+            const proto = try @import("./compiler.zig").Compiler.compileTopLevel(allocator, &self, std_lib_forms.items, self.root_env, &fuel);
+            // Protos are GC-allocated and may be referenced by closures stored in the environment.
+            // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+            var machine = try @import("./vm.zig").VM.init(&self);
+            defer machine.deinit();
+            _ = try machine.runProto(proto, null);
         }
 
         return self;
@@ -169,17 +184,136 @@ pub const Interpreter = struct {
         var forms = try parser.readAll(source, self.allocator);
         defer forms.deinit(self.allocator);
 
+        if (forms.items.len == 0) return .unspecified;
+
         // Set the eval start time for time-limited execution
         if (self.time_limit_ms != null) {
             self.eval_start_ms = currentTimeMs();
             self.time_check_counter = 0;
         }
 
-        var result: core.Value = .unspecified;
-        for (forms.items) |form| {
-            result = try eval.eval(self, &form, self.root_env, fuel);
+        const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, fuel);
+        // Protos are GC-allocated and may be referenced by closures stored in the environment.
+        // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+
+        var machine = try vm.VM.init(self);
+        defer machine.deinit();
+
+        return wrapEvalResult(self, machine.runProto(proto, fuel));
+    }
+
+    /// Loads a module file, evaluates every form in it, and caches the result.
+    /// Returns the cached `core.Value.module` if the path was already loaded.
+    pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
+        if (path_val != .string) return core.ElzError.InvalidArgument;
+        const path_str = path_val.string;
+
+        if (self.module_cache.get(path_str)) |cached_mod_ptr| {
+            return core.Value{ .module = cached_mod_ptr };
         }
-        return result;
+
+        const source_bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path_str, self.allocator, .limited(1024 * 1024)) catch {
+            self.last_error_message = "Failed to read module file.";
+            return core.ElzError.InvalidArgument;
+        };
+        defer self.allocator.free(source_bytes);
+
+        var forms = @import("parser.zig").readAll(source_bytes, self.allocator) catch {
+            self.last_error_message = "Failed to parse module file.";
+            return core.ElzError.InvalidArgument;
+        };
+        defer forms.deinit(self.allocator);
+
+        // Snapshot the set of keys already defined in root_env so we can identify
+        // the bindings added by the module.
+        var existing_keys = std.StringHashMapUnmanaged(void).empty;
+        defer existing_keys.deinit(self.allocator);
+        {
+            var it = self.root_env.bindings.iterator();
+            while (it.next()) |entry| {
+                try existing_keys.put(self.allocator, entry.key_ptr.*, {});
+            }
+        }
+
+        // Compile and run all module forms into root_env (globals always go there).
+        {
+            var local_fuel: u64 = std.math.maxInt(u64);
+            const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, &local_fuel);
+            var machine = try vm.VM.init(self);
+            defer machine.deinit();
+            _ = try machine.runProto(proto, &local_fuel);
+        }
+
+        const mod_ptr = try self.allocator.create(core.Module);
+        mod_ptr.* = .{
+            .exports = std.StringHashMap(core.Value).init(self.allocator),
+        };
+
+        var temp = std.ArrayListUnmanaged(struct { k: []const u8, v: core.Value }).empty;
+        defer temp.deinit(self.allocator);
+
+        // Collect all bindings that were added to root_env by the module.
+        {
+            var it = self.root_env.bindings.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (key.len > 0 and key[0] == '_') continue;
+                if (existing_keys.contains(key)) continue;
+                try temp.append(self.allocator, .{ .k = key, .v = entry.value_ptr.* });
+            }
+        }
+
+        try mod_ptr.exports.ensureTotalCapacity(@intCast(temp.items.len));
+        for (temp.items) |kv| {
+            try mod_ptr.exports.put(kv.k, kv.v);
+        }
+
+        const cached_name = try self.allocator.dupe(u8, path_str);
+        try self.module_cache.put(cached_name, mod_ptr);
+
+        return core.Value{ .module = mod_ptr };
+    }
+
+    /// Evaluates a single pre-parsed Elz form in the interpreter's root environment.
+    /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
+    /// error handling without going through `evalString`.
+    pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
+        const forms = [_]core.Value{form.*};
+        const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, &forms, self.root_env, fuel);
+        // Protos are GC-allocated and may be referenced by closures stored in the environment.
+        // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+
+        var machine = try vm.VM.init(self);
+        defer machine.deinit();
+
+        return wrapEvalResult(self, machine.runProto(proto, fuel));
+    }
+
+    /// Converts internal CPS signals into embedder-facing errors at the API boundary.
+    /// `EscapeContinuationInvoked` must never reach embedder code; if it does (e.g.,
+    /// a stale escape continuation called outside its dynamic extent) we return
+    /// `InvalidArgument` with a descriptive message.
+    fn wrapEvalResult(self: *Interpreter, result: core.ElzError!core.Value) core.ElzError!core.Value {
+        return result catch |err| switch (err) {
+            error.EscapeContinuationInvoked => {
+                self.last_error_message = "escape continuation invoked outside its dynamic extent";
+                return error.InvalidArgument;
+            },
+            else => err,
+        };
+    }
+
+    /// Increments the time-check step counter and, every 256 steps, compares elapsed
+    /// wall-clock time against the configured limit. Returns `TimeLimitExceeded` if over.
+    /// Called by vm.zig and primitives to check the time budget without duplicating the logic.
+    pub fn checkTimeBudget(self: *Interpreter) core.ElzError!void {
+        self.time_check_counter +%= 1;
+        if (self.time_check_counter & 0xFF == 0) {
+            if (self.time_limit_ms) |limit| {
+                const elapsed = currentTimeMs() - (self.eval_start_ms orelse 0);
+                if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
+            }
+        }
     }
 
     /// Cleans up resources used by the interpreter.
@@ -254,4 +388,31 @@ test "interpreter eval lambda" {
     const result = try interp.evalString("((lambda (x) (* x x)) 5)", &fuel);
     try std.testing.expect(result == .exact_integer);
     try std.testing.expectEqual(@as(i64, 25), result.exact_integer);
+}
+
+test "stale escape continuation returns InvalidArgument, not EscapeContinuationInvoked" {
+    // A stale escape continuation (invoked after call/ec has already returned) must
+    // not leak EscapeContinuationInvoked to the embedder. wrapEvalResult converts it
+    // to InvalidArgument with a descriptive message.
+    var interp = try Interpreter.init(.{});
+    defer interp.deinit();
+
+    var fuel: u64 = 100_000;
+    // Capture the escape continuation k outside its extent.
+    _ = try interp.evalString("(define stale-k #f)", &fuel);
+    _ = try interp.evalString("(call/ec (lambda (k) (set! stale-k k) 42))", &fuel);
+    // Now invoke the stale escape continuation.
+    const result = interp.evalString("(stale-k 99)", &fuel);
+    try std.testing.expectError(core.ElzError.InvalidArgument, result);
+    try std.testing.expect(interp.last_error_message != null);
+}
+
+test "cps state is grouped under interp.cps" {
+    // Verify the CPS fields are accessible via the sub-struct and initialise to zero/null.
+    var interp = try Interpreter.init(.{});
+    defer interp.deinit();
+
+    try std.testing.expect(interp.cps.escape_value == null);
+    try std.testing.expectEqual(@as(u64, 0), interp.cps.escape_id);
+    try std.testing.expect(interp.cps.winders == null);
 }
