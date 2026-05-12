@@ -311,6 +311,37 @@ pub fn set_current_output_port_bang(interp: *interpreter.Interpreter, _: *core.E
     return Value.unspecified;
 }
 
+/// `open_input_string` creates an input port that reads from a string.
+/// Syntax: (open-input-string str)
+pub fn open_input_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const str_val = args.items[0];
+    if (str_val != .string) return ElzError.InvalidArgument;
+    const source = env.allocator.dupe(u8, str_val.string) catch return ElzError.OutOfMemory;
+    const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    port.* = core.Port.fromString(env.allocator, source) catch return ElzError.OutOfMemory;
+    return Value{ .port = port };
+}
+
+/// `open_output_string` creates an output port that accumulates characters into a string.
+/// Syntax: (open-output-string)
+pub fn open_output_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    port.* = core.Port.openStringOutput(env.allocator) catch return ElzError.OutOfMemory;
+    return Value{ .port = port };
+}
+
+/// `get_output_string` returns the string accumulated in a string output port.
+/// Syntax: (get-output-string port)
+pub fn get_output_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const port_val = args.items[0];
+    if (port_val != .port) return ElzError.InvalidArgument;
+    const s = port_val.port.getString(env.allocator) catch return ElzError.InvalidArgument;
+    return Value{ .string = s };
+}
+
 /// `set_current_input_port_bang` replaces the interpreter's current input port.
 /// Syntax: (set-current-input-port! port)
 pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -371,4 +402,45 @@ test "port primitives" {
     const is_output_result = try is_output_port(&interp, interp.root_env, args, &fuel);
     try testing.expect(is_output_result == .boolean);
     try testing.expect(is_output_result.boolean == false);
+}
+
+test "string port primitives" {
+    const testing = std.testing;
+    var interp = interpreter.Interpreter.init(.{}) catch unreachable;
+    defer interp.deinit();
+    var fuel: u64 = 10_000;
+
+    // open-input-string / read-char
+    var args = core.ValueList.init(interp.allocator);
+    try args.append(Value{ .string = "hi" });
+    const in_port_val = try open_input_string(&interp, interp.root_env, args, &fuel);
+    try testing.expect(in_port_val == .port);
+    try testing.expect(in_port_val.port.is_input);
+
+    args.clearRetainingCapacity();
+    try args.append(in_port_val);
+    const c1 = try read_char(&interp, interp.root_env, args, &fuel);
+    try testing.expect(c1 == .character);
+    try testing.expectEqual(@as(u32, 'h'), c1.character);
+
+    const c2 = try read_char(&interp, interp.root_env, args, &fuel);
+    try testing.expectEqual(@as(u32, 'i'), c2.character);
+
+    const eof_val = try read_char(&interp, interp.root_env, args, &fuel);
+    try testing.expect(eof_val == .symbol);
+
+    // open-output-string / get-output-string
+    args.clearRetainingCapacity();
+    const out_port_val = try open_output_string(&interp, interp.root_env, args, &fuel);
+    try testing.expect(out_port_val == .port);
+    try testing.expect(!out_port_val.port.is_input);
+
+    out_port_val.port.writeString("hello") catch unreachable;
+    out_port_val.port.writeString(" world") catch unreachable;
+
+    args.clearRetainingCapacity();
+    try args.append(out_port_val);
+    const str_val = try get_output_string(&interp, interp.root_env, args, &fuel);
+    try testing.expect(str_val == .string);
+    try testing.expectEqualStrings("hello world", str_val.string);
 }
