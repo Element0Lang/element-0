@@ -142,11 +142,36 @@ fn repl(interpreter: *elz.Interpreter) !void {
     }
 }
 
+fn runBench(source: []const u8, filename: []const u8, iters: usize, gpa: std.mem.Allocator) !void {
+    const times = try gpa.alloc(i64, iters);
+    defer gpa.free(times);
+
+    for (times) |*t| {
+        var interp = try elz.Interpreter.init(.{});
+        defer interp.deinit();
+        const start = std.time.milliTimestamp();
+        var fuel: u64 = std.math.maxInt(u64);
+        _ = interp.evalString(source, &fuel) catch {};
+        t.* = std.time.milliTimestamp() - start;
+    }
+
+    std.mem.sort(i64, times, {}, std.sort.asc(i64));
+    const best = times[0];
+    const worst = times[times.len - 1];
+    const median = times[times.len / 2];
+    const p95 = times[@min(times.len - 1, times.len * 95 / 100)];
+
+    const name = std.fs.path.stem(std.fs.path.basename(filename));
+    std.debug.print("{s}:  best {d}ms  median {d}ms  p95 {d}ms  worst {d}ms\n", .{ name, best, median, p95, worst });
+}
+
 fn rootExec(ctx: chilli.CommandContext) !void {
     const interpreter = ctx.getContextData(elz.Interpreter).?;
 
     // Check verbose flag
     const verbose = if (ctx.command.getFlagValue("verbose")) |v| v.Bool else false;
+
+    const bench_iters: i64 = if (ctx.command.getFlagValue("bench")) |v| v.Int else 0;
 
     if (ctx.command.getFlagValue("file")) |flag_value| {
         if (flag_value.String.len > 0) {
@@ -156,15 +181,18 @@ fn rootExec(ctx: chilli.CommandContext) !void {
                 std.debug.print("[VERBOSE] Opening file: {s}\n", .{filename});
             }
 
-            if (verbose) {
-                std.debug.print("[VERBOSE] Reading file contents...\n", .{});
-            }
-
             const source = std.Io.Dir.cwd().readFileAlloc(interpreter.io, filename, interpreter.allocator, .limited(1024 * 1024)) catch |err| {
                 std.debug.print("Error: Failed to read file '{s}': {s}\n", .{ filename, @errorName(err) });
                 return err;
             };
             defer interpreter.allocator.free(source);
+
+            if (bench_iters > 0) {
+                var gpa: std.heap.DebugAllocator(.{}) = .init;
+                defer _ = gpa.deinit();
+                try runBench(source, filename, @intCast(bench_iters), gpa.allocator());
+                return;
+            }
 
             if (verbose) {
                 std.debug.print("[VERBOSE] Executing {d} bytes of source code...\n", .{source.len});
@@ -215,6 +243,14 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         .description = "Enable verbose output for debugging",
         .type = .Bool,
         .default_value = .{ .Bool = false },
+    });
+
+    try root_cmd.addFlag(.{
+        .name = "bench",
+        .shortcut = 'b',
+        .description = "Run the file N times and print timing statistics (best/median/p95/worst)",
+        .type = .Int,
+        .default_value = .{ .Int = 0 },
     });
 
     try root_cmd.run(init.args, interpreter_ptr);

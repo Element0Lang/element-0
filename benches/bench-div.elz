@@ -33,15 +33,9 @@
     (recursive-div2 l)
     (recursive-div2 l)))
 
-(let* ((start (current-time-ms))
-       (result (let loop ((n 10) (v 0))
-                 (if (zero? n)
-                     v
-                     (loop (- n 1)
-                           (cons (test-iterative *ll*)
-                                 (test-recursive *ll*))))))
-       (elapsed (- (current-time-ms) start)))
-  (display "div: ")
-  (display elapsed)
-  (display "ms  result: done")
-  (newline))
+(let loop ((n 10) (v 0))
+  (if (zero? n)
+      v
+      (loop (- n 1)
+            (cons (test-iterative *ll*)
+                  (test-recursive *ll*)))))

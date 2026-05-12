@@ -744,11 +744,4 @@
 
 
 
-(let* ((start (current-time-ms))
-       (result (begin (setup-boyer) (test-boyer 4)))
-       (elapsed (- (current-time-ms) start)))
-  (display "nboyer: ")
-  (display elapsed)
-  (display "ms  result: ")
-  (display result)
-  (newline))
+(begin (setup-boyer) (test-boyer 4))

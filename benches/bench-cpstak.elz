@@ -21,11 +21,4 @@
                              (tak v1 v2 v3 k)))))))))
   (tak x y z (lambda (a) a)))
 
-(let* ((start (current-time-ms))
-       (result (cpstak 18 12 2))
-       (elapsed (- (current-time-ms) start)))
-  (display "cpstak: ")
-  (display elapsed)
-  (display "ms  result: ")
-  (display result)
-  (newline))
+(cpstak 18 12 2)

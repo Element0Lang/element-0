@@ -212,11 +212,4 @@
 
 
 
-(let* ((start (current-time-ms))
-       (result (run))
-       (elapsed (- (current-time-ms) start)))
-  (display "lattice: ")
-  (display elapsed)
-  (display "ms  result: ")
-  (display result)
-  (newline))
+(run)

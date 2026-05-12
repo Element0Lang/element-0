@@ -298,6 +298,12 @@ pub fn build(b: *std.Build) void {
     });
     bench_repl_exe.root_module.addImport("chilli", bench_chilli_module);
 
+    const bench_iters = b.option(
+        u32,
+        "bench-iters",
+        "Number of iterations per benchmark (default: 10)",
+    ) orelse 10;
+
     const bench_step = b.step("benches", "Run the Element 0 benchmarks");
     {
         const benches_path = "benches";
@@ -313,6 +319,8 @@ pub fn build(b: *std.Build) void {
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
 
             const run_bench_cmd = b.addRunArtifact(bench_repl_exe);
+            run_bench_cmd.addArg("--bench");
+            run_bench_cmd.addArg(b.fmt("{d}", .{bench_iters}));
             run_bench_cmd.addArg("--file");
             run_bench_cmd.addArg(b.fmt("{s}/{s}", .{ benches_path, entry.name }));
             bench_step.dependOn(&run_bench_cmd.step);

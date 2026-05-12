@@ -646,11 +646,4 @@
 
 
 
-(let* ((start (current-time-ms))
-       (result (test 12))
-       (elapsed (- (current-time-ms) start)))
-  (display "earley: ")
-  (display elapsed)
-  (display "ms  result: ")
-  (display result)
-  (newline))
+(test 12)

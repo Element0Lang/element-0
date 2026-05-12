@@ -21,6 +21,7 @@ BENCH_FILES   := $(wildcard benches/bench-*.elz)
 EXAMPLE       ?= all
 ELZ_EXAMPLE   ?= all
 BENCH         ?= all
+BENCH_ITERS   ?= 10
 BENCH_BUILD_TYPE ?= ReleaseFast
 
 SHELL         := /usr/bin/env bash
@@ -82,18 +83,15 @@ run-elz: build ## Run a Lisp example (like 'make run-elz ELZ_EXAMPLE=e1-cons-car
 	   ./zig-out/bin/elz-repl --file examples/elz/$(ELZ_EXAMPLE).elz; \
 	fi
 
-bench: ## Run the Element 0 benchmarks (like 'make bench BENCH=bench-tak')
+bench: ## Run the Element 0 benchmarks (like 'make bench BENCH=bench-tak BENCH_ITERS=20')
 	@$(ZIG) build -Doptimize=$(BENCH_BUILD_TYPE) -j$(JOBS)
 	@if [ "$(BENCH)" = "all" ]; then \
-	   echo "--> Running all benchmarks..."; \
+	   echo "--> Running all benchmarks ($(BENCH_ITERS) iterations each)..."; \
 	   for f in $(BENCH_FILES); do \
-	      echo ""; \
-	      echo "--> $$f"; \
-	      ./zig-out/bin/elz-repl --file $$f; \
+	      ./zig-out/bin/elz-repl --bench $(BENCH_ITERS) --file $$f; \
 	   done; \
 	else \
-	   echo "--> Running benchmark: $(BENCH)"; \
-	   ./zig-out/bin/elz-repl --file benches/$(BENCH).elz; \
+	   ./zig-out/bin/elz-repl --bench $(BENCH_ITERS) --file benches/$(BENCH).elz; \
 	fi
 
 repl: ## Start the REPL
