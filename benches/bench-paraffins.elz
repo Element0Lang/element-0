@@ -97,8 +97,8 @@
     (+ (length (vector-ref x 0)) (length (vector-ref x 1)))))
 
 (let* ((start (current-time-ms))
-       (result (let loop ((n 100) (v 0))
-                 (if (zero? n) v (loop (- n 1) (nb 17)))))
+       (result (let loop ((n 20) (v 0))
+                 (if (zero? n) v (loop (- n 1) (nb 12)))))
        (elapsed (- (current-time-ms) start)))
   (display "paraffins: ")
   (display elapsed)

@@ -35,7 +35,7 @@ For example, you can write the core parts of your application in Zig for perform
 Then you can write features like plugins or configuration files in Element 0.
 This lets you change parts of your application without the need to recompile the entire project.
 
-### Features
+### Key Features
 
 * A good level of R5RS compliance with a growing standard library (see [std.elz](src/stdlib/std.elz))
 * Easy to integrate into Zig projects as a lightweight scripting engine (with a VM)
@@ -54,11 +54,11 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 #### Using the Standalone REPL
 
-##### Download Release Binaries
+##### A. Download Release Binaries
 
 You can download the release binaries for Elz from the [release page](https://github.com/Element0Lang/element-0/releases).
 
-##### Building from Source
+##### B. Building from Source
 
 1. Clone the repository
    ```sh

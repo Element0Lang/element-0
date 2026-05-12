@@ -36,7 +36,7 @@
 (let* ((start (current-time-ms))
        (result (begin
                  (do ((i 0 (+ i 1)))
-                     ((= i 50000))
+                     ((= i 5000))
                    (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
                    (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
                    (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
