@@ -56,7 +56,7 @@ pub const ElzError = error{
     IOError,
     /// The execution time limit was exceeded.
     TimeLimitExceeded,
-    /// Non-local jump used internally by call/ec. Caught inside the CPS trampoline;
+    /// Non-local jump used internally by call/ec. Caught by the VM and call/ec itself;
     /// embedders should never see this error returned from evalString or evalForm.
     EscapeContinuationInvoked,
     /// An arithmetic operation overflowed.

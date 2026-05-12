@@ -7,9 +7,9 @@
 <h2>Element 0</h2>
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/Element0Lang/element-0/tests.yml?label=tests&style=flat&labelColor=282c34&logo=github)](https://github.com/Element0Lang/element-0/actions/workflows/tests.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/Element0Lang/element-0/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-read-blue?style=flat&labelColor=282c34&logo=read-the-docs)](https://Element0Lang.github.io/element-0/)
 [![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/Element0Lang/element-0/tree/main/examples)
+[![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/Element0Lang/element-0/blob/main/LICENSE)
 [![Zig](https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat&labelColor=282c34&logo=zig)](https://ziglang.org/download/)
 [![Release](https://img.shields.io/github/release/Element0Lang/element-0.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/Element0Lang/element-0/releases/latest)
 
@@ -23,10 +23,10 @@ Element 0 programming language is a new Lisp dialect inspired by Scheme.
 It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good degree,
 but not limited to it.
 
-This project provides an interpreter for the Element 0 language written in Zig.
-The interpreter is named Elz (pronounced "el-zee") and can be integrated into Zig applications as a scripting engine.
+This project provides a bytecode compiler and virtual machine for the Element 0 language, written in Zig.
+The implementation is named Elz (pronounced "el-zee") and can be integrated into Zig applications as a scripting engine.
 In addition, Elz comes with a read-eval-print loop (REPL) for interactive development and testing, and
-it can easily be extended using Zig code using foreign function interface (FFI) or Element 0 code.
+it can easily be extended using Zig code via the foreign function interface (FFI) or Element 0 code.
 
 ### Why Element 0?
 
@@ -35,10 +35,10 @@ For example, you can write the core parts of your application in Zig for perform
 Then you can write features like plugins or configuration files in Element 0.
 This lets you change parts of your application without the need to recompile the entire project.
 
-### Features
+### Key Features
 
 * A good level of R5RS compliance with a growing standard library (see [std.elz](src/stdlib/std.elz))
-* Easy to integrate into Zig projects as a lightweight and fast scripting engine
+* Easy to integrate into Zig projects as a lightweight scripting engine (with a VM)
 * Easy to extend with Zig functions via the use of FFI or writing Element 0 code
 * Prepacked with a REPL (for interactive development)
 
@@ -54,15 +54,16 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 #### Using the Standalone REPL
 
+##### A. Download Release Binaries
+
+You can download the release binaries for Elz from the [release page](https://github.com/Element0Lang/element-0/releases).
+
+##### B. Building from Source
+
 1. Clone the repository
    ```sh
-   git clone --recurse https://github.com/Element0Lang/element-0.git
+   git clone https://github.com/Element0Lang/element-0.git
    cd element-0
-   ```
-
-   If you cloned without `--recurse`, initialize the submodules with:
-   ```sh
-   git submodule update --init
    ```
 
 2. Build and run the REPL
@@ -141,7 +142,7 @@ fn zig_multiply(a: f64, b: f64) f64 {
 }
 
 pub fn main() !void {
-    // 1. Initialize the Elz interpreter.
+    // 1. Initialize the Elz interpreter (the compiler and VM)
     var interpreter = try elz.Interpreter.init(.{});
     defer interpreter.deinit();
 
@@ -166,7 +167,7 @@ pub fn main() !void {
 
     // 2. Register your Zig function with the interpreter.
     // It will be available in Elz under the name "zig-mul".
-    try elz.env_setup.define_foreign_func(
+    try elz.define_foreign_func(
         interpreter.root_env,
         "zig-mul",
         zig_multiply,
@@ -200,17 +201,13 @@ Result of (zig-mul 7 6) is: 42
 
 You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 
-Alternatively, you can use the `make docs` command to generate the API documentation for the current version of Elz from the source code.
-This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
-and view in your web browser at [http://localhost:8000](http://localhost:8000).
-
 #### Standard Library
 
 See the [std.elz](src/stdlib/std.elz) file for the full list of available items (like functions, variables, etc.) in the standard library.
 
 #### Examples
 
-Check out the [examples](examples) directory for various usage examples, including both Element 0 code and Zig FFI examples.
+Check out the [examples](examples) directory for Element 0 code and Zig FFI examples.
 
 -----
 
@@ -225,6 +222,7 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 ### Acknowledgements
 
 * The logo is made by [Conrad Barski, M.D.](https://www.lisperati.com/logo.html) with a few changes.
-* This project uses [linenoise](https://github.com/antirez/linenoise) and [bdwgc](https://github.com/bdwgc/bdwgc) C
-  libraries.
-* This project uses the [Chilli](https://github.com/CogitatorTech/chilli) CLI framework.
+* [Bestline](https://github.com/jart/bestline) is used for the REPL's line editing and history features.
+* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) R5RS test suite is used for compliance testing.
+* [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
+* [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.

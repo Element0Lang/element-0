@@ -575,3 +575,26 @@
       (lambda ()
         (set-current-input-port! saved)
         (close-input-port port)))))
+
+;;; (call-with-output-string proc)
+;;;
+;;; Creates a string output port, applies proc to it, and returns the accumulated
+;;; string. This is the R5RS-compatible form of with-output-to-string.
+(define (call-with-output-string proc)
+  (let ((port (open-output-string)))
+    (proc port)
+    (get-output-string port)))
+
+;;; (boolean=? bool . rest)
+;;;
+;;; Returns #t if all arguments are booleans with the same value, #f otherwise.
+(define (boolean=? b . rest)
+  (if (not (boolean? b))
+      (error "boolean=?: not a boolean" b)
+      (let loop ((items rest))
+        (cond
+          ((null? items) #t)
+          ((not (boolean? (car items)))
+           (error "boolean=?: not a boolean" (car items)))
+          ((eq? b (car items)) (loop (cdr items)))
+          (else #f)))))

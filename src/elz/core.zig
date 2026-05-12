@@ -155,20 +155,6 @@ pub const Environment = struct {
     }
 };
 
-/// Represents a user-defined procedure (lambda) in Elz.
-pub const UserDefinedProc = struct {
-    /// Fixed parameter names (as `Value.symbol`). For variadic forms this is the prefix
-    /// before the rest parameter.
-    params: ValueList,
-    /// Optional rest-parameter name. Set for `(lambda args body)` (with `params` empty)
-    /// and `(lambda (a b . rest) body)` (with `params` holding the prefix).
-    rest_param: ?[]const u8,
-    /// The body of the procedure, which is a single `Value` (typically a list of expressions).
-    body: Value,
-    /// The environment in which the procedure was created, which provides its lexical scope.
-    env: *Environment,
-};
-
 /// A heap-allocated upvalue cell shared between a closure and the stack frame that owns the local.
 /// While the local is live the cell holds a pointer directly into the stack slot (`open`).
 /// When the frame exits the value is copied into the cell itself (`closed`).
@@ -309,56 +295,6 @@ pub const Winder = struct {
     next: ?*Winder,
 };
 
-/// A captured continuation, which holds the continuation chain plus the
-/// dynamic-wind context active when it was captured.
-pub const CapturedCont = struct {
-    k: *Cont,
-    winders: ?*Winder,
-};
-
-/// A single continuation frame in the CPS-converted evaluator.
-pub const ContFrame = union(enum) {
-    halt,
-    eval_rator: struct { rand_list: Value, env: *Environment },
-    eval_rands: struct { proc: Value, done: ValueList, rest: Value, env: *Environment },
-    if_branch: struct { consequent: Value, alternative: Value, env: *Environment },
-    begin_rest: struct { rest: Value, env: *Environment },
-    define_bind: struct { name: []const u8, env: *Environment },
-    set_bind: struct { name: []const u8, env: *Environment },
-    and_rest: struct { rest: Value, env: *Environment },
-    or_rest: struct { rest: Value, env: *Environment },
-    let_bind: struct { name: []const u8, remaining: Value, body: Value, new_env: *Environment, outer_env: *Environment, is_star: bool },
-    dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
-    dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
-    dyn_wind_after_done: struct { thunk_result: Value },
-    // cond => arrow form: applied with the test result to decide branch or proceed.
-    cond_arrow_test_done: struct { proc_expr: Value, alternative: Value, env: *Environment },
-    // cond => arrow form: applied with the procedure value to call it on the saved test value.
-    cond_arrow_proc_done: struct { test_val: Value, env: *Environment },
-};
-
-/// A continuation: a singly-linked list of frames.
-pub const Cont = struct {
-    frame: ContFrame,
-    next: ?*Cont,
-};
-
-/// Result of one CPS evaluation step (kept for ABI compatibility).
-pub const EvalStep = union(enum) {
-    eval: struct { ast: Value, env: *Environment, k: *Cont },
-    apply: struct { k: *Cont, val: Value },
-    done: Value,
-};
-
-/// A primitive function that has access to the current continuation.
-pub const ContAwareFn = *const fn (
-    interp: *interpreter.Interpreter,
-    env: *Environment,
-    args: ValueList,
-    fuel: *u64,
-    k: *Cont,
-) ElzError!EvalStep;
-
 /// Represents a pair in an Element 0 list.
 pub const Pair = struct {
     /// The first element of the pair (the "contents of the address register").
@@ -425,62 +361,110 @@ pub const HashMap = struct {
 /// Represents a port (I/O stream) in Element 0.
 /// Ports can be input (for reading) or output (for writing).
 pub const Port = struct {
-    /// The underlying file handle.
-    file: std.Io.File,
-    /// The I/O implementation.
-    io: std.Io,
+    /// The backing store: either an OS file or an in-memory string buffer.
+    kind: Kind,
     /// Whether this is an input port (true) or output port (false).
     is_input: bool,
     /// Whether the port is open.
     is_open: bool,
-    /// Name of the file (for error messages).
+    /// Name used in error messages and `write` output.
     name: []const u8,
-    /// One-byte lookahead buffer used by `peekChar`. Empty when no char has been peeked.
+    /// One-byte lookahead buffer used by `peekChar`.
     peek_buffer: ?u8 = null,
-    /// True when `close` should not invoke the underlying file's close. Used for stdin
-    /// and stdout ports that share a file handle with the host process.
-    persistent: bool = false,
+
+    pub const Kind = union(enum) {
+        /// An OS file handle.
+        file: FileKind,
+        /// An input port reading from an immutable string.
+        string_input: StringInputKind,
+        /// An output port accumulating into a growable buffer.
+        string_output: StringOutputKind,
+    };
+
+    pub const FileKind = struct {
+        file: std.Io.File,
+        io: std.Io,
+        /// When true, `close` does not close the underlying file handle
+        /// (used for stdin/stdout which are shared with the host process).
+        persistent: bool = false,
+    };
+
+    pub const StringInputKind = struct {
+        source: []const u8,
+        pos: usize = 0,
+        allocator: std.mem.Allocator,
+    };
+
+    pub const StringOutputKind = struct {
+        buffer: std.ArrayListUnmanaged(u8),
+        allocator: std.mem.Allocator,
+    };
 
     /// Wraps an already-open file as a port without taking ownership of the close.
     pub fn fromStandard(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File, is_input: bool, name: []const u8) !Port {
         return .{
-            .file = file,
-            .io = io,
+            .kind = .{ .file = .{ .file = file, .io = io, .persistent = true } },
             .is_input = is_input,
             .is_open = true,
             .name = try allocator.dupe(u8, name),
-            .peek_buffer = null,
-            .persistent = true,
         };
     }
 
     pub fn openInput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
         const file = try std.Io.Dir.cwd().openFile(io, name, .{});
         return .{
-            .file = file,
-            .io = io,
+            .kind = .{ .file = .{ .file = file, .io = io } },
             .is_input = true,
             .is_open = true,
             .name = try allocator.dupe(u8, name),
-            .peek_buffer = null,
         };
     }
 
     pub fn openOutput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
         const file = try std.Io.Dir.cwd().createFile(io, name, .{});
         return .{
-            .file = file,
-            .io = io,
+            .kind = .{ .file = .{ .file = file, .io = io } },
             .is_input = false,
             .is_open = true,
             .name = try allocator.dupe(u8, name),
-            .peek_buffer = null,
         };
     }
 
+    /// Creates a string input port that reads from `source` (takes ownership of the slice).
+    pub fn fromString(allocator: std.mem.Allocator, source: []const u8) !Port {
+        return .{
+            .kind = .{ .string_input = .{ .source = source, .pos = 0, .allocator = allocator } },
+            .is_input = true,
+            .is_open = true,
+            .name = try allocator.dupe(u8, "<string>"),
+        };
+    }
+
+    /// Creates an empty string output port.
+    pub fn openStringOutput(allocator: std.mem.Allocator) !Port {
+        return .{
+            .kind = .{ .string_output = .{ .buffer = .empty, .allocator = allocator } },
+            .is_input = false,
+            .is_open = true,
+            .name = try allocator.dupe(u8, "<string>"),
+        };
+    }
+
+    /// Returns the accumulated string from a string output port. The caller owns the slice.
+    pub fn getString(self: *Port, allocator: std.mem.Allocator) ![]const u8 {
+        switch (self.kind) {
+            .string_output => |*sk| return allocator.dupe(u8, sk.buffer.items),
+            else => return error.InvalidPort,
+        }
+    }
+
     pub fn close(self: *Port) void {
-        if (self.is_open and !self.persistent) {
-            self.file.close(self.io);
+        if (!self.is_open) return;
+        switch (self.kind) {
+            .file => |fk| {
+                if (!fk.persistent) fk.file.close(fk.io);
+            },
+            else => {},
         }
         self.is_open = false;
     }
@@ -512,13 +496,21 @@ pub const Port = struct {
             self.peek_buffer = null;
             return c;
         }
-        var buf: [1]u8 = undefined;
-        const bytes_read = self.file.readStreaming(self.io, &.{&buf}) catch |err| switch (err) {
-            error.EndOfStream => return null,
-            else => return null,
-        };
-        if (bytes_read == 0) return null;
-        return buf[0];
+        switch (self.kind) {
+            .file => |fk| {
+                var buf: [1]u8 = undefined;
+                const n = fk.file.readStreaming(fk.io, &.{&buf}) catch return null;
+                if (n == 0) return null;
+                return buf[0];
+            },
+            .string_input => |*sk| {
+                if (sk.pos >= sk.source.len) return null;
+                const c = sk.source[sk.pos];
+                sk.pos += 1;
+                return c;
+            },
+            .string_output => return null,
+        }
     }
 
     pub fn peekChar(self: *Port) !?u8 {
@@ -534,7 +526,11 @@ pub const Port = struct {
 
     pub fn writeString(self: *Port, str: []const u8) !void {
         if (self.is_input or !self.is_open) return error.InvalidPort;
-        try self.file.writeStreamingAll(self.io, str);
+        switch (self.kind) {
+            .file => |fk| try fk.file.writeStreamingAll(fk.io, str),
+            .string_output => |*sk| try sk.buffer.appendSlice(sk.allocator, str),
+            .string_input => return error.InvalidPort,
+        }
     }
 };
 
@@ -578,19 +574,12 @@ pub const Value = union(enum) {
     string: []const u8,
     /// A boolean value (`#t` or `#f`).
     boolean: bool,
-    /// A user-defined procedure (lambda).
-    closure: *UserDefinedProc,
     /// A VM-compiled closure (bytecode + upvalues).
     vm_closure: *VmClosure,
     /// A macro transformer (define-macro).
     macro: *Macro,
     /// A built-in (primitive) procedure.
     procedure: PrimitiveFn,
-    /// A primitive procedure that has access to the current continuation.
-    /// Used to implement call/cc, dynamic-wind, apply, etc.
-    cont_aware_procedure: ContAwareFn,
-    /// A first-class captured continuation (call/cc result).
-    continuation: *CapturedCont,
     /// A foreign function interface (FFI) procedure.
     foreign_procedure: *const fn (env: *Environment, args: ValueList) anyerror!Value,
     /// An opaque pointer to a value managed by foreign code.
@@ -660,7 +649,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .closure, .vm_closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

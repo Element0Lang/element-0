@@ -3,9 +3,8 @@
 /// Executes FuncProto bytecode produced by compiler.zig. The VM is
 /// stack-based with explicit call frames and upvalue support.
 ///
-/// Primitives (`.procedure`) are invoked by building a ValueList from the
-/// stack — same calling convention as the old tree-walker, so all primitives
-/// work unchanged.
+/// Primitives (`.procedure`, `.foreign_procedure`) are invoked by building
+/// a ValueList from the stack and calling the native function directly.
 const std = @import("std");
 const core = @import("core.zig");
 const chunk = @import("chunk.zig");
@@ -24,8 +23,8 @@ const CallFrame = core.CallFrame;
 // VM
 // ---------------------------------------------------------------------------
 
-const STACK_SIZE = 4096;
-const FRAMES_SIZE = 256;
+const STACK_SIZE = 65536;
+const FRAMES_SIZE = 65536;
 
 pub const VM = struct {
     interp: *@import("interpreter.zig").Interpreter,

@@ -466,7 +466,10 @@ fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError
 /// `name` is the macro name (used for error messages), `body` is the cdr of the
 /// `syntax-rules` pair (i.e. everything after the `syntax-rules` keyword), and
 /// `env` is the definition environment captured into the transformer.
-pub fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzError!*core.SyntaxRulesMacro {
+/// `ellipsis_locally_bound` is true when the caller's lexical scope contains a local binding
+/// for `...` (e.g. `(let ((... 2)) (syntax-rules ...))`), which makes `...` an ordinary
+/// identifier inside the macro rather than the ellipsis marker.
+pub fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value, ellipsis_locally_bound: bool) ElzError!*core.SyntaxRulesMacro {
     if (body != .pair) return ElzError.InvalidArgument;
 
     // Detect the R7RS extended form: (syntax-rules <ellipsis-sym> (literal...) rule...)
@@ -480,8 +483,10 @@ pub fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value) ElzErr
     } else "...";
 
     // When using the default "..." ellipsis, check whether it has been rebound in the
-    // enclosing scope. If so, treat "..." as a regular identifier inside this macro.
-    const ellipsis: []const u8 = if (std.mem.eql(u8, ellipsis_raw, "...") and env.contains("..."))
+    // enclosing scope (either as a compile-time local or as a runtime env binding).
+    // If so, treat "..." as a regular identifier inside this macro.
+    const ellipsis: []const u8 = if (std.mem.eql(u8, ellipsis_raw, "...") and
+        (ellipsis_locally_bound or env.contains("...")))
         ""
     else
         ellipsis_raw;

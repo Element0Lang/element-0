@@ -1,0 +1,98 @@
+;;; MAZEFUN -- Constructs a maze in a purely functional way, by Marc Feeley.
+;;; Adapted from the Gabriel benchmark suite (Public Domain).
+
+(define (iota n)
+  (let loop ((n n) (lst '()))
+    (if (= n 0) lst (loop (- n 1) (cons n lst)))))
+
+(define (foldr f base lst)
+  (if (null? lst) base (f (car lst) (foldr f base (cdr lst)))))
+
+(define (foldl f base lst)
+  (if (null? lst) base (foldl f (f base (car lst)) (cdr lst))))
+
+(define (for lo hi f)
+  (if (< lo hi) (cons (f lo) (for (+ lo 1) hi f)) '()))
+
+(define (concat lists) (foldr append '() lists))
+
+(define (list-read lst i)
+  (if (= i 0) (car lst) (list-read (cdr lst) (- i 1))))
+
+(define (list-write lst i val)
+  (if (= i 0) (cons val (cdr lst)) (cons (car lst) (list-write (cdr lst) (- i 1) val))))
+
+(define (list-remove-pos lst i)
+  (if (= i 0) (cdr lst) (cons (car lst) (list-remove-pos (cdr lst) (- i 1)))))
+
+(define (duplicates? lst)
+  (if (null? lst) #f (or (member (car lst) (cdr lst)) (duplicates? (cdr lst)))))
+
+(define (make-matrix n m init)
+  (for 0 n (lambda (i) (for 0 m (lambda (j) (init i j))))))
+
+(define (matrix-read mat i j) (list-read (list-read mat i) j))
+(define (matrix-write mat i j val) (list-write mat i (list-write (list-read mat i) j val)))
+(define (matrix-size mat) (cons (length mat) (length (car mat))))
+(define (matrix-map f mat) (map (lambda (lst) (map f lst)) mat))
+
+(define initial-random 0)
+(define (next-random r) (remainder (+ (* r 3581) 12751) 131072))
+
+(define (shuffle lst)
+  (let loop ((lst lst) (r initial-random))
+    (if (null? lst)
+        '()
+        (let* ((r2 (next-random r))
+               (i (modulo r2 (length lst))))
+          (cons (list-read lst i) (loop (list-remove-pos lst i) r2))))))
+
+(define (neighboring-cavities pos cave)
+  (let* ((size (matrix-size cave)) (n (car size)) (m (cdr size))
+         (i (car pos)) (j (cdr pos)))
+    (append
+     (if (and (> i 0) (matrix-read cave (- i 1) j)) (list (cons (- i 1) j)) '())
+     (if (and (< i (- n 1)) (matrix-read cave (+ i 1) j)) (list (cons (+ i 1) j)) '())
+     (if (and (> j 0) (matrix-read cave i (- j 1))) (list (cons i (- j 1))) '())
+     (if (and (< j (- m 1)) (matrix-read cave i (+ j 1))) (list (cons i (+ j 1))) '()))))
+
+(define (change-cavity-aux cave pos new-id old-id)
+  (let ((i (car pos)) (j (cdr pos)))
+    (if (equal? (matrix-read cave i j) old-id)
+        (foldl (lambda (c nc) (change-cavity-aux c nc new-id old-id))
+               (matrix-write cave i j new-id)
+               (neighboring-cavities pos cave))
+        cave)))
+
+(define (change-cavity cave pos new-id)
+  (let ((i (car pos)) (j (cdr pos)))
+    (change-cavity-aux cave pos new-id (matrix-read cave i j))))
+
+(define (try-to-pierce pos cave)
+  (let ((ncs (neighboring-cavities pos cave)))
+    (if (duplicates? (map (lambda (nc) (matrix-read cave (car nc) (cdr nc))) ncs))
+        cave
+        (foldl (lambda (c nc) (change-cavity c nc pos))
+               (matrix-write cave (car pos) (cdr pos) pos)
+               ncs))))
+
+(define (pierce-randomly holes cave)
+  (if (null? holes)
+      cave
+      (pierce-randomly (cdr holes) (try-to-pierce (car holes) cave))))
+
+(define (make-maze n m)
+  (if (not (and (odd? n) (odd? m)))
+      'error
+      (let* ((cave (make-matrix n m (lambda (i j) (if (and (even? i) (even? j)) (cons i j) #f))))
+             (holes (concat (for 0 n (lambda (i)
+                                       (concat (for 0 m (lambda (j)
+                                                          (if (equal? (even? i) (even? j)) '()
+                                                              (list (cons i j))))))))))
+             (shuffled (shuffle holes)))
+        (matrix-map (lambda (x) (if x '_ '*)) (pierce-randomly shuffled cave)))))
+
+(let loop ((n 50) (v 0))
+  (if (zero? n)
+      v
+      (loop (- n 1) (make-maze 11 11))))

@@ -110,12 +110,10 @@ pub fn build(b: *std.Build) void {
         .root_module = repl_module,
     });
 
-    // --- Linenoise dependency (for POSIX only) ---
-    if (target.query.os_tag orelse .linux != .windows) {
-        const linenoise_dep = b.dependency("linenoise", .{});
-        repl_module.addIncludePath(linenoise_dep.path(""));
-        repl_module.addCSourceFile(.{ .file = linenoise_dep.path("linenoise.c") });
-    }
+    // --- Bestline dependency (cross-platform line editing) ---
+    const bestline_dep = b.dependency("bestline", .{});
+    repl_module.addIncludePath(bestline_dep.path(""));
+    repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
     repl_module.linkSystemLibrary("c", .{});
 
     // Add dependency on 'chilli' library
@@ -267,6 +265,39 @@ pub fn build(b: *std.Build) void {
             run_elz_test_cmd.addArg("--file");
             run_elz_test_cmd.addArg(b.fmt("{s}/{s}", .{ tests_path, entry.name }));
             test_elz_step.dependOn(&run_elz_test_cmd.step);
+        }
+    }
+
+    // --- Run Benchmarks ---
+    // Note: run `zig build benches -Doptimize=ReleaseFast` for meaningful numbers.
+    // The whole build (including the GC C library) must share one optimize level;
+    // a mixed Debug/ReleaseFast link fails with undefined UBSan symbols.
+    const bench_iters = b.option(
+        u32,
+        "bench-iters",
+        "Number of iterations per benchmark (default: 10)",
+    ) orelse 10;
+
+    const bench_step = b.step("benches", "Run the Element 0 benchmarks");
+    {
+        const benches_path = "benches";
+        var benches_dir = Io.Dir.cwd().openDir(io, benches_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) return;
+            std.debug.print("Can't open 'benches' directory: {s}\n", .{@errorName(err)});
+            @panic("Can't open 'benches' directory");
+        };
+        defer benches_dir.close(io);
+
+        var bench_iter = benches_dir.iterate();
+        while (bench_iter.next(io) catch @panic("Failed to iterate benches")) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
+
+            const run_bench_cmd = b.addRunArtifact(repl_exe);
+            run_bench_cmd.addArg("--bench");
+            run_bench_cmd.addArg(b.fmt("{d}", .{bench_iters}));
+            run_bench_cmd.addArg("--file");
+            run_bench_cmd.addArg(b.fmt("{s}/{s}", .{ benches_path, entry.name }));
+            bench_step.dependOn(&run_bench_cmd.step);
         }
     }
 

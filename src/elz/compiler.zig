@@ -341,12 +341,34 @@ pub const Compiler = struct {
     fn compileQQ(self: *Compiler, expr: Value, env: *core.Environment, level: usize, fuel: *u64) ElzError!void {
         switch (expr) {
             .pair => |p| {
+                // Check whether unquote/unquote-splicing are locally bound (in which case they
+                // lose their special meaning inside quasiquote per R5RS §4.2.6).
+                const unquote_is_global = blk: {
+                    if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
+                        const loc = try self.resolveVar("unquote");
+                        break :blk switch (loc) {
+                            .global => true,
+                            else => false,
+                        };
+                    }
+                    break :blk false;
+                };
+                const unquote_splice_is_global = blk: {
+                    if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote-splicing")) {
+                        const loc = try self.resolveVar("unquote-splicing");
+                        break :blk switch (loc) {
+                            .global => true,
+                            else => false,
+                        };
+                    }
+                    break :blk false;
+                };
                 // (unquote x) at level 1 → compile x
-                if (level == 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
+                if (level == 1 and unquote_is_global) {
                     return self.compileExpr(p.cdr.pair.car, env, false, fuel);
                 }
                 // (unquote x) at level > 1 → produce (unquote (qq-expand x level-1))
-                if (level > 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
+                if (level > 1 and unquote_is_global) {
                     const ci = try self.addConst(Value{ .symbol = "unquote" });
                     _ = try self.emitBx(.load_const, ci);
                     try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
@@ -355,7 +377,7 @@ pub const Compiler = struct {
                     return;
                 }
                 // (unquote-splicing x) at level > 1 → produce (unquote-splicing (qq-expand x level-1))
-                if (level > 1 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote-splicing")) {
+                if (level > 1 and unquote_splice_is_global) {
                     const ci = try self.addConst(Value{ .symbol = "unquote-splicing" });
                     _ = try self.emitBx(.load_const, ci);
                     try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
@@ -406,10 +428,20 @@ pub const Compiler = struct {
         }
         const p = list.pair;
         const car = p.car;
-        // Check for (unquote-splicing x) at level 1 — splice
-        if (level == 1 and car == .pair and
-            car.pair.car == .symbol and std.mem.eql(u8, car.pair.car.symbol, "unquote-splicing"))
-        {
+        // Check for (unquote-splicing x) at level 1 — splice (only when unquote-splicing is global)
+        const splice_is_global = blk: {
+            if (car == .pair and car.pair.car == .symbol and
+                std.mem.eql(u8, car.pair.car.symbol, "unquote-splicing"))
+            {
+                const loc = try self.resolveVar("unquote-splicing");
+                break :blk switch (loc) {
+                    .global => true,
+                    else => false,
+                };
+            }
+            break :blk false;
+        };
+        if (level == 1 and splice_is_global) {
             // Splice: evaluate the spliced list, then append to rest
             try self.compileExpr(car.pair.cdr.pair.car, env, false, fuel);
             try self.compileQQList(p.cdr, env, level, fuel);
@@ -593,7 +625,11 @@ pub const Compiler = struct {
 
     fn evalTransformer(self: *Compiler, expr: Value, name: []const u8, env: *core.Environment) ElzError!Value {
         if (expr == .pair and expr.pair.car == .symbol and std.mem.eql(u8, expr.pair.car.symbol, "syntax-rules")) {
-            const sr = try macros_mod.buildSyntaxRules(env, name, expr.pair.cdr);
+            const ellipsis_bound = switch (try self.resolveVar("...")) {
+                .global => false,
+                else => true,
+            };
+            const sr = try macros_mod.buildSyntaxRules(env, name, expr.pair.cdr, ellipsis_bound);
             return Value{ .syntax_rules = sr };
         }
         var f: u64 = 1_000_000;
@@ -1132,9 +1168,20 @@ pub const Compiler = struct {
             }
 
             // cond => arrow: (cond (test => proc) ...) — compile as (let ((t test)) (if t (proc t) ...))
-            if (clause_body != .nil and clause_body.pair.car == .symbol and
-                std.mem.eql(u8, clause_body.pair.car.symbol, "=>"))
-            {
+            // Only treat => as the arrow keyword when it is not locally bound (R5RS §4.2.1).
+            const arrow_not_bound = brk: {
+                if (clause_body != .nil and clause_body.pair.car == .symbol and
+                    std.mem.eql(u8, clause_body.pair.car.symbol, "=>"))
+                {
+                    const loc = try self.resolveVar("=>");
+                    break :brk switch (loc) {
+                        .global => true,
+                        else => false,
+                    };
+                }
+                break :brk false;
+            };
+            if (arrow_not_bound) {
                 const proc_expr = clause_body.pair.cdr.pair.car;
                 // Allocate a temp local for the test result.
                 const tmp_slot = try self.scope.addLocal("__cond_arrow_tmp__");
@@ -1428,26 +1475,14 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileDelay(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
-        // Compile as (delay expr) → runtime delay object
-        // For the VM, delay can be implemented as a lambda with no args
-        // that gets wrapped in a promise at runtime.
-        // For now, compile as a lambda and let the VM wrap it.
-        const expr = args.pair.car;
+        // (delay expr) compiles to (make-promise (lambda () expr)).
+        // Push make-promise first so the stack is [make-promise, thunk] before call 1.
+        const ci = try self.addConst(Value{ .symbol = "make-promise" });
+        _ = try self.emitBx(.load_global, ci);
         const nil_params: Value = .nil;
         const lambda_body = try makePair(self.allocator, nil_params, args);
         try self.compileLambdaWithName(lambda_body, "<delay>", env, fuel);
-        // The VM's `delay` primitive will be called with the thunk.
-        // Actually emit a call to the primitive `make-promise`.
-        const ci = try self.addConst(Value{ .symbol = "make-promise" });
-        _ = try self.emitBx(.load_global, ci);
-        // Swap: [lambda, make-promise] → [make-promise, lambda]
-        // No swap instruction. Use a temp local.
-        const tmp = try self.scope.addLocal("__delay_tmp__");
-        _ = try self.emitA(.store_local, tmp);
-        _ = try self.emitBx(.load_global, ci);
-        _ = try self.emitA(.load_local, tmp);
         _ = try self.emitA(.call, 1);
-        _ = expr; // already used above
     }
 
     // -----------------------------------------------------------------------
@@ -1480,7 +1515,11 @@ pub const Compiler = struct {
         _ = head;
         // Build the SyntaxRulesMacro directly from the AST without calling evalForm
         // (calling evalForm would recurse back into compileSyntaxRules indefinitely).
-        const sr = try macros_mod.buildSyntaxRules(env, "<anonymous>", args);
+        const ellipsis_bound = switch (try self.resolveVar("...")) {
+            .global => false,
+            else => true,
+        };
+        const sr = try macros_mod.buildSyntaxRules(env, "<anonymous>", args, ellipsis_bound);
         const result = Value{ .syntax_rules = sr };
         const ci = try self.addConst(result);
         _ = try self.emitBx(.load_const, ci);

@@ -37,6 +37,7 @@ Priorities, in order:
 - `src/elz/interpreter.zig`: Main `Interpreter` struct.
 - `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
 - `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
+- `src/elz/macros.zig`: Compile-time macro expansion helpers: `expandMacro` (procedural macros) and `expandSyntaxRules` (pattern-based macros).
 - `src/elz/vm.zig`: Stack-based bytecode VM; executes `FuncProto` chunks, manages call frames and upvalues.
 - `src/elz/parser.zig`: S-expression parser.
 - `src/elz/env_setup.zig`: Environment initialization and FFI setup.
@@ -52,7 +53,7 @@ Priorities, in order:
 - `examples/elz/`: Element 0 script examples.
 - `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
   `test_module_lib.elz`).
-- `.github/workflows/`: CI workflows (tests, lints, docs, and releases).
+- `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
 
@@ -104,14 +105,15 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 Run all test suites for any change:
 
-| Target            | Command           | What It Runs                                             |
-|-------------------|-------------------|----------------------------------------------------------|
-| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                   |
-| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish) |
-| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`            |
-| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`               |
-| All tests         | `make test-all`   | Runs all of the above                                    |
-| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`             |
+| Target            | Command           | What It Runs                                               |
+|-------------------|-------------------|------------------------------------------------------------|
+| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                     |
+| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish)   |
+| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`              |
+| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`                 |
+| All tests         | `make test-all`   | Runs all of the above                                      |
+| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`               |
+| Benchmarks        | `make bench`      | Runs `benches/bench-*.elz` with `--bench 10` (ReleaseFast) |
 
 For interactive exploration: `make repl`.
 
@@ -162,7 +164,7 @@ Good first tasks:
 
 Before coding:
 
-1. Identify which module(s) the change touches (core, primitives, parser, eval, etc.).
+1. Identify which module(s) the change touches (core, primitives, parser, compiler, vm, etc.).
 2. Consider whether the change requires updates to the standard library (`std.elz`).
 3. Check cross-platform implications if the change touches OS or I/O primitives.
 

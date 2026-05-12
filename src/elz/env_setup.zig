@@ -178,6 +178,7 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "call/cc", core.Value{ .procedure = control.call_with_current_continuation });
     try interp.root_env.set(interp, "dynamic-wind", core.Value{ .procedure = control.dynamic_wind });
     try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
+    try interp.root_env.set(interp, "make-promise", core.Value{ .procedure = control.make_promise });
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
     try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
     // Internal primitive backing the try/catch special form; not user-facing.
@@ -312,6 +313,9 @@ pub fn populate_globals(interp: *interpreter.Interpreter) !void {
 pub fn populate_ports(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
     try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+    try interp.root_env.set(interp, "open-input-string", core.Value{ .procedure = ports.open_input_string });
+    try interp.root_env.set(interp, "open-output-string", core.Value{ .procedure = ports.open_output_string });
+    try interp.root_env.set(interp, "get-output-string", core.Value{ .procedure = ports.get_output_string });
     try interp.root_env.set(interp, "close-input-port", core.Value{ .procedure = ports.close_input_port });
     try interp.root_env.set(interp, "close-output-port", core.Value{ .procedure = ports.close_output_port });
     try interp.root_env.set(interp, "read-line", core.Value{ .procedure = ports.read_line });
