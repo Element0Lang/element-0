@@ -104,15 +104,13 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             }
             try writer.writeAll(")");
         },
-        .closure, .vm_closure => try writer.writeAll("#<closure>"),
+        .vm_closure => try writer.writeAll("#<closure>"),
         .macro => |m| {
             try writer.writeAll("#<macro:");
             try writer.writeAll(m.name);
             try writer.writeAll(">");
         },
         .procedure => try writer.writeAll("#<procedure>"),
-        .cont_aware_procedure => try writer.writeAll("#<procedure>"),
-        .continuation => try writer.writeAll("#<continuation>"),
         .foreign_procedure => try writer.writeAll("#<foreign-procedure>"),
         .opaque_pointer => try writer.writeAll("#<opaque-pointer>"),
         .cell => try writer.writeAll("#<cell>"),

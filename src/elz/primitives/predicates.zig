@@ -117,10 +117,6 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .pair => |bv| av == bv,
             else => false,
         },
-        .closure => |av| switch (b) {
-            .closure => |bv| av == bv,
-            else => false,
-        },
         .vm_closure => |av| switch (b) {
             .vm_closure => |bv| av == bv,
             else => false,
@@ -163,14 +159,6 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .port => |av| switch (b) {
             .port => |bv| av == bv,
-            else => false,
-        },
-        .cont_aware_procedure => |av| switch (b) {
-            .cont_aware_procedure => |bv| av == bv,
-            else => false,
-        },
-        .continuation => |av| switch (b) {
-            .continuation => |bv| av == bv,
             else => false,
         },
         .promise => |av| switch (b) {
@@ -299,7 +287,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .closure, .vm_closure, .foreign_procedure, .cont_aware_procedure, .continuation => true,
+        .procedure, .vm_closure, .foreign_procedure => true,
         else => false,
     } };
 }

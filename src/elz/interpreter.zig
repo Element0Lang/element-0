@@ -45,15 +45,11 @@ pub const SandboxFlags = struct {
     time_limit_ms: ?u64 = null,
 };
 
-/// CPS state bundled away from the public Interpreter surface.
-/// All fields are implementation details of primitives/control.zig.
+/// Escape-continuation and dynamic-wind state.
+/// Only primitives/control.zig should read or write these fields.
 pub const CpsState = struct {
     /// Value carried by the most recently invoked escape continuation.
     escape_value: ?core.Value = null,
-    /// ID field reserved for future use (currently unused; kept for ABI stability).
-    escape_id: u64 = 0,
-    /// Counter for generating unique escape continuation IDs, passed to primitive fuel params.
-    escape_id_counter: u64 = 0,
     /// Innermost active dynamic-wind frame, null when none is in effect.
     winders: ?*core.Winder = null,
 };
@@ -79,9 +75,8 @@ pub const Interpreter = struct {
     eval_start_ms: ?i64 = null,
     /// Step counter for throttling time checks (check every N steps).
     time_check_counter: u64 = 0,
-    /// CPS state: escape-continuation side-channel and dynamic-wind chain.
+    /// Escape-continuation and dynamic-wind state.
     /// Only primitives/control.zig should read or write these fields.
-    /// Embedders must not touch them.
     cps: CpsState = .{},
     /// The current input port. Populated lazily on first reference.
     stdin_port: ?*core.Port = null,
@@ -413,6 +408,5 @@ test "cps state is grouped under interp.cps" {
     defer interp.deinit();
 
     try std.testing.expect(interp.cps.escape_value == null);
-    try std.testing.expectEqual(@as(u64, 0), interp.cps.escape_id);
     try std.testing.expect(interp.cps.winders == null);
 }

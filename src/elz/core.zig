@@ -155,20 +155,6 @@ pub const Environment = struct {
     }
 };
 
-/// Represents a user-defined procedure (lambda) in Elz.
-pub const UserDefinedProc = struct {
-    /// Fixed parameter names (as `Value.symbol`). For variadic forms this is the prefix
-    /// before the rest parameter.
-    params: ValueList,
-    /// Optional rest-parameter name. Set for `(lambda args body)` (with `params` empty)
-    /// and `(lambda (a b . rest) body)` (with `params` holding the prefix).
-    rest_param: ?[]const u8,
-    /// The body of the procedure, which is a single `Value` (typically a list of expressions).
-    body: Value,
-    /// The environment in which the procedure was created, which provides its lexical scope.
-    env: *Environment,
-};
-
 /// A heap-allocated upvalue cell shared between a closure and the stack frame that owns the local.
 /// While the local is live the cell holds a pointer directly into the stack slot (`open`).
 /// When the frame exits the value is copied into the cell itself (`closed`).
@@ -308,56 +294,6 @@ pub const Winder = struct {
     after: Value,
     next: ?*Winder,
 };
-
-/// A captured continuation, which holds the continuation chain plus the
-/// dynamic-wind context active when it was captured.
-pub const CapturedCont = struct {
-    k: *Cont,
-    winders: ?*Winder,
-};
-
-/// A single continuation frame in the CPS-converted evaluator.
-pub const ContFrame = union(enum) {
-    halt,
-    eval_rator: struct { rand_list: Value, env: *Environment },
-    eval_rands: struct { proc: Value, done: ValueList, rest: Value, env: *Environment },
-    if_branch: struct { consequent: Value, alternative: Value, env: *Environment },
-    begin_rest: struct { rest: Value, env: *Environment },
-    define_bind: struct { name: []const u8, env: *Environment },
-    set_bind: struct { name: []const u8, env: *Environment },
-    and_rest: struct { rest: Value, env: *Environment },
-    or_rest: struct { rest: Value, env: *Environment },
-    let_bind: struct { name: []const u8, remaining: Value, body: Value, new_env: *Environment, outer_env: *Environment, is_star: bool },
-    dyn_wind_before_done: struct { winder: *Winder, thunk: Value, after_proc: Value, outer_winders: ?*Winder },
-    dyn_wind_thunk_done: struct { after_proc: Value, outer_winders: ?*Winder },
-    dyn_wind_after_done: struct { thunk_result: Value },
-    // cond => arrow form: applied with the test result to decide branch or proceed.
-    cond_arrow_test_done: struct { proc_expr: Value, alternative: Value, env: *Environment },
-    // cond => arrow form: applied with the procedure value to call it on the saved test value.
-    cond_arrow_proc_done: struct { test_val: Value, env: *Environment },
-};
-
-/// A continuation: a singly-linked list of frames.
-pub const Cont = struct {
-    frame: ContFrame,
-    next: ?*Cont,
-};
-
-/// Result of one CPS evaluation step (kept for ABI compatibility).
-pub const EvalStep = union(enum) {
-    eval: struct { ast: Value, env: *Environment, k: *Cont },
-    apply: struct { k: *Cont, val: Value },
-    done: Value,
-};
-
-/// A primitive function that has access to the current continuation.
-pub const ContAwareFn = *const fn (
-    interp: *interpreter.Interpreter,
-    env: *Environment,
-    args: ValueList,
-    fuel: *u64,
-    k: *Cont,
-) ElzError!EvalStep;
 
 /// Represents a pair in an Element 0 list.
 pub const Pair = struct {
@@ -578,19 +514,12 @@ pub const Value = union(enum) {
     string: []const u8,
     /// A boolean value (`#t` or `#f`).
     boolean: bool,
-    /// A user-defined procedure (lambda).
-    closure: *UserDefinedProc,
     /// A VM-compiled closure (bytecode + upvalues).
     vm_closure: *VmClosure,
     /// A macro transformer (define-macro).
     macro: *Macro,
     /// A built-in (primitive) procedure.
     procedure: PrimitiveFn,
-    /// A primitive procedure that has access to the current continuation.
-    /// Used to implement call/cc, dynamic-wind, apply, etc.
-    cont_aware_procedure: ContAwareFn,
-    /// A first-class captured continuation (call/cc result).
-    continuation: *CapturedCont,
     /// A foreign function interface (FFI) procedure.
     foreign_procedure: *const fn (env: *Environment, args: ValueList) anyerror!Value,
     /// An opaque pointer to a value managed by foreign code.
@@ -660,7 +589,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .closure, .vm_closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

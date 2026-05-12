@@ -37,6 +37,7 @@ Priorities, in order:
 - `src/elz/interpreter.zig`: Main `Interpreter` struct.
 - `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
 - `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
+- `src/elz/macros.zig`: Compile-time macro expansion helpers: `expandMacro` (procedural macros) and `expandSyntaxRules` (pattern-based macros).
 - `src/elz/vm.zig`: Stack-based bytecode VM; executes `FuncProto` chunks, manages call frames and upvalues.
 - `src/elz/parser.zig`: S-expression parser.
 - `src/elz/env_setup.zig`: Environment initialization and FFI setup.
@@ -162,7 +163,7 @@ Good first tasks:
 
 Before coding:
 
-1. Identify which module(s) the change touches (core, primitives, parser, eval, etc.).
+1. Identify which module(s) the change touches (core, primitives, parser, compiler, vm, etc.).
 2. Consider whether the change requires updates to the standard library (`std.elz`).
 3. Check cross-platform implications if the change touches OS or I/O primitives.
 

@@ -192,7 +192,7 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const proc = args.items[0];
-    if (proc != .closure and proc != .vm_closure) return ElzError.InvalidArgument;
+    if (proc != .vm_closure) return ElzError.InvalidArgument;
 
     // The escape function: when called, stores its argument on the interpreter
     // and signals EscapeContinuationInvoked. Since there's only one interpreter,
