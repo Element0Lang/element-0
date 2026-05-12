@@ -23,10 +23,10 @@ Element 0 programming language is a new Lisp dialect inspired by Scheme.
 It aims to be compliant with the [R5RS](https://conservatory.scheme.org/schemers/Documents/Standards/R5RS/) standard to a good degree,
 but not limited to it.
 
-This project provides an interpreter for the Element 0 language written in Zig.
-The interpreter is named Elz (pronounced "el-zee") and can be integrated into Zig applications as a scripting engine.
+This project provides a bytecode compiler and virtual machine for the Element 0 language, written in Zig.
+The implementation is named Elz (pronounced "el-zee") and can be integrated into Zig applications as a scripting engine.
 In addition, Elz comes with a read-eval-print loop (REPL) for interactive development and testing, and
-it can easily be extended using Zig code using foreign function interface (FFI) or Element 0 code.
+it can easily be extended using Zig code via the foreign function interface (FFI) or Element 0 code.
 
 ### Why Element 0?
 
@@ -38,7 +38,7 @@ This lets you change parts of your application without the need to recompile the
 ### Features
 
 * A good level of R5RS compliance with a growing standard library (see [std.elz](src/stdlib/std.elz))
-* Easy to integrate into Zig projects as a lightweight and fast scripting engine
+* Easy to integrate into Zig projects as a lightweight scripting engine (with a VM)
 * Easy to extend with Zig functions via the use of FFI or writing Element 0 code
 * Prepacked with a REPL (for interactive development)
 
@@ -167,7 +167,7 @@ pub fn main() !void {
 
     // 2. Register your Zig function with the interpreter.
     // It will be available in Elz under the name "zig-mul".
-    try elz.env_setup.define_foreign_func(
+    try elz.define_foreign_func(
         interpreter.root_env,
         "zig-mul",
         zig_multiply,
