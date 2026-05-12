@@ -28,8 +28,8 @@ fn ensureGcInitialized() void {
     }
 }
 
-/// `SandboxFlags` is a struct that defines the features to be enabled in the Elz interpreter.
-/// This allows for creating a sandboxed environment with a restricted set of capabilities.
+/// `SandboxFlags` controls which built-in capabilities are available to the Elz scripting engine.
+/// Pass it to `Interpreter.init` to restrict I/O, math, or other feature groups.
 pub const SandboxFlags = struct {
     /// Enables or disables mathematical functions.
     enable_math: bool = true,
@@ -54,20 +54,20 @@ pub const CpsState = struct {
     winders: ?*core.Winder = null,
 };
 
-/// `Interpreter` is the main struct for the Elz interpreter.
-/// It holds the state of the interpreter, including the root environment, allocator, and module cache.
+/// `Interpreter` is the top-level handle for the Elz scripting engine.
+/// It holds the root environment, module cache, and VM configuration.
 pub const Interpreter = struct {
-    /// The memory allocator used by the interpreter.
+    /// Allocator used for environment bindings and the module cache.
     allocator: std.mem.Allocator,
     /// The I/O implementation used for file operations, sleeping, etc.
     io: std.Io,
-    /// The root environment of the interpreter, containing the built-in functions and variables.
+    /// The root environment, containing all built-in functions and global variables.
     root_env: *core.Environment,
     /// A message describing the last error that occurred, if any.
     last_error_message: ?[]const u8 = null,
     /// A cache for loaded modules to avoid redundant parsing and evaluation.
     module_cache: std.StringHashMap(*core.Module),
-    /// Counter for generating unique symbols with gensym (thread-safe per interpreter).
+    /// Counter for generating unique symbols via `gensym` (one per `Interpreter` instance).
     gensym_counter: u64 = 0,
     /// Maximum wall-clock execution time in milliseconds (null = no limit).
     time_limit_ms: ?u64 = null,
@@ -83,16 +83,15 @@ pub const Interpreter = struct {
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
 
-    /// Initializes a new Elz interpreter instance.
-    /// This function sets up the garbage collector, creates the root environment,
-    /// populates it with primitive functions based on the provided `SandboxFlags`,
-    /// and loads the standard library.
+    /// Initializes a new `Interpreter` instance.
+    /// Sets up the GC, creates the root environment, populates it with primitives
+    /// according to `flags`, and loads the standard library.
     ///
     /// Parameters:
-    /// - `flags`: A `SandboxFlags` struct specifying which features to enable.
+    /// - `flags`: A `SandboxFlags` struct specifying which capabilities to enable.
     ///
     /// Returns:
-    /// An initialized `Interpreter` instance, or an error if initialization fails.
+    /// An initialized `Interpreter`, or an error if initialization fails.
     pub fn init(flags: SandboxFlags) !Interpreter {
         ensureGcInitialized();
         const allocator = gc.allocator;
@@ -162,9 +161,9 @@ pub const Interpreter = struct {
         return self;
     }
 
-    /// Evaluates a string of Elz source code.
-    /// This function parses the source code into a series of expressions and then evaluates them
-    /// in the interpreter's root environment.
+    /// Compiles and executes a string of Elz source code.
+    /// Parses `source` into forms, compiles them to bytecode, and runs them on the VM
+    /// in the root environment.
     ///
     /// Parameters:
     /// - `self`: A pointer to the `Interpreter` instance.
@@ -269,7 +268,7 @@ pub const Interpreter = struct {
         return core.Value{ .module = mod_ptr };
     }
 
-    /// Evaluates a single pre-parsed Elz form in the interpreter's root environment.
+    /// Compiles and executes a single pre-parsed Elz form in the root environment.
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
     pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
@@ -311,10 +310,8 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Cleans up resources used by the interpreter.
-    /// This method should be called when the interpreter is no longer needed.
-    /// Note: With garbage collection, most memory is automatically managed,
-    /// but this ensures proper cleanup of the module cache.
+    /// Releases resources held by this `Interpreter`.
+    /// Most memory is GC-managed; this cleans up the module cache.
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
     }
