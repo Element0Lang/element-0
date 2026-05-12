@@ -187,9 +187,9 @@ fn rootExec(ctx: chilli.CommandContext) !void {
 /// This function initializes the interpreter and the command-line interface.
 /// It can either start a REPL or execute a source file, based on the command-line arguments.
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
-    const interpreter_ptr = try elz.gc.allocator.create(elz.Interpreter);
+    const interpreter_ptr = try elz.gc_allocator.create(elz.Interpreter);
     interpreter_ptr.* = try elz.Interpreter.init(.{});
-    elz.gc.add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
+    elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();

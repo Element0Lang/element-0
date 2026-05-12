@@ -204,7 +204,7 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     const escape_fn = struct {
         pub fn invoke(i: *interpreter.Interpreter, _: *core.Environment, a: core.ValueList, _: *u64) ElzError!core.Value {
             if (a.items.len != 1) return ElzError.WrongArgumentCount;
-            i.escape_value = a.items[0];
+            i.cps.escape_value = a.items[0];
             return ElzError.EscapeContinuationInvoked;
         }
     }.invoke;
@@ -220,8 +220,8 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
         return val;
     } else |err| {
         if (err == ElzError.EscapeContinuationInvoked) {
-            const escaped_val = interp.escape_value orelse core.Value.unspecified;
-            interp.escape_value = null;
+            const escaped_val = interp.cps.escape_value orelse core.Value.unspecified;
+            interp.cps.escape_value = null;
             return escaped_val;
         }
         return err;
@@ -239,7 +239,7 @@ pub fn call_with_current_continuation(
 ) ElzError!core.EvalStep {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const cap = try env.allocator.create(core.CapturedCont);
-    cap.* = .{ .k = k, .winders = interp.winders };
+    cap.* = .{ .k = k, .winders = interp.cps.winders };
     const k_val = core.Value{ .continuation = cap };
     var call_args = core.ValueList.init(env.allocator);
     try call_args.append(k_val);
@@ -263,17 +263,17 @@ pub fn dynamic_wind(
     const after_proc = args.items[2];
 
     const winder = try env.allocator.create(core.Winder);
-    winder.* = .{ .before = before, .after = after_proc, .next = interp.winders };
+    winder.* = .{ .before = before, .after = after_proc, .next = interp.cps.winders };
 
     const k_thunk_done = try eval.allocCont(interp, .{ .dyn_wind_thunk_done = .{
         .after_proc = after_proc,
-        .outer_winders = interp.winders,
+        .outer_winders = interp.cps.winders,
     } }, k);
     const k_before_done = try eval.allocCont(interp, .{ .dyn_wind_before_done = .{
         .winder = winder,
         .thunk = thunk,
         .after_proc = after_proc,
-        .outer_winders = interp.winders,
+        .outer_winders = interp.cps.winders,
     } }, k_thunk_done);
 
     const no_args = core.ValueList.init(env.allocator);

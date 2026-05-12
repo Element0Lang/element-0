@@ -124,7 +124,7 @@ pub const VM = struct {
             },
             .procedure => |prim| {
                 var args = try self.buildArgList(argc); // pops args + callee
-                const result = try prim(self.interp, self.interp.root_env, args, &self.interp.escape_id_counter);
+                const result = try prim(self.interp, self.interp.root_env, args, &self.interp.cps.escape_id_counter);
                 args.deinit();
                 try self.push(result);
             },

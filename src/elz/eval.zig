@@ -13,6 +13,7 @@ const env_setup = @import("env_setup.zig");
 // Continuation helpers
 // ============================================================================
 
+/// Internal bridge: allocates a continuation node. Called by vm.zig and primitives/control.zig.
 pub fn allocCont(interp: *interpreter.Interpreter, frame: core.ContFrame, next: ?*core.Cont) ElzError!*core.Cont {
     const k = try interp.allocator.create(core.Cont);
     k.* = .{ .frame = frame, .next = next };
@@ -282,6 +283,7 @@ fn evalDefineMacro(interp: *interpreter.Interpreter, rest: Value, env: *Environm
     return macro_val;
 }
 
+/// Internal bridge: expands a define-macro transformer. Called by compiler.zig at compile time.
 pub fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
     var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
     defer unevaluated_args.deinit(env.allocator);
@@ -409,7 +411,7 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
     if (handler_body == .nil) return ElzError.InvalidArgument;
 
     // Snapshot the winder stack so we can unwind dynamic-wind after-thunks on error.
-    const winders_before = interp.winders;
+    const winders_before = interp.cps.winders;
 
     var last_result: core.Value = .unspecified;
     var eval_error: ?ElzError = null;
@@ -423,11 +425,11 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
     if (eval_error) |_| {
         // Run after-thunks for any dynamic-wind frames that were entered after the try
         // started but never exited normally (error bypasses the CPS after-thunk machinery).
-        var w = interp.winders;
+        var w = interp.cps.winders;
         while (w != winders_before) {
             const winder = w.?;
             w = winder.next;
-            interp.winders = w;
+            interp.cps.winders = w;
             const no_args = core.ValueList.init(env.allocator);
             _ = eval_winder_after(interp, winder.after, no_args, fuel);
         }
@@ -904,6 +906,7 @@ fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError
     return Value{ .pair = new_pair };
 }
 
+/// Internal bridge: expands a syntax-rules transformer. Called by compiler.zig at compile time.
 pub fn expandSyntaxRules(
     interp: *interpreter.Interpreter,
     sr: *core.SyntaxRulesMacro,
@@ -1266,7 +1269,7 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
 }
 
 // ============================================================================
-// bindClosureArgs: handle variadic closures
+// bindClosureArgs: handle variadic closures — internal bridge used by vm.zig
 // ============================================================================
 
 pub fn bindClosureArgs(
@@ -1301,7 +1304,7 @@ pub fn bindClosureArgs(
 }
 
 // ============================================================================
-// CPS evaluator core
+// CPS evaluator core — evalStep and applyK are internal bridges used by vm.zig
 // ============================================================================
 
 pub fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
@@ -1788,13 +1791,13 @@ pub fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel:
             return .{ .eval = .{ .ast = init_expr, .env = eval_env, .k = next_k } };
         },
         .dyn_wind_before_done => |dw| {
-            dw.winder.next = interp.winders;
-            interp.winders = dw.winder;
+            dw.winder.next = interp.cps.winders;
+            interp.cps.winders = dw.winder;
             const no_args = core.ValueList.init(interp.allocator);
             return try applyProc(interp, dw.thunk, no_args, interp.root_env, k.next.?, fuel);
         },
         .dyn_wind_thunk_done => |dt| {
-            interp.winders = dt.outer_winders;
+            interp.cps.winders = dt.outer_winders;
             const after_k = try allocCont(interp, .{ .dyn_wind_after_done = .{ .thunk_result = val } }, k.next.?);
             const no_args = core.ValueList.init(interp.allocator);
             return try applyProc(interp, dt.after_proc, no_args, interp.root_env, after_k, fuel);
@@ -1858,12 +1861,12 @@ pub fn applyProc(interp: *interpreter.Interpreter, proc: Value, args: core.Value
 }
 
 fn invokeCapturedCont(interp: *interpreter.Interpreter, cap: *core.CapturedCont, val: Value, fuel: *u64) ElzError!core.EvalStep {
-    return try doWindChange(interp, interp.winders, cap.winders, cap.k, val, fuel);
+    return try doWindChange(interp, interp.cps.winders, cap.winders, cap.k, val, fuel);
 }
 
 fn doWindChange(interp: *interpreter.Interpreter, from: ?*core.Winder, to: ?*core.Winder, k: *core.Cont, val: Value, fuel: *u64) ElzError!core.EvalStep {
     if (from == to) {
-        interp.winders = to;
+        interp.cps.winders = to;
         return .{ .apply = .{ .k = k, .val = val } };
     }
 
@@ -1921,7 +1924,7 @@ fn doWindChange(interp: *interpreter.Interpreter, from: ?*core.Winder, to: ?*cor
         _ = try eval_proc(interp, w.before, empty, interp.root_env, fuel);
     }
 
-    interp.winders = to;
+    interp.cps.winders = to;
     return .{ .apply = .{ .k = k, .val = val } };
 }
 

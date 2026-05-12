@@ -7,6 +7,9 @@
 const std = @import("std");
 const core = @import("core.zig");
 const chunk = @import("chunk.zig");
+// eval_mod is imported for compile-time macro expansion: define-macro and define-syntax
+// transformers must be evaluated (not just compiled) so their output can be used
+// immediately by the rest of the compilation pass.
 const eval_mod = @import("eval.zig");
 const parser = @import("parser.zig");
 const Value = core.Value;

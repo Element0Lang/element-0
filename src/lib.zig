@@ -10,9 +10,11 @@ pub const core = @import("elz/core.zig");
 pub const Value = core.Value;
 pub const Environment = core.Environment;
 pub const ElzError = @import("elz/errors.zig").ElzError;
-// GC internals: exposed for embedders that allocate the Interpreter on the GC heap
-// (e.g., the REPL). Most embedders do not need this.
-pub const gc = @import("elz/gc.zig");
+// GC utilities for embedders that allocate the Interpreter on the managed heap
+// (e.g., the REPL). Most embedders do not need these.
+const _gc = @import("elz/gc.zig");
+pub const gc_allocator: @import("std").mem.Allocator = _gc.allocator;
+pub const gc_add_roots = _gc.add_roots;
 
 // Helper functions for interacting with the interpreter and its values.
 pub const write = @import("elz/writer.zig").write;
