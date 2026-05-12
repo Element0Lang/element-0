@@ -222,6 +222,7 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 ### Acknowledgements
 
 * The logo is made by [Conrad Barski, M.D.](https://www.lisperati.com/logo.html) with a few changes.
-* This project uses [linenoise](https://github.com/antirez/linenoise) and [bdwgc](https://github.com/bdwgc/bdwgc) C
-  libraries.
-* This project uses the [Chilli](https://github.com/CogitatorTech/chilli) CLI framework.
+* [Linenoise](https://github.com/antirez/linenoise) is used for the REPL's line editing and history features.
+* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) is used for the reference implementation of the R5RS standard.
+* [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
+* [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.

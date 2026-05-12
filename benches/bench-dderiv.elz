@@ -1,0 +1,50 @@
+;;; DDERIV -- Table-driven symbolic derivative benchmark written by Vaughn Pratt.
+;;; Adapted from the Gabriel benchmark suite (Public Domain).
+
+(define pg-alist '())
+(define (put sym d what)
+  (set! pg-alist (cons (cons (list sym d) what) pg-alist)))
+(define (get sym d)
+  (let ((entry (assoc (list sym d) pg-alist)))
+    (if entry (cdr entry) #f)))
+
+(define (dderiv-aux a) (list '/ (dderiv a) a))
+
+(define (f+dderiv a) (cons '+ (map dderiv a)))
+(define (f-dderiv a) (cons '- (map dderiv a)))
+(define (*dderiv a)
+  (list '* (cons '* a) (cons '+ (map dderiv-aux a))))
+(define (/dderiv a)
+  (list '-
+        (list '/ (dderiv (car a)) (cadr a))
+        (list '/ (car a) (list '* (cadr a) (cadr a) (dderiv (cadr a))))))
+
+(define (dderiv a)
+  (cond
+    ((not (pair? a))
+     (cond ((eq? a 'x) 1) (else 0)))
+    (else
+     (let ((handler (get (car a) 'dderiv)))
+       (cond (handler (handler (cdr a)))
+             (else 'error))))))
+
+(put '+ 'dderiv f+dderiv)
+(put '- 'dderiv f-dderiv)
+(put '* 'dderiv *dderiv)
+(put '/ 'dderiv /dderiv)
+
+(let* ((start (current-time-ms))
+       (result (begin
+                 (do ((i 0 (+ i 1)))
+                     ((= i 50000))
+                   (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (dderiv '(+ (* 3 x x) (* a x x) (* b x) 5)))
+                 'done))
+       (elapsed (- (current-time-ms) start)))
+  (display "dderiv: ")
+  (display elapsed)
+  (display "ms  result: ")
+  (display result)
+  (newline))

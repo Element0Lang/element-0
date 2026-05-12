@@ -1,0 +1,37 @@
+;;; DERIV -- Symbolic derivative benchmark written by Vaughn Pratt.
+;;; Adapted from the Gabriel benchmark suite (Public Domain).
+
+(define (deriv-aux a) (list '/ (deriv a) a))
+
+(define (deriv a)
+  (cond
+    ((not (pair? a))
+     (cond ((eq? a 'x) 1) (else 0)))
+    ((eq? (car a) '+)
+     (cons '+ (map deriv (cdr a))))
+    ((eq? (car a) '-)
+     (cons '- (map deriv (cdr a))))
+    ((eq? (car a) '*)
+     (list '*
+           a
+           (cons '+ (map deriv-aux (cdr a)))))
+    ((eq? (car a) '/)
+     (list '-
+           (list '/ (deriv (cadr a)) (caddr a))
+           (list '/ (cadr a) (list '* (caddr a) (caddr a) (deriv (caddr a))))))))
+
+(let* ((start (current-time-ms))
+       (result (begin
+                 (do ((i 0 (+ i 1)))
+                     ((= i 50000))
+                   (deriv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (deriv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (deriv '(+ (* 3 x x) (* a x x) (* b x) 5))
+                   (deriv '(+ (* 3 x x) (* a x x) (* b x) 5)))
+                 'done))
+       (elapsed (- (current-time-ms) start)))
+  (display "deriv: ")
+  (display elapsed)
+  (display "ms  result: ")
+  (display result)
+  (newline))

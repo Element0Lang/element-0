@@ -32,7 +32,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
 
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
-        var fuel: u64 = 1_000_000;
+        var fuel: u64 = std.math.maxInt(u64);
         last_result = interpreter.evalForm(&form, &fuel) catch |err| {
             var buffer: [4096]u8 = undefined;
             const stdout_file = std.Io.File.stdout();
@@ -105,7 +105,7 @@ fn repl(interpreter: *elz.Interpreter) !void {
 
                 var last_result: elz.Value = .nil;
                 for (forms.items) |form| {
-                    var fuel: u64 = 1_000_000;
+                    var fuel: u64 = std.math.maxInt(u64);
                     last_result = interpreter.evalForm(&form, &fuel) catch |err| {
                         var buffer: [4096]u8 = undefined;
                         const stdout_file = std.Io.File.stdout();
