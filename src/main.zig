@@ -7,6 +7,19 @@ const linenoise = if (builtin.os.tag != .windows) @cImport({
     @cInclude("linenoise.h");
 }) else struct {};
 
+const filetime_unix_offset: i64 = 116444736000000000;
+
+fn currentTimeMs() i64 {
+    if (comptime builtin.os.tag == .windows) {
+        const filetime = std.os.windows.ntdll.RtlGetSystemTimePrecise();
+        return @divFloor(filetime - filetime_unix_offset, 10_000);
+    } else {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
+    }
+}
+
 fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     switch (value) {
         .string => |s| {
@@ -149,10 +162,10 @@ fn runBench(source: []const u8, filename: []const u8, iters: usize, gpa: std.mem
     for (times) |*t| {
         var interp = try elz.Interpreter.init(.{});
         defer interp.deinit();
-        const start = std.time.milliTimestamp();
+        const start = currentTimeMs();
         var fuel: u64 = std.math.maxInt(u64);
         _ = interp.evalString(source, &fuel) catch {};
-        t.* = std.time.milliTimestamp() - start;
+        t.* = currentTimeMs() - start;
     }
 
     std.mem.sort(i64, times, {}, std.sort.asc(i64));

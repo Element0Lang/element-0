@@ -53,7 +53,7 @@ Priorities, in order:
 - `examples/elz/`: Element 0 script examples.
 - `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
   `test_module_lib.elz`).
-- `.github/workflows/`: CI workflows (tests, lints, docs, and releases).
+- `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
 
@@ -105,14 +105,15 @@ Managed via Zig's package manager (`build.zig.zon`):
 
 Run all test suites for any change:
 
-| Target            | Command           | What It Runs                                             |
-|-------------------|-------------------|----------------------------------------------------------|
-| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                   |
-| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish) |
-| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`            |
-| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`               |
-| All tests         | `make test-all`   | Runs all of the above                                    |
-| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`             |
+| Target            | Command           | What It Runs                                               |
+|-------------------|-------------------|------------------------------------------------------------|
+| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                     |
+| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish)   |
+| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`              |
+| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`                 |
+| All tests         | `make test-all`   | Runs all of the above                                      |
+| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`               |
+| Benchmarks        | `make bench`      | Runs `benches/bench-*.elz` with `--bench 10` (ReleaseFast) |
 
 For interactive exploration: `make repl`.
 
