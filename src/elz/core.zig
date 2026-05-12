@@ -532,6 +532,8 @@ pub const Value = union(enum) {
     boolean: bool,
     /// A user-defined procedure (lambda).
     closure: *UserDefinedProc,
+    /// A VM-compiled closure (bytecode + upvalues).
+    vm_closure: *@import("vm.zig").VmClosure,
     /// A macro transformer (define-macro).
     macro: *Macro,
     /// A built-in (primitive) procedure.
@@ -610,7 +612,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .closure, .vm_closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

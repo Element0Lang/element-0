@@ -693,8 +693,10 @@
 (test-case "real? on non-number" (not (real? 'a)))
 (test-case "rational? on finite" (rational? 1.5))
 (test-case "rational? on non-number" (not (rational? "x")))
-(test-case "exact? always #f for f64-only impl" (not (exact? 1)))
-(test-case "inexact? on number" (inexact? 1))
+(test-case "exact? returns #t for integer literal" (exact? 1))
+(test-case "exact? returns #f for inexact number" (not (exact? 1.5)))
+(test-case "inexact? returns #f for integer literal" (not (inexact? 1)))
+(test-case "inexact? returns #t for inexact number" (inexact? 1.5))
 (test-case "exact->inexact identity" (= (exact->inexact 5) 5))
 (test-case "inexact->exact identity" (= (inexact->exact 5) 5))
 

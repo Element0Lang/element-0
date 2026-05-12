@@ -282,7 +282,7 @@ fn evalDefineMacro(interp: *interpreter.Interpreter, rest: Value, env: *Environm
     return macro_val;
 }
 
-fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
+pub fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
     var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
     defer unevaluated_args.deinit(env.allocator);
     var current_node = rest;
@@ -408,6 +408,9 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
     const handler_body = catch_args_p.cdr;
     if (handler_body == .nil) return ElzError.InvalidArgument;
 
+    // Snapshot the winder stack so we can unwind dynamic-wind after-thunks on error.
+    const winders_before = interp.winders;
+
     var last_result: core.Value = .unspecified;
     var eval_error: ?ElzError = null;
     for (try_body_forms.items) |form| {
@@ -418,6 +421,17 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
     }
 
     if (eval_error) |_| {
+        // Run after-thunks for any dynamic-wind frames that were entered after the try
+        // started but never exited normally (error bypasses the CPS after-thunk machinery).
+        var w = interp.winders;
+        while (w != winders_before) {
+            const winder = w.?;
+            w = winder.next;
+            interp.winders = w;
+            const no_args = core.ValueList.init(env.allocator);
+            _ = eval_winder_after(interp, winder.after, no_args, fuel);
+        }
+
         const new_env = try Environment.init(env.allocator, env);
         const msg = interp.last_error_message orelse "An unknown error occurred.";
         const err_val = try Value.from(env.allocator, msg);
@@ -433,6 +447,20 @@ fn evalTry(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fue
         return handler_result;
     } else {
         return last_result;
+    }
+}
+
+/// Call a dynamic-wind after-thunk during error unwinding. Errors in after-thunks are
+/// silently ignored so that the original error propagates cleanly.
+fn eval_winder_after(interp: *interpreter.Interpreter, after_proc: Value, args: core.ValueList, fuel: *u64) void {
+    const halt = allocCont(interp, .halt, null) catch return;
+    var step: core.EvalStep = applyProc(interp, after_proc, args, interp.root_env, halt, fuel) catch return;
+    while (true) {
+        step = switch (step) {
+            .eval => |e| evalStep(interp, e.ast, e.env, e.k, fuel) catch return,
+            .apply => |a| applyK(interp, a.k, a.val, fuel) catch return,
+            .done => return,
+        };
     }
 }
 
@@ -876,7 +904,7 @@ fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError
     return Value{ .pair = new_pair };
 }
 
-fn expandSyntaxRules(
+pub fn expandSyntaxRules(
     interp: *interpreter.Interpreter,
     sr: *core.SyntaxRulesMacro,
     rest: Value,
@@ -1241,7 +1269,7 @@ fn evalDo(interp: *interpreter.Interpreter, rest: Value, env: *Environment, fuel
 // bindClosureArgs: handle variadic closures
 // ============================================================================
 
-fn bindClosureArgs(
+pub fn bindClosureArgs(
     interp: *interpreter.Interpreter,
     c: *UserDefinedProc,
     arg_vals: core.ValueList,
@@ -1276,9 +1304,9 @@ fn bindClosureArgs(
 // CPS evaluator core
 // ============================================================================
 
-fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
+pub fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
     switch (ast) {
-        .number, .exact_integer, .rational, .complex, .boolean, .character, .nil, .closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified, .promise, .multi_values, .syntax_rules => {
+        .number, .exact_integer, .rational, .complex, .boolean, .character, .nil, .closure, .vm_closure, .macro, .procedure, .cont_aware_procedure, .continuation, .foreign_procedure, .opaque_pointer, .cell, .module, .vector, .hash_map, .port, .unspecified, .promise, .multi_values, .syntax_rules => {
             return .{ .apply = .{ .k = k, .val = ast } };
         },
         .string => |s| {
@@ -1482,7 +1510,7 @@ fn evalStep(interp: *interpreter.Interpreter, ast: Value, env: *Environment, k: 
     }
 }
 
-fn evalBodyStep(interp: *interpreter.Interpreter, body: Value, env: *Environment, k: *core.Cont) ElzError!core.EvalStep {
+pub fn evalBodyStep(interp: *interpreter.Interpreter, body: Value, env: *Environment, k: *core.Cont) ElzError!core.EvalStep {
     if (body == .nil) return .{ .apply = .{ .k = k, .val = .nil } };
     const p = body.pair;
     if (p.cdr == .nil) {
@@ -1656,7 +1684,7 @@ fn evalCaseStep(interp: *interpreter.Interpreter, rest: Value, env: *Environment
 // applyK: dispatch on continuation frame
 // ============================================================================
 
-fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel: *u64) ElzError!core.EvalStep {
+pub fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel: *u64) ElzError!core.EvalStep {
     switch (k.frame) {
         .halt => return .{ .done = val },
         .eval_rator => |er| {
@@ -1791,6 +1819,17 @@ fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel: *u6
 
 pub fn applyProc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
     switch (proc) {
+        .vm_closure => |cl| {
+            // Run the VM closure via the VM machinery.
+            var vm = @import("vm.zig").VM.init(interp) catch return ElzError.OutOfMemory;
+            defer vm.deinit();
+            // Push callee + args onto VM stack.
+            vm.push(proc) catch return ElzError.StackOverflow;
+            for (args.items) |arg| vm.push(arg) catch return ElzError.StackOverflow;
+            vm.callVmClosure(cl, @intCast(args.items.len), false) catch |err| return err;
+            const result = vm.run() catch |err| return err;
+            return .{ .apply = .{ .k = k, .val = result } };
+        },
         .closure => |c| {
             const call_env = try bindClosureArgs(interp, c, args, env);
             if (c.body == .nil) return .{ .apply = .{ .k = k, .val = Value.nil } };

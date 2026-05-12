@@ -62,4 +62,6 @@ pub const ElzError = error{
     EscapeContinuationInvoked,
     /// An arithmetic operation overflowed.
     Overflow,
+    /// The VM call stack or value stack overflowed.
+    StackOverflow,
 };
