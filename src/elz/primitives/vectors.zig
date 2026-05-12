@@ -77,7 +77,7 @@ pub fn vector_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 
 /// `vector_set` sets the element at a given index in a vector.
 /// Syntax: (vector-set! vec k obj)
-pub fn vector_set(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_set(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
@@ -88,7 +88,7 @@ pub fn vector_set(_: *interpreter.Interpreter, env: *core.Environment, args: cor
     const vec = vec_val.vector;
     if (index >= vec.items.len) return ElzError.InvalidArgument;
 
-    vec.items[index] = try obj.deep_clone(env.allocator);
+    vec.items[index] = obj;
     return Value.unspecified;
 }
 

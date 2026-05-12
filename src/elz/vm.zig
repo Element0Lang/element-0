@@ -23,8 +23,8 @@ const CallFrame = core.CallFrame;
 // VM
 // ---------------------------------------------------------------------------
 
-const STACK_SIZE = 4096;
-const FRAMES_SIZE = 256;
+const STACK_SIZE = 65536;
+const FRAMES_SIZE = 65536;
 
 pub const VM = struct {
     interp: *@import("interpreter.zig").Interpreter,
@@ -279,9 +279,6 @@ pub const VM = struct {
             const proto = frame.closure.proto;
 
             if (frame.ip >= proto.instructions.items.len) {
-                std.debug.print("[VM DEBUG] ip={} past end of proto '{s}' (len={}), frame_count={}\n", .{
-                    frame.ip, proto.name, proto.instructions.items.len, self.frame_count,
-                });
                 return ElzError.InvalidArgument; // Should not happen with return_val
             }
 
@@ -357,58 +354,14 @@ pub const VM = struct {
                 .call => {
                     const argc = instr.a;
                     const callee = self.peek(argc);
-                    // Capture args BEFORE the call (buildArgList pops them)
-                    const dbg_stack_top_before = self.stack_top;
-                    self.callValue(callee, argc, false) catch |e| {
-                        std.debug.print("[VM DEBUG] call error={s} callee_tag={s} proto='{s}' ip={} argc={}\n", .{
-                            @errorName(e), @tagName(callee), proto.name, frame.ip - 1, argc,
-                        });
-                        // Args were at stack[stack_top-argc..stack_top] before call
-                        const arg_start = dbg_stack_top_before - argc;
-                        for (arg_start..dbg_stack_top_before) |si| {
-                            std.debug.print("  arg[{}] tag={s}\n", .{ si - arg_start, @tagName(self.stack[si]) });
-                        }
-                        // Print proto constants to identify what's being called
-                        std.debug.print("  proto constants ({}):\n", .{proto.constants.items.len});
-                        for (proto.constants.items, 0..) |c, ci| {
-                            switch (c) {
-                                .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ ci, s }),
-                                .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ ci, b }),
-                                .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ ci, i }),
-                                .nil => std.debug.print("    [{}] nil\n", .{ci}),
-                                else => std.debug.print("    [{}] other:{s}\n", .{ ci, @tagName(c) }),
-                            }
-                        }
-                        // Print proto instructions around ip
-                        const start_ip = if (frame.ip >= 5) frame.ip - 5 else 0;
-                        std.debug.print("  proto instructions [{}..{}]:\n", .{ start_ip, frame.ip });
-                        for (proto.instructions.items[start_ip..@min(frame.ip, proto.instructions.items.len)], start_ip..) |ins, iip| {
-                            std.debug.print("    [{}] op={s} a={} b={} bx={}\n", .{ iip, @tagName(ins.op), ins.a, ins.b, ins.bx });
-                        }
-                        var fi = self.frame_count;
-                        while (fi > 0) {
-                            fi -= 1;
-                            std.debug.print("  frame[{}] proto='{s}' ip={}\n", .{ fi, self.frames[fi].closure.proto.name, self.frames[fi].ip });
-                        }
-                        return e;
-                    };
+                    try self.callValue(callee, argc, false);
                 },
                 .tail_call => {
                     const argc = instr.a;
                     const callee = self.peek(argc);
                     switch (callee) {
-                        .vm_closure => |cl| self.callVmClosure(cl, argc, true) catch |e| {
-                            std.debug.print("[VM DEBUG] tail_call error={s} proto='{s}' ip={}\n", .{
-                                @errorName(e), proto.name, frame.ip - 1,
-                            });
-                            return e;
-                        },
-                        else => self.callValue(callee, argc, false) catch |e| {
-                            std.debug.print("[VM DEBUG] tail_call(other) error={s} callee_tag={s} proto='{s}' ip={}\n", .{
-                                @errorName(e), @tagName(callee), proto.name, frame.ip - 1,
-                            });
-                            return e;
-                        },
+                        .vm_closure => |cl| try self.callVmClosure(cl, argc, true),
+                        else => try self.callValue(callee, argc, false),
                     }
                 },
                 .return_val => {
@@ -445,22 +398,12 @@ pub const VM = struct {
                 },
                 .car_op => {
                     const v = self.pop();
-                    if (v != .pair) {
-                        std.debug.print("[VM DEBUG] car_op on non-pair: tag={s} proto='{s}' ip={}\n", .{
-                            @tagName(v), proto.name, frame.ip - 1,
-                        });
-                        return ElzError.InvalidArgument;
-                    }
+                    if (v != .pair) return ElzError.InvalidArgument;
                     try self.push(v.pair.car);
                 },
                 .cdr_op => {
                     const v = self.pop();
-                    if (v != .pair) {
-                        std.debug.print("[VM DEBUG] cdr_op on non-pair: tag={s} proto='{s}' ip={}\n", .{
-                            @tagName(v), proto.name, frame.ip - 1,
-                        });
-                        return ElzError.InvalidArgument;
-                    }
+                    if (v != .pair) return ElzError.InvalidArgument;
                     try self.push(v.pair.cdr);
                 },
 
@@ -472,26 +415,6 @@ pub const VM = struct {
                     const upvals = try self.interp.allocator.alloc(*Upvalue, upval_count);
                     cl.* = .{ .proto = sub_proto, .upvals = upvals };
                     try self.push(Value{ .vm_closure = cl });
-                    // DEBUG: check for wrong proto (boolean at expected-integer slot)
-                    if (std.mem.eql(u8, sub_proto.name, "loop") or std.mem.eql(u8, sub_proto.name, "<let>")) {
-                        if (sub_proto.constants.items.len > 1) {
-                            const c1 = sub_proto.constants.items[1];
-                            if (c1 == .boolean) {
-                                std.debug.print("[VM DEBUG] make_closure proto='{s}' bx={} has boolean at const[1]! parent='{s}' ip={}\n", .{
-                                    sub_proto.name, instr.bx, proto.name, frame.ip - 1,
-                                });
-                                std.debug.print("  sub_proto constants:\n", .{});
-                                for (sub_proto.constants.items, 0..) |c, ci| {
-                                    switch (c) {
-                                        .symbol => |s| std.debug.print("    [{}] symbol '{s}'\n", .{ ci, s }),
-                                        .boolean => |b| std.debug.print("    [{}] boolean {}\n", .{ ci, b }),
-                                        .exact_integer => |i| std.debug.print("    [{}] integer {}\n", .{ ci, i }),
-                                        else => std.debug.print("    [{}] other\n", .{ci}),
-                                    }
-                                }
-                            }
-                        }
-                    }
                 },
                 .capture_local => {
                     // Follows make_closure: a=local_slot, b=upvalue_fill_index.
