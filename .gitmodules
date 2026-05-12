@@ -1,4 +1,0 @@
-[submodule "external/chibi-scheme"]
-	path = external/chibi-scheme
-	url = https://github.com/ashinn/chibi-scheme
-	branch = master

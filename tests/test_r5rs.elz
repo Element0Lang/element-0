@@ -10,4 +10,4 @@
 (define (flush-output . args) #f)
 
 ; Run the R5RS compliance test suite.
-(load "external/chibi-scheme/tests/r5rs-tests.scm")
+(load "tests/r5rs-tests.scm")

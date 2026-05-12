@@ -63,7 +63,7 @@ You can download the release binaries for Elz from the [release page](https://gi
 
 1. Clone the repository
    ```sh
-   git clone --recurse https://github.com/Element0Lang/element-0.git
+   git clone https://github.com/Element0Lang/element-0.git
    cd element-0
    ```
 
@@ -224,6 +224,6 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 
 * The logo is made by [Conrad Barski, M.D.](https://www.lisperati.com/logo.html) with a few changes.
 * [Bestline](https://github.com/jart/bestline) is used for the REPL's line editing and history features.
-* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) is used for the reference implementation of the R5RS standard.
+* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) R5RS test suite is used for compliance testing.
 * [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
 * [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.
