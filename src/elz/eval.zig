@@ -1820,14 +1820,10 @@ pub fn applyK(interp: *interpreter.Interpreter, k: *core.Cont, val: Value, fuel:
 pub fn applyProc(interp: *interpreter.Interpreter, proc: Value, args: core.ValueList, env: *Environment, k: *core.Cont, fuel: *u64) ElzError!core.EvalStep {
     switch (proc) {
         .vm_closure => |cl| {
-            // Run the VM closure via the VM machinery.
-            var vm = @import("vm.zig").VM.init(interp) catch return ElzError.OutOfMemory;
-            defer vm.deinit();
-            // Push callee + args onto VM stack.
-            vm.push(proc) catch return ElzError.StackOverflow;
-            for (args.items) |arg| vm.push(arg) catch return ElzError.StackOverflow;
-            vm.callVmClosure(cl, @intCast(args.items.len), false) catch |err| return err;
-            const result = vm.run() catch |err| return err;
+            // Dispatch through the hook registered by vm.zig at interpreter init time.
+            // This avoids a direct eval ↔ vm import cycle.
+            const runner = interp.run_vm_closure orelse return ElzError.NotImplemented;
+            const result = try runner(interp, cl, args);
             return .{ .apply = .{ .k = k, .val = result } };
         },
         .closure => |c| {
@@ -1938,17 +1934,7 @@ inline fn checkFuelAndTime(interp: *interpreter.Interpreter, fuel: *u64) ElzErro
     if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
     fuel.* -= 1;
 
-    if (interp.time_limit_ms) |limit_ms| {
-        interp.time_check_counter +%= 1;
-        if (interp.time_check_counter & 0xFF == 0) {
-            if (interp.eval_start_ms) |start_ms| {
-                const now = interpreter.currentTimeMs();
-                if (now - start_ms >= @as(i64, @intCast(limit_ms))) {
-                    return ElzError.TimeLimitExceeded;
-                }
-            }
-        }
-    }
+    try interp.checkTimeBudget();
 }
 
 pub fn eval(interp: *interpreter.Interpreter, ast_start: *const Value, env_start: *Environment, fuel: *u64) ElzError!Value {

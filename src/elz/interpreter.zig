@@ -77,6 +77,9 @@ pub const Interpreter = struct {
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
+    /// Hook set by vm.zig so that eval.zig can dispatch vm_closure values without
+    /// directly importing the VM. Registered during Interpreter.init.
+    run_vm_closure: ?*const fn (*Interpreter, *core.VmClosure, core.ValueList) core.ElzError!core.Value = null,
 
     /// Initializes a new Elz interpreter instance.
     /// This function sets up the garbage collector, creates the root environment,
@@ -149,6 +152,8 @@ pub const Interpreter = struct {
             _ = try eval.eval(&self, &form, self.root_env, &fuel);
         }
 
+        self.run_vm_closure = @import("vm.zig").runFromEval;
+
         return self;
     }
 
@@ -180,6 +185,26 @@ pub const Interpreter = struct {
             result = try eval.eval(self, &form, self.root_env, fuel);
         }
         return result;
+    }
+
+    /// Evaluates a single pre-parsed Elz form in the interpreter's root environment.
+    /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
+    /// error handling without going through `evalString`.
+    pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
+        return eval.eval(self, form, self.root_env, fuel);
+    }
+
+    /// Increments the time-check step counter and, every 256 steps, compares elapsed
+    /// wall-clock time against the configured limit. Returns `TimeLimitExceeded` if over.
+    /// Both eval.zig and vm.zig call this instead of duplicating the logic.
+    pub fn checkTimeBudget(self: *Interpreter) core.ElzError!void {
+        self.time_check_counter +%= 1;
+        if (self.time_check_counter & 0xFF == 0) {
+            if (self.time_limit_ms) |limit| {
+                const elapsed = currentTimeMs() - (self.eval_start_ms orelse 0);
+                if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
+            }
+        }
     }
 
     /// Cleans up resources used by the interpreter.

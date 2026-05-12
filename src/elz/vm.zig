@@ -15,54 +15,11 @@ const ElzError = core.ElzError;
 const FuncProto = chunk.FuncProto;
 const OpCode = chunk.OpCode;
 
-// ---------------------------------------------------------------------------
-// Runtime closure and upvalue
-// ---------------------------------------------------------------------------
-
-pub const Upvalue = struct {
-    /// When open: index into the VM's value stack.
-    /// When closed: the captured value lives here.
-    state: union(enum) {
-        open: usize,
-        closed: Value,
-    },
-
-    pub fn get(self: *const Upvalue, stack: []Value) Value {
-        return switch (self.state) {
-            .open => |idx| stack[idx],
-            .closed => |v| v,
-        };
-    }
-
-    pub fn set(self: *Upvalue, stack: []Value, val: Value) void {
-        switch (self.state) {
-            .open => |idx| stack[idx] = val,
-            .closed => self.state = .{ .closed = val },
-        }
-    }
-
-    pub fn close(self: *Upvalue, stack: []Value) void {
-        if (self.state == .open) {
-            self.state = .{ .closed = stack[self.state.open] };
-        }
-    }
-};
-
-pub const VmClosure = struct {
-    proto: *FuncProto,
-    upvals: []*Upvalue,
-};
-
-// ---------------------------------------------------------------------------
-// Call frame
-// ---------------------------------------------------------------------------
-
-pub const CallFrame = struct {
-    closure: *VmClosure,
-    ip: usize,
-    /// Index in the value stack where this frame's locals start.
-    stack_base: usize,
-};
+// Upvalue, VmClosure, and CallFrame are defined in core.zig so that the Value
+// union can reference VmClosure without importing the execution engine.
+const Upvalue = core.Upvalue;
+const VmClosure = core.VmClosure;
+const CallFrame = core.CallFrame;
 
 // ---------------------------------------------------------------------------
 // VM
@@ -285,7 +242,9 @@ pub const VM = struct {
         // Delegate to eval machinery for old-style closures.
         var args = try self.buildArgList(argc);
         defer args.deinit();
-        var fuel: u64 = 1_000_000;
+        // Use max fuel so that only the shared wall-clock time limit (checked via
+        // interp.checkTimeBudget) bounds execution — avoids a hidden separate cap.
+        var fuel: u64 = std.math.maxInt(u64);
         const halt = try eval_mod.allocCont(self.interp, .halt, null);
         const call_env = try eval_mod.bindClosureArgs(self.interp, c, args, self.interp.root_env);
         const step = try eval_mod.evalBodyStep(self.interp, c.body, call_env, halt);
@@ -296,7 +255,7 @@ pub const VM = struct {
     fn callContAware(self: *VM, cap: core.ContAwareFn, argc: u8) !void {
         var args = try self.buildArgList(argc);
         defer args.deinit();
-        var fuel: u64 = 1_000_000;
+        var fuel: u64 = std.math.maxInt(u64);
         const halt = try eval_mod.allocCont(self.interp, .halt, null);
         const step = try cap(self.interp, self.interp.root_env, args, &fuel, halt);
         const result = try runEvalLoop(self.interp, step, &fuel);
@@ -320,17 +279,8 @@ pub const VM = struct {
             const instr = proto.instructions.items[frame.ip];
             frame.ip += 1;
 
-            // Fuel / time check (every 256 instructions)
-            self.interp.time_check_counter += 1;
-            if (self.interp.time_check_counter >= 256) {
-                self.interp.time_check_counter = 0;
-                if (self.interp.time_limit_ms) |limit| {
-                    const elapsed = @import("interpreter.zig").currentTimeMs() - (self.interp.eval_start_ms orelse 0);
-                    if (elapsed > @as(i64, @intCast(limit))) {
-                        return ElzError.TimeLimitExceeded;
-                    }
-                }
-            }
+            // Time budget check — delegates to the shared implementation on Interpreter.
+            try self.interp.checkTimeBudget();
 
             switch (instr.op) {
                 // --- Constants ---
@@ -583,6 +533,17 @@ fn runEvalLoop(interp: *@import("interpreter.zig").Interpreter, start: core.Eval
             .done => |v| return v,
         };
     }
+}
+
+/// Entry point registered on `Interpreter.run_vm_closure` so that `eval.zig` can
+/// dispatch `vm_closure` values without directly importing this module.
+pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosure, args: core.ValueList) core.ElzError!Value {
+    var vm = VM.init(interp) catch return core.ElzError.OutOfMemory;
+    defer vm.deinit();
+    try vm.push(Value{ .vm_closure = cl });
+    for (args.items) |arg| try vm.push(arg);
+    try vm.callVmClosure(cl, @intCast(args.items.len), false);
+    return vm.run();
 }
 
 // ---------------------------------------------------------------------------

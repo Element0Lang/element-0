@@ -33,7 +33,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
         var fuel: u64 = 1_000_000;
-        last_result = elz.eval.eval(interpreter, &form, interpreter.root_env, &fuel) catch |err| {
+        last_result = interpreter.evalForm(&form, &fuel) catch |err| {
             var buffer: [4096]u8 = undefined;
             const stdout_file = std.Io.File.stdout();
             var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
@@ -106,7 +106,7 @@ fn repl(interpreter: *elz.Interpreter) !void {
                 var last_result: elz.Value = .nil;
                 for (forms.items) |form| {
                     var fuel: u64 = 1_000_000;
-                    last_result = elz.eval.eval(interpreter, &form, interpreter.root_env, &fuel) catch |err| {
+                    last_result = interpreter.evalForm(&form, &fuel) catch |err| {
                         var buffer: [4096]u8 = undefined;
                         const stdout_file = std.Io.File.stdout();
                         var stdout_writer = stdout_file.writer(interpreter.io, &buffer);

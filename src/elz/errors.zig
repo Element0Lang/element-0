@@ -48,8 +48,6 @@ pub const ElzError = error{
     SetInvalidSymbol,
     /// The execution budget (fuel) was exceeded.
     ExecutionBudgetExceeded,
-    /// A required primitive function was not found in the environment.
-    MissingPrimitive,
     /// A file was not found.
     FileNotFound,
     /// A file could not be written to.
@@ -58,7 +56,8 @@ pub const ElzError = error{
     IOError,
     /// The execution time limit was exceeded.
     TimeLimitExceeded,
-    /// An escape continuation was invoked (internal, caught by call/ec).
+    /// Non-local jump used internally by call/ec. Caught inside the CPS trampoline;
+    /// embedders should never see this error returned from evalString or evalForm.
     EscapeContinuationInvoked,
     /// An arithmetic operation overflowed.
     Overflow,

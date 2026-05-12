@@ -169,6 +169,50 @@ pub const UserDefinedProc = struct {
     env: *Environment,
 };
 
+/// A heap-allocated upvalue cell shared between a closure and the stack frame that owns the local.
+/// While the local is live the cell points into the stack (open); when the frame exits the value
+/// is copied into the cell itself (closed).
+pub const Upvalue = struct {
+    state: union(enum) {
+        open: usize, // index into the VM stack
+        closed: Value, // captured value after the owning frame exits
+    },
+
+    pub fn get(self: *const Upvalue, stack: []Value) Value {
+        return switch (self.state) {
+            .open => |idx| stack[idx],
+            .closed => |v| v,
+        };
+    }
+
+    pub fn set(self: *Upvalue, stack: []Value, val: Value) void {
+        switch (self.state) {
+            .open => |idx| stack[idx] = val,
+            .closed => self.state = .{ .closed = val },
+        }
+    }
+
+    pub fn close(self: *Upvalue, stack: []Value) void {
+        if (self.state == .open) {
+            self.state = .{ .closed = stack[self.state.open] };
+        }
+    }
+};
+
+/// A VM-compiled closure: a `FuncProto` (bytecode + constants) paired with captured upvalue cells.
+pub const VmClosure = struct {
+    proto: *@import("chunk.zig").FuncProto,
+    upvals: []*Upvalue,
+};
+
+/// One call frame on the VM's call stack.
+pub const CallFrame = struct {
+    closure: *VmClosure,
+    ip: usize,
+    /// Index in the value stack where this frame's locals start.
+    stack_base: usize,
+};
+
 /// Represents a macro transformer in Element 0.
 /// Macros are procedures that transform code before evaluation.
 pub const Macro = struct {
@@ -533,7 +577,7 @@ pub const Value = union(enum) {
     /// A user-defined procedure (lambda).
     closure: *UserDefinedProc,
     /// A VM-compiled closure (bytecode + upvalues).
-    vm_closure: *@import("vm.zig").VmClosure,
+    vm_closure: *VmClosure,
     /// A macro transformer (define-macro).
     macro: *Macro,
     /// A built-in (primitive) procedure.
