@@ -271,33 +271,9 @@ pub fn build(b: *std.Build) void {
     }
 
     // --- Run Benchmarks ---
-    const bench_optimize = b.option(
-        std.builtin.OptimizeMode,
-        "bench-optimize",
-        "Optimization mode for benchmarks (default: ReleaseFast)",
-    ) orelse .ReleaseFast;
-
-    const bench_repl_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = bench_optimize,
-    });
-    bench_repl_module.addImport("elz", lib_module);
-    if (target.query.os_tag orelse .linux != .windows) {
-        const linenoise_dep_bench = b.dependency("linenoise", .{});
-        bench_repl_module.addIncludePath(linenoise_dep_bench.path(""));
-        bench_repl_module.addCSourceFile(.{ .file = linenoise_dep_bench.path("linenoise.c") });
-    }
-    bench_repl_module.linkSystemLibrary("c", .{});
-    const bench_chilli_dep = b.dependency("chilli", .{});
-    const bench_chilli_module = b.createModule(.{ .root_source_file = bench_chilli_dep.path("src/lib.zig") });
-
-    const bench_repl_exe = b.addExecutable(.{
-        .name = "elz-repl-bench",
-        .root_module = bench_repl_module,
-    });
-    bench_repl_exe.root_module.addImport("chilli", bench_chilli_module);
-
+    // Note: run `zig build benches -Doptimize=ReleaseFast` for meaningful numbers.
+    // The whole build (including the GC C library) must share one optimize level;
+    // a mixed Debug/ReleaseFast link fails with undefined UBSan symbols.
     const bench_iters = b.option(
         u32,
         "bench-iters",
@@ -318,7 +294,7 @@ pub fn build(b: *std.Build) void {
         while (bench_iter.next(io) catch @panic("Failed to iterate benches")) |entry| {
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
 
-            const run_bench_cmd = b.addRunArtifact(bench_repl_exe);
+            const run_bench_cmd = b.addRunArtifact(repl_exe);
             run_bench_cmd.addArg("--bench");
             run_bench_cmd.addArg(b.fmt("{d}", .{bench_iters}));
             run_bench_cmd.addArg("--file");
