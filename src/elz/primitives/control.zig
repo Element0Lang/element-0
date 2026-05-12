@@ -138,7 +138,16 @@ pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environm
 /// `force` evaluates a delayed promise and memoizes the result. Subsequent calls return
 /// the cached value. A non-promise argument is returned unchanged.
 /// Syntax: (force promise)
-pub fn force(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+/// `make-promise` wraps a no-argument thunk (produced by `delay`) in a Promise.
+pub fn make_promise(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const thunk = args.items[0];
+    const pr = try env.allocator.create(core.Promise);
+    pr.* = .{ .expr = thunk, .env = interp.root_env, .forced = false, .result = .unspecified };
+    return core.Value{ .promise = pr };
+}
+
+pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const arg = args.items[0];
     if (arg != .promise) return arg;
@@ -146,8 +155,14 @@ pub fn force(interp: *interpreter.Interpreter, _: *core.Environment, args: core.
     const pr = arg.promise;
     if (pr.forced) return pr.result;
 
-    var expr = pr.expr;
-    const result = try interp.evalForm(&expr, fuel);
+    // The expr field holds either a thunk (vm_closure) from `delay`
+    // or a raw AST value for promises created directly.
+    const result = if (pr.expr == .vm_closure) blk: {
+        var no_args = core.ValueList.init(env.allocator);
+        defer no_args.deinit();
+        break :blk try vm_mod.callProc(interp, pr.expr, no_args, fuel);
+    } else try interp.evalForm(&pr.expr, fuel);
+
     pr.result = result;
     pr.forced = true;
     return result;
@@ -192,7 +207,10 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const proc = args.items[0];
-    if (proc != .vm_closure) return ElzError.InvalidArgument;
+    switch (proc) {
+        .vm_closure, .procedure, .foreign_procedure => {},
+        else => return ElzError.InvalidArgument,
+    }
 
     // The escape function: when called, stores its argument on the interpreter
     // and signals EscapeContinuationInvoked. Since there's only one interpreter,

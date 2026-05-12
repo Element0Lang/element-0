@@ -54,15 +54,16 @@ See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned feature
 
 #### Using the Standalone REPL
 
+##### Download Release Binaries
+
+You can download the release binaries for Elz from the [release page](https://github.com/Element0Lang/element-0/releases).
+
+##### Building from Source
+
 1. Clone the repository
    ```sh
    git clone --recurse https://github.com/Element0Lang/element-0.git
    cd element-0
-   ```
-
-   If you cloned without `--recurse`, initialize the submodules with:
-   ```sh
-   git submodule update --init
    ```
 
 2. Build and run the REPL
@@ -200,17 +201,13 @@ Result of (zig-mul 7 6) is: 42
 
 You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 
-Alternatively, you can use the `make docs` command to generate the API documentation for the current version of Elz from the source code.
-This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
-and view in your web browser at [http://localhost:8000](http://localhost:8000).
-
 #### Standard Library
 
 See the [std.elz](src/stdlib/std.elz) file for the full list of available items (like functions, variables, etc.) in the standard library.
 
 #### Examples
 
-Check out the [examples](examples) directory for various usage examples, including both Element 0 code and Zig FFI examples.
+Check out the [examples](examples) directory for Element 0 code and Zig FFI examples.
 
 -----
 

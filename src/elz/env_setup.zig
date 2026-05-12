@@ -178,6 +178,7 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "call/cc", core.Value{ .procedure = control.call_with_current_continuation });
     try interp.root_env.set(interp, "dynamic-wind", core.Value{ .procedure = control.dynamic_wind });
     try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
+    try interp.root_env.set(interp, "make-promise", core.Value{ .procedure = control.make_promise });
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
     try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
     // Internal primitive backing the try/catch special form; not user-facing.

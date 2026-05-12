@@ -111,3 +111,4 @@ history.txt
 zig-pkg/
 .agent/
 .cursor/
+compiler
