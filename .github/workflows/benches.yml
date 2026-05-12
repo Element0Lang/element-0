@@ -35,4 +35,4 @@ jobs:
           echo "$PWD/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
 
       - name: Run benchmarks
-        run: zig build benches -Doptimize=ReleaseFast
+        run: zig build benches -Doptimize=ReleaseFast -Dbench-iters=1

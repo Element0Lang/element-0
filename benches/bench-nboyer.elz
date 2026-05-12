@@ -744,4 +744,4 @@
 
 
 
-(begin (setup-boyer) (test-boyer 4))
+(begin (setup-boyer) (test-boyer 3))
