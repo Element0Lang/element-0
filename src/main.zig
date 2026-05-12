@@ -39,10 +39,9 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
             var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
             const stdout = &stdout_writer.interface;
             try stdout.writeAll("--- Runtime Error ---\n");
+            try stdout.print("ErrorCode: {s}\n", .{@errorName(err)});
             if (interpreter.last_error_message) |msg| {
                 try stdout.print("Message: {s}\n", .{msg});
-            } else {
-                try stdout.print("Error: {s}\n", .{@errorName(err)});
             }
             try stdout.writeAll("In form: ");
             try elz.write(form, stdout);
