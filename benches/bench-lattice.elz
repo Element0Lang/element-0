@@ -204,13 +204,11 @@
                                     (error 'make-lattice "base" rhs))))
                         (else
                             (error 'make-lattice "base" lhs))))))
-        (l3 (maps l2 l2))
-        (l4 (maps l3 l3)))
+        (l3 (maps l2 l2)))
     (count-maps l2 l2)
     (count-maps l3 l3)
     (count-maps l2 l3)
-    (count-maps l3 l2)
-    (count-maps l4 l4)))
+    (count-maps l3 l2)))
 
 
 

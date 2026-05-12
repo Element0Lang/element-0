@@ -270,6 +270,55 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // --- Run Benchmarks ---
+    const bench_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "bench-optimize",
+        "Optimization mode for benchmarks (default: ReleaseFast)",
+    ) orelse .ReleaseFast;
+
+    const bench_repl_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = bench_optimize,
+    });
+    bench_repl_module.addImport("elz", lib_module);
+    if (target.query.os_tag orelse .linux != .windows) {
+        const linenoise_dep_bench = b.dependency("linenoise", .{});
+        bench_repl_module.addIncludePath(linenoise_dep_bench.path(""));
+        bench_repl_module.addCSourceFile(.{ .file = linenoise_dep_bench.path("linenoise.c") });
+    }
+    bench_repl_module.linkSystemLibrary("c", .{});
+    const bench_chilli_dep = b.dependency("chilli", .{});
+    const bench_chilli_module = b.createModule(.{ .root_source_file = bench_chilli_dep.path("src/lib.zig") });
+
+    const bench_repl_exe = b.addExecutable(.{
+        .name = "elz-repl-bench",
+        .root_module = bench_repl_module,
+    });
+    bench_repl_exe.root_module.addImport("chilli", bench_chilli_module);
+
+    const bench_step = b.step("benches", "Run the Element 0 benchmarks");
+    {
+        const benches_path = "benches";
+        var benches_dir = Io.Dir.cwd().openDir(io, benches_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) return;
+            std.debug.print("Can't open 'benches' directory: {s}\n", .{@errorName(err)});
+            @panic("Can't open 'benches' directory");
+        };
+        defer benches_dir.close(io);
+
+        var bench_iter = benches_dir.iterate();
+        while (bench_iter.next(io) catch @panic("Failed to iterate benches")) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
+
+            const run_bench_cmd = b.addRunArtifact(bench_repl_exe);
+            run_bench_cmd.addArg("--file");
+            run_bench_cmd.addArg(b.fmt("{s}/{s}", .{ benches_path, entry.name }));
+            bench_step.dependOn(&run_bench_cmd.step);
+        }
+    }
+
     // --- Run All Tests ---
     const test_all_step = b.step("test-all", "Run all tests");
     test_all_step.dependOn(&run_lib_unit_tests.step);

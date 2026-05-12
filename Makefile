@@ -17,8 +17,11 @@ JUNK_FILES := *.o *.obj *.dSYM *.dll *.so *.dylib *.a *.lib *.pdb temp/
 # Automatically find all example names
 ZIG_EXAMPLES  := $(patsubst %.zig,%,$(notdir $(wildcard examples/zig/*.zig)))
 ELZ_EXAMPLES  := $(wildcard examples/elz/*.elz)
+BENCH_FILES   := $(wildcard benches/bench-*.elz)
 EXAMPLE       ?= all
 ELZ_EXAMPLE   ?= all
+BENCH         ?= all
+BENCH_BUILD_TYPE ?= ReleaseFast
 
 SHELL         := /usr/bin/env bash
 .SHELLFLAGS   := -eu -o pipefail -c
@@ -27,7 +30,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz test test-elz test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz bench test test-elz test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -77,6 +80,20 @@ run-elz: build ## Run a Lisp example (like 'make run-elz ELZ_EXAMPLE=e1-cons-car
 	else \
 	   echo "--> Running Lisp example: $(ELZ_EXAMPLE)"; \
 	   ./zig-out/bin/elz-repl --file examples/elz/$(ELZ_EXAMPLE).elz; \
+	fi
+
+bench: ## Run the Element 0 benchmarks (like 'make bench BENCH=bench-tak')
+	@$(ZIG) build -Doptimize=$(BENCH_BUILD_TYPE) -j$(JOBS)
+	@if [ "$(BENCH)" = "all" ]; then \
+	   echo "--> Running all benchmarks..."; \
+	   for f in $(BENCH_FILES); do \
+	      echo ""; \
+	      echo "--> $$f"; \
+	      ./zig-out/bin/elz-repl --file $$f; \
+	   done; \
+	else \
+	   echo "--> Running benchmark: $(BENCH)"; \
+	   ./zig-out/bin/elz-repl --file benches/$(BENCH).elz; \
 	fi
 
 repl: ## Start the REPL
