@@ -196,7 +196,7 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const proc = args.items[0];
-    if (proc != .closure) return ElzError.InvalidArgument;
+    if (proc != .closure and proc != .vm_closure) return ElzError.InvalidArgument;
 
     // The escape function: when called, stores its argument on the interpreter
     // and signals EscapeContinuationInvoked. Since there's only one interpreter,
@@ -225,6 +225,44 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
             return escaped_val;
         }
         return err;
+    }
+}
+
+/// Internal primitive backing the `(try body... (catch err handler...))` special form.
+/// Called by the compiler as: (%%try%% body-thunk handler-thunk)
+/// Runs body-thunk(); on error, runs handler-thunk(error-message).
+pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const body_thunk = args.items[0];
+    const handler_thunk = args.items[1];
+
+    const runner = interp.run_vm_closure orelse return ElzError.NotImplemented;
+
+    // Run the body thunk with zero arguments.
+    var no_args = core.ValueList.init(env.allocator);
+    defer no_args.deinit();
+
+    const body_result: ElzError!core.Value = if (body_thunk == .vm_closure)
+        runner(interp, body_thunk.vm_closure, no_args)
+    else
+        eval.eval_proc(interp, body_thunk, no_args, env, fuel);
+
+    if (body_result) |val| {
+        return val;
+    } else |err| {
+        // Collect the error message before it's overwritten.
+        const msg = interp.last_error_message orelse @errorName(err);
+        const err_val = core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
+        interp.last_error_message = null;
+
+        var handler_args = core.ValueList.init(env.allocator);
+        defer handler_args.deinit();
+        try handler_args.append(err_val);
+
+        return if (handler_thunk == .vm_closure)
+            try runner(interp, handler_thunk.vm_closure, handler_args)
+        else
+            try eval.eval_proc(interp, handler_thunk, handler_args, env, fuel);
     }
 }
 

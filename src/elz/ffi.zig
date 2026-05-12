@@ -113,7 +113,7 @@ pub fn Caster(comptime T: type) type {
                     // Special-case ElzCallback: wrap any callable Elz value.
                     if (T == ElzCallback) {
                         return switch (v) {
-                            .closure, .procedure, .foreign_procedure, .cont_aware_procedure => ElzCallback{ .proc = v },
+                            .closure, .vm_closure, .procedure, .foreign_procedure, .cont_aware_procedure => ElzCallback{ .proc = v },
                             else => ElzError.InvalidArgument,
                         };
                     }

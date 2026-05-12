@@ -2,9 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("./core.zig");
 const env_setup = @import("./env_setup.zig");
-const eval = @import("./eval.zig");
 const parser = @import("./parser.zig");
 const gc = @import("gc.zig");
+const compiler = @import("./compiler.zig");
+const vm = @import("./vm.zig");
 
 var gc_initialized = std.atomic.Value(bool).init(false);
 
@@ -152,16 +153,23 @@ pub const Interpreter = struct {
         try env_setup.populate_json(&self);
         try env_setup.populate_regex(&self);
 
+        // Register the VM hook before loading stdlib so vm_closure values dispatched
+        // during stdlib evaluation are handled correctly.
+        self.run_vm_closure = @import("vm.zig").runFromEval;
+
         const std_lib_source = @embedFile("../stdlib/std.elz");
         var std_lib_forms = try parser.readAll(std_lib_source, allocator);
         defer std_lib_forms.deinit(allocator);
 
-        var fuel: u64 = 1_000_000;
-        for (std_lib_forms.items) |form| {
-            _ = try eval.eval(&self, &form, self.root_env, &fuel);
+        if (std_lib_forms.items.len > 0) {
+            var fuel: u64 = std.math.maxInt(u64);
+            const proto = try @import("./compiler.zig").Compiler.compileTopLevel(allocator, &self, std_lib_forms.items, self.root_env, &fuel);
+            // Protos are GC-allocated and may be referenced by closures stored in the environment.
+            // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+            var machine = try @import("./vm.zig").VM.init(&self);
+            defer machine.deinit();
+            _ = try machine.runProto(proto, null);
         }
-
-        self.run_vm_closure = @import("vm.zig").runFromEval;
 
         return self;
     }
@@ -183,24 +191,37 @@ pub const Interpreter = struct {
         var forms = try parser.readAll(source, self.allocator);
         defer forms.deinit(self.allocator);
 
+        if (forms.items.len == 0) return .unspecified;
+
         // Set the eval start time for time-limited execution
         if (self.time_limit_ms != null) {
             self.eval_start_ms = currentTimeMs();
             self.time_check_counter = 0;
         }
 
-        var result: core.Value = .unspecified;
-        for (forms.items) |form| {
-            result = try wrapEvalResult(self, eval.eval(self, &form, self.root_env, fuel));
-        }
-        return result;
+        const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, fuel);
+        // Protos are GC-allocated and may be referenced by closures stored in the environment.
+        // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+
+        var machine = try vm.VM.init(self);
+        defer machine.deinit();
+
+        return wrapEvalResult(self, machine.runProto(proto, fuel));
     }
 
     /// Evaluates a single pre-parsed Elz form in the interpreter's root environment.
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
     pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
-        return wrapEvalResult(self, eval.eval(self, form, self.root_env, fuel));
+        const forms = [_]core.Value{form.*};
+        const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, &forms, self.root_env, fuel);
+        // Protos are GC-allocated and may be referenced by closures stored in the environment.
+        // Do NOT call proto.deinit() — the GC collects sub-protos when closures are released.
+
+        var machine = try vm.VM.init(self);
+        defer machine.deinit();
+
+        return wrapEvalResult(self, machine.runProto(proto, fuel));
     }
 
     /// Converts internal CPS signals into embedder-facing errors at the API boundary.

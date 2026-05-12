@@ -36,6 +36,8 @@ pub const VM = struct {
     frame_count: usize,
     /// Linked list of open upvalues (sorted by stack slot, innermost first).
     open_upvalues: ?*Upvalue,
+    /// Optional fuel counter: decremented each instruction; returns ExecutionBudgetExceeded when 0.
+    fuel: ?*u64 = null,
 
     pub fn init(interp: *@import("interpreter.zig").Interpreter) !VM {
         const alloc = interp.allocator;
@@ -84,28 +86,56 @@ pub const VM = struct {
     // -----------------------------------------------------------------------
 
     fn captureUpvalue(self: *VM, slot: usize) !*Upvalue {
-        // Reuse existing open upvalue for the same slot.
-        var uv = self.open_upvalues;
-        while (uv) |u| {
-            if (u.state == .open and u.state.open == slot) return u;
-            uv = null; // simple linked list — walk would need a next ptr
+        // Walk the sorted list to find or insert at the right position.
+        // List is sorted descending by slot so innermost (highest) slots come first.
+        var prev: ?*Upvalue = null;
+        var cur = self.open_upvalues;
+        while (cur) |u| {
+            switch (u.state) {
+                .open => |idx| {
+                    if (idx == slot) return u;
+                    if (idx < slot) break; // insertion point
+                    prev = u;
+                    cur = u.next;
+                },
+                .closed => {
+                    prev = u;
+                    cur = u.next;
+                },
+            }
         }
         const new_uv = try self.interp.allocator.create(Upvalue);
-        new_uv.* = .{ .state = .{ .open = slot } };
-        // Prepend to open list (we skip a proper sorted list for simplicity).
-        new_uv.* = .{ .state = .{ .open = slot } };
-        self.open_upvalues = new_uv;
+        new_uv.* = .{ .state = .{ .open = slot }, .next = cur };
+        if (prev) |p| {
+            p.next = new_uv;
+        } else {
+            self.open_upvalues = new_uv;
+        }
         return new_uv;
     }
 
     fn closeUpvaluesAbove(self: *VM, slot: usize) void {
-        var uv = self.open_upvalues;
-        while (uv) |u| {
-            if (u.state == .open and u.state.open >= slot) {
-                u.close(self.stack);
-                if (u == self.open_upvalues) self.open_upvalues = null;
+        // Walk the full list and close all open upvalues at slot >= threshold.
+        var prev: ?*Upvalue = null;
+        var cur = self.open_upvalues;
+        while (cur) |u| {
+            const next = u.next;
+            switch (u.state) {
+                .open => |idx| if (idx >= slot) {
+                    u.close(self.stack);
+                    // Remove from list.
+                    if (prev) |p| {
+                        p.next = next;
+                    } else {
+                        self.open_upvalues = next;
+                    }
+                    cur = next;
+                    continue;
+                },
+                else => {},
             }
-            uv = null;
+            prev = u;
+            cur = next;
         }
     }
 
@@ -124,7 +154,9 @@ pub const VM = struct {
             },
             .procedure => |prim| {
                 var args = try self.buildArgList(argc); // pops args + callee
-                const result = try prim(self.interp, self.interp.root_env, args, &self.interp.cps.escape_id_counter);
+                // Use max fuel so only the wall-clock time limit (checkTimeBudget) bounds execution.
+                var prim_fuel: u64 = std.math.maxInt(u64);
+                const result = try prim(self.interp, self.interp.root_env, args, &prim_fuel);
                 args.deinit();
                 try self.push(result);
             },
@@ -169,23 +201,27 @@ pub const VM = struct {
             const frame = &self.frames[self.frame_count - 1];
             // Close upvalues for the current frame before reuse.
             self.closeUpvaluesAbove(frame.stack_base);
-            // Slide args down to frame base (below callee slot).
+            // Slide args down to the ORIGINAL frame base, not callee_pos.
+            // This ensures return_val restores stack_top to the correct position
+            // for the outer caller, regardless of how deep in the frame the callee
+            // was found (e.g. a letrec-bound variable at slot N).
             const callee_pos = self.stack_top - argc - 1;
+            const new_base = frame.stack_base;
             for (0..argc) |i| {
-                self.stack[callee_pos + i] = self.stack[callee_pos + 1 + i];
+                self.stack[new_base + i] = self.stack[callee_pos + 1 + i];
             }
-            self.stack_top = callee_pos + argc;
+            self.stack_top = new_base + argc;
             // Handle variadic rest argument.
             if (variadic) {
-                try self.buildRestArg(expected, argc, callee_pos);
+                try self.buildRestArg(expected, argc, new_base);
             }
-            // Pad to local_count.
-            while (self.stack_top < callee_pos + proto.local_count) {
+            // Pad only to arity (parameters); body code initialises any extra locals.
+            while (self.stack_top < new_base + expected) {
                 try self.push(.unspecified);
             }
             frame.closure = cl;
             frame.ip = 0;
-            frame.stack_base = callee_pos;
+            frame.stack_base = new_base;
         } else {
             if (self.frame_count >= FRAMES_SIZE) return ElzError.StackOverflow;
             // Non-tail call: push new frame.
@@ -200,8 +236,8 @@ pub const VM = struct {
             if (variadic) {
                 try self.buildRestArg(expected, argc, callee_pos);
             }
-            // Pad locals.
-            while (self.stack_top < stack_base + proto.local_count) {
+            // Pad only to arity (parameters); body code initialises any extra locals.
+            while (self.stack_top < stack_base + expected) {
                 try self.push(.unspecified);
             }
             self.frames[self.frame_count] = .{
@@ -281,6 +317,12 @@ pub const VM = struct {
 
             // Time budget check — delegates to the shared implementation on Interpreter.
             try self.interp.checkTimeBudget();
+
+            // Step-count fuel check.
+            if (self.fuel) |f| {
+                if (f.* == 0) return ElzError.ExecutionBudgetExceeded;
+                f.* -= 1;
+            }
 
             switch (instr.op) {
                 // --- Constants ---
@@ -399,33 +441,17 @@ pub const VM = struct {
                     try self.push(Value{ .vm_closure = cl });
                 },
                 .capture_local => {
-                    // Follows make_closure: capture local[a] as upvalue for the closure on top.
+                    // Follows make_closure: a=local_slot, b=upvalue_fill_index.
                     const cl = self.peek(0).vm_closure;
                     const slot = frame.stack_base + instr.a;
                     const uv = try self.captureUpvalue(slot);
-                    // Find first empty upvalue slot.
-                    for (cl.upvals, 0..) |*uvp, i| {
-                        if (i < cl.upvals.len) {
-                            // Find the next unset upvalue.
-                            _ = uvp;
-                        }
-                    }
-                    for (cl.upvals) |*uvp| {
-                        if (@intFromPtr(uvp.*) == 0) {
-                            uvp.* = uv;
-                            break;
-                        }
-                    }
+                    cl.upvals[instr.b] = uv;
                 },
                 .capture_upval => {
+                    // Follows make_closure: a=parent_upval_index, b=upvalue_fill_index.
                     const cl = self.peek(0).vm_closure;
                     const parent_uv = frame.closure.upvals[instr.a];
-                    for (cl.upvals) |*uvp| {
-                        if (@intFromPtr(uvp.*) == 0) {
-                            uvp.* = parent_uv;
-                            break;
-                        }
-                    }
+                    cl.upvals[instr.b] = parent_uv;
                 },
                 .close_upval => {
                     self.closeUpvaluesAbove(frame.stack_base + instr.a);
@@ -483,18 +509,15 @@ pub const VM = struct {
     // Execute a top-level FuncProto
     // -----------------------------------------------------------------------
 
-    pub fn runProto(self: *VM, proto: *FuncProto) ElzError!Value {
+    pub fn runProto(self: *VM, proto: *FuncProto, fuel: ?*u64) ElzError!Value {
+        self.fuel = fuel;
         const cl = try self.interp.allocator.create(VmClosure);
         cl.* = .{ .proto = proto, .upvals = &.{} };
-        // Push a dummy "callee" slot so stack_base = 0.
-        try self.push(Value{ .vm_closure = cl });
         self.frames[0] = .{ .closure = cl, .ip = 0, .stack_base = 0 };
         self.frame_count = 1;
-        self.stack_top = proto.local_count;
-        // Initialize locals to #f
-        for (0..proto.local_count) |i| {
-            self.stack[i] = .{ .boolean = false };
-        }
+        // Start with an empty working stack. The body code is responsible for
+        // initialising its own locals (letrec emits load_false, let pushes init values).
+        self.stack_top = 0;
         return self.run();
     }
 };
@@ -506,7 +529,6 @@ pub const VM = struct {
 fn isTruthy(v: Value) bool {
     return switch (v) {
         .boolean => |b| b,
-        .nil => false,
         else => true,
     };
 }
@@ -563,7 +585,8 @@ test "vm basic execution" {
     const parsed = try @import("parser.zig").read(source, allocator);
     const forms = [_]Value{parsed};
 
-    const proto = try compiler_mod.Compiler.compileTopLevel(allocator, &interp, &forms, interp.root_env);
+    var fuel: u64 = 1_000_000;
+    const proto = try compiler_mod.Compiler.compileTopLevel(allocator, &interp, &forms, interp.root_env, &fuel);
     defer {
         proto.deinit();
         allocator.destroy(proto);
@@ -572,7 +595,7 @@ test "vm basic execution" {
     var vm = try VM.init(&interp);
     defer vm.deinit();
 
-    const result = try vm.runProto(proto);
+    const result = try vm.runProto(proto, null);
     try testing.expect(result == .exact_integer);
     try testing.expectEqual(@as(i64, 3), result.exact_integer);
 }

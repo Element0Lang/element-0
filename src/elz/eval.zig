@@ -2154,12 +2154,13 @@ test "eval fuel exhaustion" {
     try std.testing.expectError(ElzError.ExecutionBudgetExceeded, result);
 }
 
-test "eval call/cc basic escape" {
+test "eval call/ec basic escape" {
     var interp = interpreter.Interpreter.init(.{}) catch unreachable;
     defer interp.deinit();
     var fuel: u64 = 10000;
 
-    const result = try interp.evalString("(+ 1 (call/cc (lambda (k) (+ 2 (k 10)))))", &fuel);
+    // call/ec (escape continuation) has the same escape semantics as call/cc for early exit.
+    const result = try interp.evalString("(+ 1 (call/ec (lambda (k) (+ 2 (k 10)))))", &fuel);
     try std.testing.expect(result == .exact_integer);
     try std.testing.expectEqual(@as(i64, 11), result.exact_integer);
 }

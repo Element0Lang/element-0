@@ -177,6 +177,7 @@ pub const Upvalue = struct {
         open: usize, // index into the VM stack
         closed: Value, // captured value after the owning frame exits
     },
+    next: ?*Upvalue = null, // linked list of open upvalues in the VM
 
     pub fn get(self: *const Upvalue, stack: []Value) Value {
         return switch (self.state) {
@@ -193,8 +194,9 @@ pub const Upvalue = struct {
     }
 
     pub fn close(self: *Upvalue, stack: []Value) void {
-        if (self.state == .open) {
-            self.state = .{ .closed = stack[self.state.open] };
+        switch (self.state) {
+            .open => |idx| self.state = .{ .closed = stack[idx] },
+            .closed => {},
         }
     }
 };
