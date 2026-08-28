@@ -1,4 +1,4 @@
-# Feature Roadmap
+# Roadmap
 
 This document includes the roadmap for the Element 0 programming language and Elz.
 It outlines the features to be implemented and their current status.
@@ -6,148 +6,179 @@ It outlines the features to be implemented and their current status.
 > [!IMPORTANT]
 > This roadmap is a work in progress and is subject to change without notice.
 
-### 1. Host API and FFI
+### Design Decisions
 
-* **Embedding API**
-    * [x] An `Interpreter` struct that manages all interpreter states.
-    * [x] An `Environment` struct representing variable scopes.
-    * [x] `init` and `deinit` functions for lifecycle management.
-    * [x] `evalString` to execute Element 0 code from Zig.
-    * [x] Define global variables from Zig via the root environment.
-* **FFI**
-    * [x] Support for variadic functions. Zig functions can accept a variable number of Element 0 arguments.
-    * [x] Graceful error propagation from Zig functions to the Element 0 environment.
-    * [x] Support for opaque pointers. Element 0 can hold references to Zig data structures.
+* Continuations are delimited, not first-class. Elz provides escape continuations
+  (`call/ec`, with `call-with-current-continuation` as an alias) and will add delimited
+  continuations (`shift`/`reset`, Phase 5) instead of full re-entrant `call/cc`. Full
+  `call/cc` interacts badly with the Zig FFI boundary because native frames cannot be
+  captured. Delimited continuations cover the practical use cases, such as generators,
+  early exit, and async patterns. This is a deliberate, permanent departure from the
+  standard, and it matches what practical embedded Schemes do.
+* The numeric tower is kept. Exact integers, exact rationals, complex numbers, and
+  exact/inexact tagging are already implemented.
 
-### 2. R5RS Compliance
+---
 
-#### 2.1. Core Data Types and Representation
+## Implemented
 
-* [x] Booleans (`#t` and `#f`)
-* [x] Numbers (floating-point)
-* [x] Symbols
-* [x] Pairs and Lists
-* [x] Characters
-* [x] Strings
-* [x] Procedures (closures)
-* [x] Vectors
-* [x] Hash Maps
-* [x] Ports
+### Host API and FFI
 
-#### 2.2. Evaluation Semantics and Special Forms
+* Embedding API: `Interpreter` and `Environment` structs, `init`/`deinit` lifecycle,
+  `evalString`, and global variable definition from Zig.
+* FFI: variadic Zig functions, graceful error propagation, opaque pointers to Zig
+  data, complex Zig struct passing, Elz closures as Zig callbacks, and automatic
+  conversions for `bool`, `[]const u8`, and `?T`.
+* Sandboxing: a sandboxed mode that restricts I/O and sensitive operations, and
+  execution time limits (`time_limit_ms` in `SandboxFlags`) backed by a VM fuel counter.
 
-* [x] Self-evaluating expressions
-* [x] `quote`
-* [x] `if`
-* [x] `define`
-* [x] `set!`
-* [x] `lambda` (fixed, all-variadic `(lambda args body)`, and dotted-rest `(lambda (a . rest) body)`)
-* [x] `begin`
-* [x] `let`, `let*`, `letrec`
-* [x] `cond`
-* [x] `case`
-* [x] `and`
-* [x] `or`
-* [x] `do`
-* [x] `delay`
-* [x] Internal definitions at body head
+### Language Core
 
-#### 2.3. Standard Library Procedures
+The R5RS core is complete and verified by the test suite.
 
-* **Equivalence Predicates**
-    * [x] `eq?`, `eqv?`, `equal?`
-* **Type Predicates**
-    * [x] `null?`, `boolean?`, `symbol?`, `number?`, `list?`, `pair?`, `string?`
-    * [x] `procedure?`, `char?`, `integer?`, `not`
-    * [x] `complex?`, `real?`, `rational?`, `exact?`, `inexact?`
-* **Pair and List Manipulation**
-    * [x] `cons`, `car`, `cdr`, `pair?`
-    * [x] `list`, `length`, `append`, `reverse`, `map`
-    * [x] `list-ref`, `list-tail`, `memq`, `memv`, `member`, `assq`, `assv`, `assoc`
-    * [x] `set-car!`, `set-cdr!`
-    * [x] `for-each`
-    * [x] Full `caar` through `cddddr` family (24 combinators)
-* **Numeric Operations**
-    * [x] `+`, `-`, `*`, `/`
-    * [x] `=`, `<`, `>`, `<=`, `>=`
-    * [x] `abs`, `sqrt`, `max`, `min`
-    * [x] `floor`, `ceiling`, `round`, `truncate`
-    * [x] `expt`, `exp`, `log`
-    * [x] `even?`, `odd?`, `zero?`, `positive?`, `negative?`
-    * [x] `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (one and two-argument forms)
-    * [x] `quotient`, `remainder`, `modulo`, `gcd`, `lcm`
-    * [x] `exact->inexact`, `inexact->exact`
-* **Symbol Handling**
-    * [x] `symbol->string`, `string->symbol`
-* **String and Character Manipulation**
-    * [x] `string-length`, `string-ref`, `string-set!`, `string-copy`, `string-fill!` (ASCII)
-    * [x] `string`, `string->list`, `list->string`
-    * [x] `string=?`, `string<?`, `string>?`, `string<=?`, `string>=?`
-    * [x] `string-ci=?`, `string-ci<?`, `string-ci>?`, `string-ci<=?`, `string-ci>=?`
-    * [x] `char=?`, `char<?`, `char>?`, `char<=?`, `char>=?`
-    * [x] `char-ci=?`, `char-ci<?`, `char-ci>?`, `char-ci<=?`, `char-ci>=?`
-    * [x] `char-alphabetic?`, `char-numeric?`, `char-whitespace?`, `char-upper-case?`, `char-lower-case?`
-    * [x] `char-upcase`, `char-downcase`
-    * [x] `char->integer`, `integer->char`
-* **Vector Manipulation**
-    * [x] `vector`, `make-vector`, `vector-ref`, `vector-set!`, `vector-fill!`, `vector-length`, `vector?`, `list->vector`, `vector->list`
-* **Hash Map Manipulation**
-    * [x] `make-hash-map`, `hash-map-set!`, `hash-map-ref`, `hash-map-remove!`, `hash-map-contains?`, `hash-map-count`, `hash-map?`
+* Data types: booleans, the full numeric tower, symbols, pairs and lists, characters,
+  UTF-8 strings, procedures and closures, vectors, hash maps, and ports.
+* Special forms: `quote`, `if`, `define`, `set!`, `lambda` (fixed, variadic, and
+  dotted-rest), `begin`, `let`/`let*`/`letrec` (including named `let`), `cond`, `case`,
+  `and`, `or`, `when`, `unless`, `do`, `delay`, and internal definitions.
+* Bytecode VM: stack-based with call frames and upvalues. Proper tail calls are
+  implemented with a dedicated `tail_call` opcode that reuses the current frame.
+* Macros: `define-syntax`, `let-syntax`, `letrec-syntax`, and `syntax-rules` with tail
+  ellipsis and identifier-renaming hygiene, plus `define-macro` for procedural macros.
+  Nested and mid-list ellipsis are not yet supported; see Phase 2.
+* Standard procedures: equivalence and type predicates, the full pair and list section,
+  numeric operations with radix-aware `number->string` and `string->number`, the full
+  string and character sections (including all `-ci` comparisons), vectors, hash maps,
+  `apply`, `eval`, `delay`/`force`, `values`/`call-with-values`, `dynamic-wind`, and
+  `call/ec`.
+* I/O: `read`, `write`, `display`, file ports, `read-line`, `read-char`, `peek-char`,
+  `char-ready?`, `current-input-port`, `current-output-port`, `with-input-from-file`,
+  `call-with-input-file` and friends, and `load`.
+* Beyond R5RS: error handling (`try`/`catch`), a module system, regular expressions
+  (NFA engine), `format`, JSON serialization, OS and filesystem procedures, date and
+  time, `gensym`, and list utilities (`filter`, `fold-left`, and `fold-right`).
 
-#### 2.4. Syntactic Extensions
+---
 
-* [x] `quasiquote` (`` ` ``), `unquote` (`,`), `unquote-splicing` (`,@`)
-* [x] `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules` with tail ellipsis and identifier-renaming hygiene. Nested ellipsis and mid-list
-  ellipsis are not yet supported.
+## Phase 1: Numeric Completeness and Small Library Gaps
 
-#### 2.5. Advanced Control Flow
+This phase is leaf work; each item is a new primitive over machinery that already
+exists. The complex and rational values already exist in the tower, so this phase
+exposes the standard interface to them.
 
-* [x] `apply`
-* [x] `eval`
-* [x] `delay`, `force`
-* [x] `values`, `call-with-values`
-* [x] `call-with-escape-continuation` (`call/ec`)
+* Rational accessors
+    * [ ] `numerator`, `denominator`
+    * [ ] `rationalize`
+* Complex accessors and constructors (`(scheme complex)`)
+    * [ ] `make-rectangular`, `make-polar`
+    * [ ] `real-part`, `imag-part`, `magnitude`, `angle`
+* R7RS numeric names and predicates
+    * [ ] `exact`, `inexact` (keep `exact->inexact`/`inexact->exact` as aliases)
+    * [ ] `exact-integer?`, `exact-integer-sqrt`, `square`
+    * [ ] `finite?`, `infinite?`, `nan?`
+    * [ ] `floor/`, `floor-quotient`, `floor-remainder`
+    * [ ] `truncate/`, `truncate-quotient`, `truncate-remainder`
+* Small list, string, vector, and character completions (mostly implementable in
+  `std.elz`)
+    * [ ] `make-list`, `list-copy`, `list-set!`
+    * [ ] `string-map`, `string-for-each`, `string-copy!`
+    * [ ] `string-upcase`, `string-downcase`, `string-foldcase`, `char-foldcase`,
+      `digit-value`
+    * [ ] `vector-map`, `vector-for-each`, `vector-copy`, `vector-copy!`,
+      `vector-append`, `vector->string`, `string->vector`
+    * [ ] `symbol=?`, `boolean=?`
+    * [ ] `write-string`
 
-#### 2.6. I/O System
+## Phase 2: Full `syntax-rules` and Derived Syntax
 
-* [x] `write`, `display`, `newline`, `write-char` (with optional port argument)
-* [x] `load`
-* [x] Streaming `read` from a port and `read-string` from a string
-* [x] `open-input-file`, `open-output-file`, `close-input-port`, `close-output-port`
-* [x] `read-line`, `read-char`, `peek-char`, `char-ready?`
-* [x] `write-port`, `input-port?`, `output-port?`, `port?`, `eof-object?`
-* [x] `current-input-port`, `current-output-port`
-* [x] `with-input-from-file`, `with-output-to-file`, `call-with-input-file`, `call-with-output-file`
+Users hit missing ellipsis support immediately when porting Scheme macros, so this
+phase has the highest value. It requires restructuring the matcher and expander in
+`macros.zig` to track ellipsis depth per pattern variable.
 
-### 3. Expanded Standard Library
+* Expander rewrite
+    * [ ] Nested ellipsis patterns
+    * [ ] Mid-list (non-tail) ellipsis patterns
+    * [ ] `_` wildcard patterns
+    * [ ] Custom ellipsis identifier (`(syntax-rules ooo (lit ...) rules ...)`)
+    * [ ] `syntax-error`
+* Derived forms unlocked by the expander
+    * [ ] `let-values`, `let*-values`, `define-values`
+    * [ ] `case-lambda`
+    * [ ] `case` with `=>` clauses
+    * [ ] `cond-expand` (with a `features` procedure)
 
-* [x] **Math Library**: More common mathematical functions (like trigonometric and logarithmic functions).
-* [x] **List Utilities**: `filter`, `fold-left`, `fold-right`, and other common list processing functions.
-* [x] **String Utilities**: `string-append`, `string-ref`, `substring`, `string-split`, `number->string`, `string->number`, `make-string`, `string=?`,
-  `string<?`, `string>?`, `string<=?`, `string>=?`, `gensym` implemented.
-* [x] **Regular Expressions**: `regex-match?`, `regex-search`, `regex-replace`, `regex-split` implemented with NFA-based engine supporting literals,
-  `.`, `*`, `+`, `?`, character classes, and anchors.
-* [x] **OS and Filesystem**: `getenv`, `file-exists?`, `delete-file`, `current-directory`, `directory-list`, `rename-file` implemented.
-* [x] **Advanced I/O**: `format` procedure with `~a`, `~s`, `~%`, `~~` directives, and `value->string` implemented.
-* [x] **Date and Time**: `current-time`, `current-time-ms`, `time->components`, `sleep-ms` implemented.
+## Phase 3: R7RS Data Types and Port Completions
 
-### 4. Advanced Language Features (Post-R5RS)
+* Records
+    * [ ] `define-record-type` (a new tagged value in `core.zig` with constructor,
+      predicate, accessors, and modifiers)
+* Bytevectors (a good fit for Zig interop)
+    * [ ] `bytevector`, `make-bytevector`, `bytevector?`, `bytevector-length`
+    * [ ] `bytevector-u8-ref`, `bytevector-u8-set!`
+    * [ ] `bytevector-copy`, `bytevector-copy!`, `bytevector-append`
+    * [ ] `utf8->string`, `string->utf8`
+* String ports
+    * [ ] `open-input-string`, `open-output-string`, `get-output-string`
+* Binary ports
+    * [ ] `open-input-bytevector`, `open-output-bytevector`, `get-output-bytevector`
+    * [ ] `open-binary-input-file`, `open-binary-output-file`
+    * [ ] `read-u8`, `write-u8`, `peek-u8`, `u8-ready?`, `read-bytevector`,
+      `read-bytevector!`, `write-bytevector`
+    * [ ] `binary-port?`, `textual-port?`
+* Port plumbing
+    * [ ] `current-error-port`
+    * [ ] `close-port`, `call-with-port`, `flush-output-port`
+    * [ ] `input-port-open?`, `output-port-open?`
+    * [ ] `eof-object` (the constructor; the predicate exists)
 
-* [x] **Error Handling**: A mechanism for handling runtime errors, like `try/catch` or `with-handler`.
-* [x] **Module System**: A system for organizing code into reusable and encapsulated modules.
-* [x] `define-macro` (simple procedural macros)
-* [x] `dynamic-wind` and `call/ec` (escape-only continuations). `call/cc` is aliased to `call/ec`; full first-class continuations are not supported.
-* [x] **Numeric tower**: exact integers, exact rationals, complex numbers, exact/inexact tagging, parser support for `#e` and `#i` prefixes.
+## Phase 4: Exceptions, Parameters, and Environment
 
-### 5. Better Host Integration and Embeddability
+This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
+`current-time`) with the R7RS surface.
 
-* **Advanced FFI**
-    * [x] Support for passing complex Zig structs.
-    * [x] Ability to pass Elz closures to Zig as callbacks.
-    * [x] Automatic type conversions for `bool`, `[]const u8`, and `?T` (optional) types.
-* **Sandboxing and Security**
-    * [x] A sandboxed mode to restrict access to I/O and other sensitive operations.
-    * [x] Host-level controls for execution time limits (`time_limit_ms` in `SandboxFlags`).
-* **Serialization**
-    * [x] `json-serialize` and `json-deserialize` for JSON round-tripping.
-    * [x] `value->string` for S-expression serialization.
+* Exceptions (mapped onto the existing `try`/`catch` mechanism)
+    * [ ] `raise`, `raise-continuable`
+    * [ ] `with-exception-handler`
+    * [ ] `guard` (depends on the Phase 2 expander)
+    * [ ] `error`, `error-object?`, `error-object-message`, `error-object-irritants`
+    * [ ] `read-error?`, `file-error?`
+* Dynamic binding
+    * [ ] `make-parameter`, `parameterize`
+* Process context (`(scheme process-context)`)
+    * [ ] `get-environment-variable` (a rename of `getenv`),
+      `get-environment-variables`
+    * [ ] `command-line`, `emergency-exit` (`exit` exists)
+* Time (`(scheme time)`, over the existing `current-time` and `current-time-ms`)
+    * [ ] `current-second`, `current-jiffy`, `jiffies-per-second`
+* Lazy evaluation completions
+    * [ ] `promise?`, `delay-force` (`delay`, `force`, and `make-promise` exist)
+* Eval and libraries
+    * [ ] `environment` for `eval`, and `interaction-environment`
+    * [ ] `define-library` surface syntax lowering to the existing module system
+    * [ ] `include`, `include-ci`
+* Writer
+    * [ ] `write` with datum labels for cyclic data (required by R7RS),
+      `write-shared`, `write-simple`
+
+## Phase 5: Delimited Continuations
+
+This phase adds `shift`/`reset` to the VM. Frames and the stack are already heap
+slices, so capturing a delimited segment copies only the frames between the prompt and
+the capture point.
+
+* [ ] `reset`/`shift` (prompt and capture opcodes, and segment copy and restore)
+* [ ] `dynamic-wind` integration with captured segments
+* [ ] FFI boundary rule (an error when a `reset`/`shift` pair straddles a native frame)
+* [ ] Documentation of the `call/cc` = `call/ec` semantics in the manual
+
+---
+
+## Beyond the Standard
+
+* [ ] Source locations in errors: line and column tracked from the parser through to
+  runtime error reports and stack traces.
+* [ ] R7RS conformance suite: a vendored external test suite (e.g., Chibi's) as a
+  conformance gate with a public compliance score.
+* [ ] Documentation: a language reference covering every implemented procedure and the
+  embedding API.
+* [ ] Performance: a benchmark suite tracked over time (see `benches/`).

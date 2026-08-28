@@ -8,7 +8,7 @@ Element 0 is a small, embeddable Lisp dialect inspired by Scheme, implemented in
 The interpreter (Elz) is designed to integrate into Zig applications as a scripting engine.
 Priorities, in order:
 
-1. Correctness and R5RS compliance where applicable.
+1. Correctness and R7RS-small compliance where applicable (see `ROADMAP.md`).
 2. Clean, minimal public API for embedding into Zig projects.
 3. Maintainable and well-tested code.
 4. Cross-platform support (Linux, macOS, and Windows).
@@ -22,12 +22,24 @@ Priorities, in order:
 
 ## Writing Style
 
+- Write in simple, plain English. Use short sentences and everyday words.
 - Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
-- Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
+- Do not use em dashes. Restructure the sentence or use a semicolon instead.
+- Avoid colons in the middle of sentences, in new prose. A colon that introduces a code block or a list is fine;
+  existing text is reworded when it is touched anyway, not in a sweep.
 - Avoid colorful adjectives and adverbs. Write "garbage collector" not "efficient garbage collector", "parser" not "robust parser".
-- Use noun phrases for checklist items, not imperative verbs. Write "opcode timing table" not "build the opcode timing table".
+- Prefer noun phrases for checklist items over imperative verbs. Write "opcode timing table" not "build the opcode timing table".
 - Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
   at, to, by, of) stay lowercase unless they are the first word.
+- Do not bold the lead-in of a list item. Write "Vectors and hash maps: ..." not "**Vectors and hash maps**: ...".
+- Use sentence case for the lead-in of a list item. Write "Upvalue capture: ..." not "Upvalue Capture: ...". Proper nouns keep their capitals.
+- Capitalize only the first part of a hyphenated compound: "Tail-call Detection" in a heading, "Stack-based" at the start of a sentence, and
+  "stack-based bytecode VM" elsewhere. Never write "Tail-Call".
+- Start each sentence with a capital letter, capitalize proper nouns (Zig, Scheme, Element 0, Elz, R7RS), and leave common nouns lowercase
+  in the middle of a sentence.
+- Write correct and complete sentences.
+- Avoid made-up words and abbreviations.
+- Use participial phrases scarcely.
 
 ## Repository Layout
 
