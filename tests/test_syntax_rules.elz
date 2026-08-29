@@ -65,4 +65,66 @@
 (test-case "nested when"
   (= (when #t (when #t 99)) 99))
 
+;; --- Full syntax-rules: nested and mid-list ellipsis ---
+
+(define-syntax my-let
+  (syntax-rules ()
+    ((_ ((name val) ...) body1 body2 ...)
+     ((lambda (name ...) body1 body2 ...) val ...))))
+(test-case "my-let over lambda"
+  (= (my-let ((a 1) (b 2)) (+ a b)) 3))
+
+(define-syntax firsts
+  (syntax-rules ()
+    ((_ (x y ...) ...) '(x ...))))
+(test-case "nested ellipsis, outer vars"
+  (equal? (firsts (1 2 3) (4 5) (6)) '(1 4 6)))
+
+(define-syntax rests
+  (syntax-rules ()
+    ((_ (x y ...) ...) '((y ...) ...))))
+(test-case "nested ellipsis, inner groups"
+  (equal? (rests (1 2 3) (4 5) (6)) '((2 3) (5) ())))
+
+(define-syntax splice-all
+  (syntax-rules ()
+    ((_ (x ...) ...) '(x ... ...))))
+(test-case "double ellipsis splices one level"
+  (equal? (splice-all (1 2) (3) (4 5 6)) '(1 2 3 4 5 6)))
+
+(define-syntax mid
+  (syntax-rules ()
+    ((_ a ... b) '(b a ...))))
+(test-case "mid-list ellipsis"
+  (equal? (mid 1 2 3) '(3 1 2)))
+(test-case "mid-list ellipsis with zero repetitions"
+  (equal? (mid 7) '(7)))
+
+(define-syntax second-of
+  (syntax-rules ()
+    ((_ _ x) x)))
+(test-case "underscore wildcard"
+  (= (second-of 1 2) 2))
+
+(define-syntax ooo-list
+  (syntax-rules ooo ()
+    ((_ x ooo) '(x ooo))))
+(test-case "custom ellipsis identifier"
+  (equal? (ooo-list 1 2 3) '(1 2 3)))
+
+(define-syntax literal-ellipsis
+  (syntax-rules ()
+    ((_) '(... (a ...)))))
+(test-case "ellipsis escape in template"
+  (equal? (literal-ellipsis) '(a ...)))
+
+(test-case "syntax-error raises at expansion"
+  (try
+    (begin
+      (eval '(begin
+               (define-syntax boom (syntax-rules () ((_) (syntax-error "boom"))))
+               (boom)))
+      #f)
+    (catch e #t)))
+
 (report-summary)

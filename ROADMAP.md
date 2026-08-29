@@ -96,11 +96,12 @@ phase has the highest value. It requires restructuring the matcher and expander 
 `macros.zig` to track ellipsis depth per pattern variable.
 
 * Expander rewrite
-    * [ ] Nested ellipsis patterns
-    * [ ] Mid-list (non-tail) ellipsis patterns
-    * [ ] `_` wildcard patterns
-    * [ ] Custom ellipsis identifier (`(syntax-rules ooo (lit ...) rules ...)`)
-    * [ ] `syntax-error`
+    * [x] Nested ellipsis patterns
+    * [x] Mid-list (non-tail) ellipsis patterns
+    * [x] `_` wildcard patterns
+    * [x] Custom ellipsis identifier (`(syntax-rules ooo (lit ...) rules ...)`)
+    * [x] `(<ellipsis> <template>)` escape in templates
+    * [x] `syntax-error`
 * Derived forms unlocked by the expander
     * [ ] `let-values`, `let*-values`, `define-values`
     * [ ] `case-lambda`

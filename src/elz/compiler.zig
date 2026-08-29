@@ -313,6 +313,14 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, sym, "let-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "letrec-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "syntax-rules")) return self.compileSyntaxRules(head, args, env);
+        if (std.mem.eql(u8, sym, "syntax-error")) {
+            if (args == .pair and args.pair.car == .string) {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string}) catch null;
+            } else {
+                self.interp.last_error_message = "syntax-error";
+            }
+            return ElzError.InvalidArgument;
+        }
         if (std.mem.eql(u8, sym, "import")) return self.compileImport(args, env);
         if (std.mem.eql(u8, sym, "try")) return self.compileTry(args, env, tail, fuel);
 

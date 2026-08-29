@@ -14,36 +14,54 @@ const interpreter = @import("interpreter.zig");
 // define-macro expansion
 // ---------------------------------------------------------------------------
 
+fn cons(allocator: std.mem.Allocator, car: Value, cdr: Value) ElzError!Value {
+    const p = allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+    p.* = .{ .car = car, .cdr = cdr };
+    return Value{ .pair = p };
+}
+
+fn quoted(allocator: std.mem.Allocator, v: Value) ElzError!Value {
+    return cons(allocator, Value{ .symbol = "quote" }, try cons(allocator, v, .nil));
+}
+
 /// Expands a define-macro transformer `m` applied to `rest` in `env`.
 /// Called by compiler.zig at compile time.
+///
+/// The body is evaluated as `((lambda (params...) body...) 'arg1 'arg2 ...)`:
+/// evalForm compiles against the root environment, so parameters must be bound
+/// as lambda locals rather than in a runtime Environment the compiled code
+/// cannot see.
 pub fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
-    var unevaluated_args = std.ArrayListUnmanaged(Value).empty;
-    defer unevaluated_args.deinit(env.allocator);
+    const allocator = env.allocator;
+
+    var params: Value = .nil;
+    var pi = m.params.items.len;
+    while (pi > 0) {
+        pi -= 1;
+        params = try cons(allocator, m.params.items[pi], params);
+    }
+    const lambda_form = try cons(allocator, Value{ .symbol = "lambda" }, try cons(allocator, params, m.body));
+
+    var arg_count: usize = 0;
+    var reversed_args: std.ArrayListUnmanaged(Value) = .empty;
+    defer reversed_args.deinit(allocator);
     var current_node = rest;
-    while (current_node != .nil) {
-        const pair = switch (current_node) {
-            .pair => |p| p,
-            else => break,
-        };
-        try unevaluated_args.append(env.allocator, pair.car);
-        current_node = pair.cdr;
+    while (current_node == .pair) {
+        try reversed_args.append(allocator, current_node.pair.car);
+        arg_count += 1;
+        current_node = current_node.pair.cdr;
     }
-    if (unevaluated_args.items.len != m.params.items.len) return ElzError.WrongArgumentCount;
-    const macro_env = try Environment.init(env.allocator, m.env);
-    for (m.params.items, unevaluated_args.items) |param, arg| {
-        try macro_env.set(interp, param.symbol, arg);
+    if (arg_count != m.params.items.len) return ElzError.WrongArgumentCount;
+
+    var call_form: Value = .nil;
+    var ai = reversed_args.items.len;
+    while (ai > 0) {
+        ai -= 1;
+        call_form = try cons(allocator, try quoted(allocator, reversed_args.items[ai]), call_form);
     }
-    var body_node = m.body;
-    var expansion: Value = .unspecified;
-    while (body_node != .nil) {
-        const pair = switch (body_node) {
-            .pair => |p| p,
-            else => break,
-        };
-        expansion = try interp.evalForm(&pair.car, fuel);
-        body_node = pair.cdr;
-    }
-    return expansion;
+    call_form = try cons(allocator, lambda_form, call_form);
+
+    return interp.evalForm(&call_form, fuel);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,9 +82,11 @@ fn is_ellipsis_marker(value: Value, ellipsis: []const u8) bool {
     return car == .symbol and std.mem.eql(u8, car.symbol, ellipsis);
 }
 
+/// A pattern-variable binding. A variable under n ellipses binds to a tree of
+/// depth n: `single` at the leaves, `repeated` at each ellipsis level.
 const PatternBinding = union(enum) {
     single: Value,
-    repeated: []Value,
+    repeated: []PatternBinding,
 };
 
 const Bindings = std.StringHashMapUnmanaged(PatternBinding);
@@ -99,7 +119,6 @@ fn collect_pattern_vars(
 const MatchError = error{
     OutOfMemory,
     MissingPatternVar,
-    NestedEllipsisUnsupported,
 };
 
 fn match_pattern(
@@ -123,11 +142,7 @@ fn match_pattern(
         .nil => return input == .nil,
         .pair => |p| {
             if (is_ellipsis_marker(p.cdr, ellipsis)) {
-                const tail_pattern = p.cdr.pair.cdr;
-                if (tail_pattern == .nil) {
-                    return try match_ellipsis_tail(allocator, p.car, input, literals, ellipsis, bindings);
-                }
-                return try match_ellipsis_non_trailing(allocator, p.car, tail_pattern, input, literals, ellipsis, bindings);
+                return try match_ellipsis(allocator, p.car, p.cdr.pair.cdr, input, literals, ellipsis, bindings);
             }
             if (input != .pair) return false;
             const ip = input.pair;
@@ -154,52 +169,12 @@ fn match_pattern(
     }
 }
 
-fn match_ellipsis_tail(
-    allocator: std.mem.Allocator,
-    sub_pat: Value,
-    input: Value,
-    literals: [][]const u8,
-    ellipsis: []const u8,
-    bindings: *Bindings,
-) MatchError!bool {
-    var var_names: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer var_names.deinit(allocator);
-    try collect_pattern_vars(allocator, sub_pat, literals, ellipsis, &var_names);
-
-    var accumulators: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty;
-    defer {
-        for (accumulators.items) |*acc| acc.deinit(allocator);
-        accumulators.deinit(allocator);
-    }
-    for (var_names.items) |_| {
-        try accumulators.append(allocator, .empty);
-    }
-
-    var node = input;
-    while (node == .pair) {
-        var iter_bindings: Bindings = .empty;
-        defer iter_bindings.deinit(allocator);
-        const ok = try match_pattern(allocator, sub_pat, node.pair.car, literals, ellipsis, &iter_bindings);
-        if (!ok) return false;
-        for (var_names.items, 0..) |name, i| {
-            const got = iter_bindings.get(name) orelse return error.MissingPatternVar;
-            switch (got) {
-                .single => |v| try accumulators.items[i].append(allocator, v),
-                .repeated => return error.NestedEllipsisUnsupported,
-            }
-        }
-        node = node.pair.cdr;
-    }
-    if (node != .nil) return false;
-
-    for (var_names.items, 0..) |name, i| {
-        const slice = try accumulators.items[i].toOwnedSlice(allocator);
-        try bindings.put(allocator, name, .{ .repeated = slice });
-    }
-    return true;
-}
-
-fn match_ellipsis_non_trailing(
+/// Matches `(sub_pat <ellipsis> . tail_pattern)` against input. Handles the
+/// trailing, mid-list, and dotted-tail forms uniformly: the ellipsis consumes
+/// input elements until only enough remain for the tail pattern's pair prefix,
+/// and the remainder is matched against the tail pattern. Sub-pattern variables
+/// bind one `repeated` level deeper, so nesting composes.
+fn match_ellipsis(
     allocator: std.mem.Allocator,
     sub_pat: Value,
     tail_pattern: Value,
@@ -208,29 +183,27 @@ fn match_ellipsis_non_trailing(
     ellipsis: []const u8,
     bindings: *Bindings,
 ) MatchError!bool {
-    var tail_len: usize = 0;
+    var tail_min: usize = 0;
     var tp = tail_pattern;
     while (tp == .pair) {
-        tail_len += 1;
+        tail_min += 1;
         tp = tp.pair.cdr;
     }
 
-    var input_len: usize = 0;
+    var input_pairs: usize = 0;
     var node = input;
     while (node == .pair) {
-        input_len += 1;
+        input_pairs += 1;
         node = node.pair.cdr;
     }
-    if (node != .nil) return false;
-    if (input_len < tail_len) return false;
-
-    const ellipsis_count = input_len - tail_len;
+    if (input_pairs < tail_min) return false;
+    const repetitions = input_pairs - tail_min;
 
     var var_names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer var_names.deinit(allocator);
     try collect_pattern_vars(allocator, sub_pat, literals, ellipsis, &var_names);
 
-    var accumulators: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty;
+    var accumulators: std.ArrayListUnmanaged(std.ArrayListUnmanaged(PatternBinding)) = .empty;
     defer {
         for (accumulators.items) |*acc| acc.deinit(allocator);
         accumulators.deinit(allocator);
@@ -241,17 +214,14 @@ fn match_ellipsis_non_trailing(
 
     node = input;
     var i: usize = 0;
-    while (i < ellipsis_count) : (i += 1) {
+    while (i < repetitions) : (i += 1) {
         var iter_bindings: Bindings = .empty;
         defer iter_bindings.deinit(allocator);
         const ok = try match_pattern(allocator, sub_pat, node.pair.car, literals, ellipsis, &iter_bindings);
         if (!ok) return false;
         for (var_names.items, 0..) |name, j| {
             const got = iter_bindings.get(name) orelse return error.MissingPatternVar;
-            switch (got) {
-                .single => |v| try accumulators.items[j].append(allocator, v),
-                .repeated => return error.NestedEllipsisUnsupported,
-            }
+            try accumulators.items[j].append(allocator, got);
         }
         node = node.pair.cdr;
     }
@@ -289,6 +259,14 @@ fn collect_ellipsis_vars(
     }
 }
 
+/// Splices a list of lists into one list: ((1 2) (3)) becomes (1 2 3).
+fn splice_level(allocator: std.mem.Allocator, list_of_lists: Value) ElzError!Value {
+    if (list_of_lists == .nil) return .nil;
+    if (list_of_lists != .pair) return ElzError.InvalidArgument;
+    const rest = try splice_level(allocator, list_of_lists.pair.cdr);
+    return append_lists(allocator, list_of_lists.pair.car, rest);
+}
+
 fn expand_template(
     allocator: std.mem.Allocator,
     template: Value,
@@ -306,9 +284,24 @@ fn expand_template(
             return Value{ .symbol = try allocator.dupe(u8, s) };
         },
         .pair => |p| {
+            // (<ellipsis> <template>) escapes ellipsis interpretation in <template>.
+            if (ellipsis.len > 0 and p.car == .symbol and std.mem.eql(u8, p.car.symbol, ellipsis) and
+                p.cdr == .pair and p.cdr.pair.cdr == .nil)
+            {
+                return expand_template(allocator, p.cdr.pair.car, "", bindings);
+            }
             if (is_ellipsis_marker(p.cdr, ellipsis)) {
-                const after = p.cdr.pair.cdr;
-                const repeated_list = try expand_ellipsis(allocator, p.car, ellipsis, bindings);
+                // Count consecutive ellipses: each extra one splices a level.
+                var after = p.cdr.pair.cdr;
+                var extra: usize = 0;
+                while (is_ellipsis_marker(after, ellipsis)) {
+                    extra += 1;
+                    after = after.pair.cdr;
+                }
+                var repeated_list = try expand_ellipsis(allocator, p.car, ellipsis, bindings, extra);
+                while (extra > 0) : (extra -= 1) {
+                    repeated_list = try splice_level(allocator, repeated_list);
+                }
                 const tail = try expand_template(allocator, after, ellipsis, bindings);
                 return try append_lists(allocator, repeated_list, tail);
             }
@@ -323,11 +316,16 @@ fn expand_template(
     }
 }
 
+/// Expands one ellipsis level of `sub_tmpl`: iterates the variables that are
+/// `repeated` in the current bindings, descending one binding level per
+/// iteration element. `extra` counts additional consecutive ellipses in the
+/// template; each recurses one more level before expanding the template.
 fn expand_ellipsis(
     allocator: std.mem.Allocator,
     sub_tmpl: Value,
     ellipsis: []const u8,
     bindings: *const Bindings,
+    extra: usize,
 ) ElzError!Value {
     var ev_names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer ev_names.deinit(allocator);
@@ -354,9 +352,12 @@ fn expand_ellipsis(
         }
         for (ev_names.items) |n| {
             const original = bindings.get(n).?;
-            try iter_bindings.put(allocator, n, .{ .single = original.repeated[i] });
+            try iter_bindings.put(allocator, n, original.repeated[i]);
         }
-        const expanded = try expand_template(allocator, sub_tmpl, ellipsis, &iter_bindings);
+        const expanded = if (extra == 0)
+            try expand_template(allocator, sub_tmpl, ellipsis, &iter_bindings)
+        else
+            try expand_ellipsis(allocator, sub_tmpl, ellipsis, &iter_bindings, extra - 1);
         try result_pairs.append(allocator, expanded);
     }
 
@@ -372,13 +373,13 @@ fn expand_ellipsis(
 }
 
 const special_form_names: []const []const u8 = &.{
-    "quote",        "quasiquote", "unquote",      "unquote-splicing",
-    "if",           "cond",       "case",         "and",
-    "or",           "define",     "define-macro", "define-syntax",
-    "syntax-rules", "set!",       "lambda",       "begin",
-    "let",          "let*",       "letrec",       "do",
-    "delay",        "try",        "catch",        "import",
-    "else",         "...",        "_",
+    "quote",        "quasiquote",   "unquote",      "unquote-splicing",
+    "if",           "cond",         "case",         "and",
+    "or",           "define",       "define-macro", "define-syntax",
+    "syntax-rules", "syntax-error", "set!",         "lambda",
+    "begin",        "let",          "let*",         "letrec",
+    "do",           "delay",        "try",          "catch",
+    "import",       "else",         "...",          "_",
 };
 
 fn is_special_form_name(name: []const u8) bool {
