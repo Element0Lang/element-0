@@ -759,3 +759,122 @@
 ;;; Writes the characters of str to port (default: the current output port).
 (define (write-string str . port)
   (apply display str port))
+
+;;; ---------------------------------
+;;; R7RS Derived Forms
+;;; ---------------------------------
+
+;;; (features)
+;;;
+;;; Returns the list of feature identifiers this implementation supports.
+(define (features) '(r7rs elz))
+
+;;; (%feature-satisfied? req)
+;;;
+;;; Evaluates a cond-expand feature requirement against (features).
+(define (%feature-satisfied? req)
+  (cond
+    ((symbol? req) (if (memq req (features)) #t #f))
+    ((pair? req)
+     (let ((op (car req)))
+       (cond
+         ((eq? op 'and)
+          (let loop ((rs (cdr req)))
+            (cond ((null? rs) #t)
+                  ((%feature-satisfied? (car rs)) (loop (cdr rs)))
+                  (else #f))))
+         ((eq? op 'or)
+          (let loop ((rs (cdr req)))
+            (cond ((null? rs) #f)
+                  ((%feature-satisfied? (car rs)) #t)
+                  (else (loop (cdr rs))))))
+         ((eq? op 'not) (not (%feature-satisfied? (cadr req))))
+         (else #f))))
+    (else #f)))
+
+;;; (cond-expand clause ...)
+;;;
+;;; Expands to the body of the first clause whose feature requirement is
+;;; satisfied. Requirements support and, or, not, and feature identifiers.
+(define-macro (cond-expand . clauses)
+  (let loop ((cs clauses))
+    (if (null? cs)
+        '(syntax-error "cond-expand: no matching clause")
+        (let ((req (car (car cs)))
+              (body (cdr (car cs))))
+          (if (or (eq? req 'else) (%feature-satisfied? req))
+              (cons 'begin body)
+              (loop (cdr cs)))))))
+
+;;; (let-values ((formals expr) ...) body ...)
+;;;
+;;; Binds each formals list to the values returned by its expr. The exprs are
+;;; evaluated before any binding is visible. R7RS sample implementation.
+(define-syntax let-values
+  (syntax-rules ()
+    ((let-values (binding ...) body0 body1 ...)
+     (let-values "bind" (binding ...) () (begin body0 body1 ...)))
+    ((let-values "bind" () tmps body)
+     (let tmps body))
+    ((let-values "bind" ((b0 e0) binding ...) tmps body)
+     (let-values "mktmp" b0 e0 () (binding ...) tmps body))
+    ((let-values "mktmp" () e0 args bindings tmps body)
+     (call-with-values (lambda () e0) (lambda args (let-values "bind" bindings tmps body))))
+    ((let-values "mktmp" (a . b) e0 (arg ...) bindings (tmp ...) body)
+     (let-values "mktmp" b e0 (arg ... x) bindings (tmp ... (a x)) body))
+    ((let-values "mktmp" a e0 (arg ...) bindings (tmp ...) body)
+     (call-with-values (lambda () e0) (lambda (arg ... . x) (let-values "bind" bindings (tmp ... (a x)) body))))))
+
+;;; (let*-values ((formals expr) ...) body ...)
+;;;
+;;; Like let-values, but each binding sees the previous ones.
+(define-syntax let*-values
+  (syntax-rules ()
+    ((let*-values () body0 body1 ...)
+     (let () body0 body1 ...))
+    ((let*-values (binding0 binding1 ...) body0 body1 ...)
+     (let-values (binding0) (let*-values (binding1 ...) body0 body1 ...)))))
+
+;;; (define-values (name ...) expr)
+;;;
+;;; Defines each name to the corresponding value returned by expr.
+(define-syntax define-values
+  (syntax-rules ()
+    ((define-values (name ...) expr)
+     (begin
+       (define results (call-with-values (lambda () expr) list))
+       (define name
+         (let ((v (car results)))
+           (set! results (cdr results))
+           v))
+       ...))))
+
+;;; (%formals-min-count formals)
+;;;
+;;; Returns the number of required parameters in a lambda formals spec.
+(define (%formals-min-count formals)
+  (let loop ((f formals) (n 0))
+    (if (pair? f) (loop (cdr f) (+ n 1)) n)))
+
+;;; (case-lambda (formals body ...) ...)
+;;;
+;;; Returns a procedure that dispatches on argument count to the first
+;;; matching clause.
+(define-macro (case-lambda . clauses)
+  (let ((args-sym (gensym)))
+    `(lambda ,args-sym
+       (cond
+         ,@(map (lambda (clause)
+                  (let ((formals (car clause))
+                        (body (cdr clause)))
+                    (cond
+                      ((symbol? formals)
+                       `(#t (apply (lambda ,formals ,@body) ,args-sym)))
+                      ((list? formals)
+                       `((= (length ,args-sym) ,(length formals))
+                         (apply (lambda ,formals ,@body) ,args-sym)))
+                      (else
+                       `((>= (length ,args-sym) ,(%formals-min-count formals))
+                         (apply (lambda ,formals ,@body) ,args-sym))))))
+                clauses)
+         (#t (error "case-lambda: no matching clause"))))))

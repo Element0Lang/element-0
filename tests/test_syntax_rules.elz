@@ -127,4 +127,35 @@
       #f)
     (catch e #t)))
 
+
+;; --- Derived forms (R7RS) ---
+
+(test-case "let-values basic"
+  (equal? (let-values (((a b) (values 1 2)) ((c) (values 3))) (list a b c)) '(1 2 3)))
+(test-case "let-values with rest formals"
+  (equal? (let-values (((a . rest) (values 1 2 3))) (list a rest)) '(1 (2 3))))
+(test-case "let*-values sees earlier bindings"
+  (equal? (let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (list a b c)) '(1 2 3)))
+
+(define-values (dv-a dv-b) (values 10 20))
+(test-case "define-values at top level" (= (+ dv-a dv-b) 30))
+
+(define cl (case-lambda ((x) 'one) ((x y) 'two) ((x . rest) 'many)))
+(test-case "case-lambda one arg" (equal? (cl 1) 'one))
+(test-case "case-lambda two args" (equal? (cl 1 2) 'two))
+(test-case "case-lambda rest clause" (equal? (cl 1 2 3) 'many))
+(test-case "case-lambda no match raises"
+  (try (begin (cl) #f) (catch e #t)))
+
+(test-case "features includes r7rs" (and (memq 'r7rs (features)) #t))
+(test-case "cond-expand matching feature" (= (cond-expand (elz 1) (else 2)) 1))
+(test-case "cond-expand else" (= (cond-expand (unknown-feature 1) (else 2)) 2))
+(test-case "cond-expand and-or-not"
+  (= (cond-expand ((and r7rs (not unknown-feature)) 1) (else 2)) 1))
+
+(test-case "error is catchable" (try (begin (error "boom" 1 2) #f) (catch e #t)))
+
+(test-case "case with arrow" (= (case 5 ((5) => (lambda (x) (* x 10))) (else 0)) 50))
+(test-case "case else arrow" (= (case 9 ((5) 1) (else => (lambda (x) x))) 9))
+
 (report-summary)

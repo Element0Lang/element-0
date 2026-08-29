@@ -34,24 +34,15 @@ fn quoted(allocator: std.mem.Allocator, v: Value) ElzError!Value {
 pub fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value, env: *Environment, fuel: *u64) ElzError!Value {
     const allocator = env.allocator;
 
-    var params: Value = .nil;
-    var pi = m.params.items.len;
-    while (pi > 0) {
-        pi -= 1;
-        params = try cons(allocator, m.params.items[pi], params);
-    }
-    const lambda_form = try cons(allocator, Value{ .symbol = "lambda" }, try cons(allocator, params, m.body));
+    const lambda_form = try cons(allocator, Value{ .symbol = "lambda" }, try cons(allocator, m.formals, m.body));
 
-    var arg_count: usize = 0;
     var reversed_args: std.ArrayListUnmanaged(Value) = .empty;
     defer reversed_args.deinit(allocator);
     var current_node = rest;
     while (current_node == .pair) {
         try reversed_args.append(allocator, current_node.pair.car);
-        arg_count += 1;
         current_node = current_node.pair.cdr;
     }
-    if (arg_count != m.params.items.len) return ElzError.WrongArgumentCount;
 
     var call_form: Value = .nil;
     var ai = reversed_args.items.len;

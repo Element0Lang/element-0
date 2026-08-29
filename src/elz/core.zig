@@ -210,8 +210,9 @@ pub const CallFrame = struct {
 pub const Macro = struct {
     /// The name of the macro (for error messages).
     name: []const u8,
-    /// The parameter names of the macro transformer.
-    params: ValueList,
+    /// The transformer's formals, as written: a proper list, dotted list, or
+    /// single rest symbol. Arity is checked by the lambda built at expansion.
+    formals: Value,
     /// The body of the macro transformer.
     body: Value,
     /// The environment in which the macro was defined.

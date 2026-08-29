@@ -103,10 +103,10 @@ phase has the highest value. It requires restructuring the matcher and expander 
     * [x] `(<ellipsis> <template>)` escape in templates
     * [x] `syntax-error`
 * Derived forms unlocked by the expander
-    * [ ] `let-values`, `let*-values`, `define-values`
-    * [ ] `case-lambda`
-    * [ ] `case` with `=>` clauses
-    * [ ] `cond-expand` (with a `features` procedure)
+    * [x] `let-values`, `let*-values`, `define-values`
+    * [x] `case-lambda`
+    * [x] `case` with `=>` clauses
+    * [x] `cond-expand` (with a `features` procedure)
 
 ## Phase 3: R7RS Data Types and Port Completions
 
@@ -141,7 +141,8 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
     * [ ] `raise`, `raise-continuable`
     * [ ] `with-exception-handler`
     * [ ] `guard` (depends on the Phase 2 expander)
-    * [ ] `error`, `error-object?`, `error-object-message`, `error-object-irritants`
+    * [x] `error` (raises a catchable UserError; the error-object accessors remain)
+    * [ ] `error-object?`, `error-object-message`, `error-object-irritants`
     * [ ] `read-error?`, `file-error?`
 * Dynamic binding
     * [ ] `make-parameter`, `parameterize`

@@ -663,20 +663,16 @@ pub const Compiler = struct {
                 // Shorthand: (define-macro (name params...) body)
                 const sig = first.pair;
                 const macro_name = if (sig.car == .symbol) sig.car.symbol else return ElzError.InvalidArgument;
-                var params_list = core.ValueList.init(self.allocator);
+                // Validate the formals: symbols in a proper or dotted list, or a bare rest symbol.
                 var cur = sig.cdr;
-                while (cur != .nil) {
-                    const pp = switch (cur) {
-                        .pair => |p| p,
-                        else => return ElzError.InvalidArgument,
-                    };
-                    if (pp.car != .symbol) return ElzError.InvalidArgument;
-                    try params_list.append(pp.car);
-                    cur = pp.cdr;
+                while (cur == .pair) {
+                    if (cur.pair.car != .symbol) return ElzError.InvalidArgument;
+                    cur = cur.pair.cdr;
                 }
+                if (cur != .nil and cur != .symbol) return ElzError.InvalidArgument;
                 const body = args.pair.cdr;
                 const m = try self.allocator.create(core.Macro);
-                m.* = .{ .name = macro_name, .params = params_list, .body = try body.deep_clone(self.allocator), .env = env };
+                m.* = .{ .name = macro_name, .formals = try sig.cdr.deep_clone(self.allocator), .body = try body.deep_clone(self.allocator), .env = env };
                 const macro_val = core.Value{ .macro = m };
                 try env.set(self.interp, macro_name, macro_val);
                 _ = try self.emitOp(.load_unspecified);
@@ -1281,9 +1277,8 @@ pub const Compiler = struct {
             const body = clause.pair.cdr;
 
             if (datums == .symbol and std.mem.eql(u8, datums.symbol, "else")) {
-                // Pop key, then run else body, then jump to end.
-                _ = try self.emitOp(.pop);
-                try self.compileBegin(body, env, tail and is_last, fuel);
+                // Run else body (key on stack, consumed by the body helper), jump to end.
+                try self.compileCaseBody(body, env, tail and is_last, fuel);
                 // Jump to end (past the "no match" fallthrough code).
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
                 break;
@@ -1333,9 +1328,8 @@ pub const Compiler = struct {
             for (jumps_to_body.items) |j| {
                 self.patchJump(j);
             }
-            // Stack: [..., key]. Pop key before body.
-            _ = try self.emitOp(.pop);
-            try self.compileBegin(body, env, tail and is_last, fuel);
+            // Stack: [..., key], consumed by the body helper.
+            try self.compileCaseBody(body, env, tail and is_last, fuel);
             try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
 
             // Next clause entry.
@@ -1349,6 +1343,21 @@ pub const Compiler = struct {
         for (jumps_to_end.items) |j| {
             self.patchJump(j);
         }
+    }
+
+    /// Compiles a case clause body with the key on top of the stack. A plain
+    /// body pops the key first; a `(=> proc)` body calls proc with the key.
+    fn compileCaseBody(self: *Compiler, body: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        if (body == .pair and body.pair.car == .symbol and std.mem.eql(u8, body.pair.car.symbol, "=>")) {
+            if (body.pair.cdr != .pair) return ElzError.InvalidArgument;
+            const proc_expr = body.pair.cdr.pair.car;
+            try self.compileExpr(proc_expr, env, false, fuel);
+            _ = try self.emitOp(.swap);
+            _ = try self.emitA(.call, 1);
+            return;
+        }
+        _ = try self.emitOp(.pop);
+        try self.compileBegin(body, env, tail, fuel);
     }
 
     // -----------------------------------------------------------------------

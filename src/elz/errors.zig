@@ -30,6 +30,8 @@ pub const ElzError = error{
     LambdaInvalidParams,
     /// A procedure was called with the wrong number of arguments.
     WrongArgumentCount,
+    /// An error raised from Elz code via the `error` procedure.
+    UserError,
     /// A value that is not a procedure was called as if it were one.
     NotAFunction,
     /// A procedure was called with an argument of the wrong type.

@@ -3,6 +3,27 @@ const core = @import("../core.zig");
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 const vm_mod = @import("../vm.zig");
+const writer_mod = @import("../writer.zig");
+
+/// `error` raises a catchable error with a message and irritants.
+/// Syntax: (error message irritant ...)
+pub fn error_fn(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len == 0) return ElzError.WrongArgumentCount;
+
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    errdefer aw.deinit();
+    if (args.items[0] == .string) {
+        aw.writer.writeAll(args.items[0].string) catch return ElzError.OutOfMemory;
+    } else {
+        writer_mod.write(args.items[0], &aw.writer) catch return ElzError.OutOfMemory;
+    }
+    for (args.items[1..]) |irritant| {
+        aw.writer.writeAll(" ") catch return ElzError.OutOfMemory;
+        writer_mod.write(irritant, &aw.writer) catch return ElzError.OutOfMemory;
+    }
+    interp.last_error_message = aw.toOwnedSlice() catch return ElzError.OutOfMemory;
+    return ElzError.UserError;
+}
 
 /// `apply` is the implementation of the `apply` primitive function in Elz.
 /// It applies a procedure to a list of arguments. The last argument to `apply`
