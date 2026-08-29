@@ -699,6 +699,223 @@ pub fn lcm_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.Valu
     return Value{ .exact_integer = @intCast(acc) };
 }
 
+// --- Rational accessors ---
+
+const Rat128 = struct { n: i128, d: i128 };
+
+const RAT128_LIMIT: i128 = 1 << 96;
+
+fn gcdI128(a: i128, b: i128) i128 {
+    var x = if (a < 0) -a else a;
+    var y = if (b < 0) -b else b;
+    while (y != 0) {
+        const t = y;
+        y = @rem(x, y);
+        x = t;
+    }
+    return x;
+}
+
+fn ratNorm(n: i128, d: i128) ElzError!Rat128 {
+    if (d == 0) return ElzError.DivisionByZero;
+    const sign: i128 = if (d < 0) -1 else 1;
+    const g = gcdI128(n, d);
+    const rn = if (g == 0) n else sign * @divExact(n, g);
+    const rd = if (g == 0) d else sign * @divExact(d, g);
+    if (rn > RAT128_LIMIT or rn < -RAT128_LIMIT or rd > RAT128_LIMIT) return ElzError.Overflow;
+    return .{ .n = rn, .d = rd };
+}
+
+fn ratSub128(a: Rat128, b: Rat128) ElzError!Rat128 {
+    return ratNorm(a.n * b.d - b.n * a.d, a.d * b.d);
+}
+
+fn ratAdd128(a: Rat128, b: Rat128) ElzError!Rat128 {
+    return ratNorm(a.n * b.d + b.n * a.d, a.d * b.d);
+}
+
+fn ratRecip128(a: Rat128) ElzError!Rat128 {
+    return ratNorm(a.d, a.n);
+}
+
+fn ratLt128(a: Rat128, b: Rat128) bool {
+    return a.n * b.d < b.n * a.d;
+}
+
+fn ratFloor128(a: Rat128) Rat128 {
+    return .{ .n = @divFloor(a.n, a.d), .d = 1 };
+}
+
+/// Converts a finite f64 to its exact rational value. Binary floats are dyadic
+/// rationals, so repeated doubling terminates; values whose exact form does not
+/// fit in the i128 budget return Overflow.
+fn dyadicFromFloat(x: f64) ElzError!Rat128 {
+    if (std.math.isNan(x) or std.math.isInf(x)) return ElzError.InvalidArgument;
+    var v = x;
+    var d: i128 = 1;
+    while (@floor(v) != v) {
+        v *= 2;
+        d *= 2;
+        if (d > RAT128_LIMIT) return ElzError.Overflow;
+    }
+    const limit: f64 = @floatFromInt(RAT128_LIMIT);
+    if (v > limit or v < -limit) return ElzError.Overflow;
+    return .{ .n = @intFromFloat(v), .d = d };
+}
+
+fn ratFromValue(v: Value) ElzError!Rat128 {
+    return switch (v) {
+        .exact_integer => |i| .{ .n = i, .d = 1 },
+        .rational => |r| .{ .n = r.numerator, .d = r.denominator },
+        .number => |n| dyadicFromFloat(n),
+        else => ElzError.InvalidArgument,
+    };
+}
+
+fn ratToValue(r: Rat128, inexact: bool, alloc: std.mem.Allocator) ElzError!Value {
+    if (inexact) {
+        return Value{ .number = @as(f64, @floatFromInt(r.n)) / @as(f64, @floatFromInt(r.d)) };
+    }
+    if (r.n > std.math.maxInt(i64) or r.n < std.math.minInt(i64) or r.d > std.math.maxInt(i64)) {
+        return ElzError.Overflow;
+    }
+    return normalizeRational(@intCast(r.n), @intCast(r.d), alloc);
+}
+
+pub fn numerator_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return switch (v) {
+        .exact_integer => v,
+        .rational => |r| Value{ .exact_integer = r.numerator },
+        .number => |n| blk: {
+            const r = try dyadicFromFloat(n);
+            break :blk Value{ .number = @floatFromInt(r.n) };
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn denominator_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return switch (v) {
+        .exact_integer => Value{ .exact_integer = 1 },
+        .rational => |r| Value{ .exact_integer = r.denominator },
+        .number => |n| blk: {
+            const r = try dyadicFromFloat(n);
+            break :blk Value{ .number = @floatFromInt(r.d) };
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+/// Simplest rational in [x, y], assuming 0 < x < y.
+fn simplestPositive(x: Rat128, y: Rat128) ElzError!Rat128 {
+    const fx = ratFloor128(x);
+    const fy = ratFloor128(y);
+    if (fx.n == x.n and x.d == 1) return x;
+    if (fx.n == fy.n) {
+        const inner = try simplestPositive(
+            try ratRecip128(try ratSub128(y, fy)),
+            try ratRecip128(try ratSub128(x, fx)),
+        );
+        return ratAdd128(fx, try ratRecip128(inner));
+    }
+    return .{ .n = fx.n + 1, .d = 1 };
+}
+
+fn simplestRational(lo: Rat128, hi: Rat128) ElzError!Rat128 {
+    if (ratLt128(hi, lo)) return simplestRational(hi, lo);
+    if (!ratLt128(lo, hi)) return lo;
+    const zero = Rat128{ .n = 0, .d = 1 };
+    if (ratLt128(zero, lo)) return simplestPositive(lo, hi);
+    if (ratLt128(hi, zero)) {
+        const r = try simplestPositive(.{ .n = -hi.n, .d = hi.d }, .{ .n = -lo.n, .d = lo.d });
+        return .{ .n = -r.n, .d = r.d };
+    }
+    return zero;
+}
+
+pub fn rationalize_fn(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const x = try ratFromValue(args.items[0]);
+    const tol = try ratFromValue(args.items[1]);
+    const abs_tol = Rat128{ .n = if (tol.n < 0) -tol.n else tol.n, .d = tol.d };
+    const result = try simplestRational(try ratSub128(x, abs_tol), try ratAdd128(x, abs_tol));
+    const inexact = args.items[0] == .number or args.items[1] == .number;
+    return ratToValue(result, inexact, env.allocator);
+}
+
+// --- Complex accessors and constructors ---
+
+fn realToF64(v: Value) ElzError!f64 {
+    return switch (v) {
+        .number, .exact_integer, .rational => toF64(v),
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn make_rectangular(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const re = try realToF64(args.items[0]);
+    const im = try realToF64(args.items[1]);
+    const c = env.allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = re, .imag = im };
+    return Value{ .complex = c };
+}
+
+pub fn make_polar(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const mag = try realToF64(args.items[0]);
+    const ang = try realToF64(args.items[1]);
+    const c = env.allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = mag * std.math.cos(ang), .imag = mag * std.math.sin(ang) };
+    return Value{ .complex = c };
+}
+
+pub fn real_part(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return switch (v) {
+        .complex => |c| Value{ .number = c.real },
+        .number, .exact_integer, .rational => v,
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn imag_part(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return switch (v) {
+        .complex => |c| Value{ .number = c.imag },
+        .number, .exact_integer, .rational => Value{ .exact_integer = 0 },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn magnitude(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (v == .complex) {
+        return Value{ .number = std.math.hypot(v.complex.real, v.complex.imag) };
+    }
+    return abs_fn(interp, env, args, fuel);
+}
+
+pub fn angle(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    return switch (v) {
+        .complex => |c| Value{ .number = std.math.atan2(c.imag, c.real) },
+        .number, .exact_integer, .rational => if (toF64(v) < 0)
+            Value{ .number = std.math.pi }
+        else
+            Value{ .exact_integer = 0 },
+        else => ElzError.InvalidArgument,
+    };
+}
+
 test "math primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;

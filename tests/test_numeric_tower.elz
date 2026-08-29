@@ -75,6 +75,40 @@
 (test-case "abs -3 = 3" (= (abs -3) 3))
 (test-case "abs -3/4 = 3/4" (= (abs -3/4) 3/4))
 
+;; --- Rational accessors ---
+(test-case "numerator 3/4" (= (numerator 3/4) 3))
+(test-case "denominator 3/4" (= (denominator 3/4) 4))
+(test-case "numerator of integer" (= (numerator 5) 5))
+(test-case "denominator of integer" (= (denominator 5) 1))
+(test-case "denominator of zero" (= (denominator 0) 1))
+(test-case "numerator is exact" (exact? (numerator 3/4)))
+(test-case "numerator of negative rational" (= (numerator -3/4) -3))
+(test-case "denominator of inexact" (= (denominator 0.5) 2.0))
+(test-case "denominator of inexact is inexact" (inexact? (denominator 0.5)))
+
+;; --- rationalize ---
+(test-case "rationalize 3/10 by 1/10" (= (rationalize 3/10 1/10) 1/3))
+(test-case "rationalize exact is exact" (exact? (rationalize 3/10 1/10)))
+(test-case "rationalize inexact is inexact" (inexact? (rationalize .3 1/10)))
+(test-case "rationalize inexact value" (= (rationalize .3 1/10) (exact->inexact 1/3)))
+(test-case "rationalize integer zero tolerance" (= (rationalize 5 0) 5))
+
+;; --- Complex accessors ---
+(test-case "make-rectangular is not real" (not (real? (make-rectangular 3 4))))
+(test-case "make-rectangular is complex" (complex? (make-rectangular 3 4)))
+(test-case "real-part of 3+4i" (= (real-part (make-rectangular 3 4)) 3.0))
+(test-case "imag-part of 3+4i" (= (imag-part (make-rectangular 3 4)) 4.0))
+(test-case "magnitude of 3+4i" (= (magnitude (make-rectangular 3 4)) 5.0))
+(test-case "make-polar on real axis" (< (abs (- (real-part (make-polar 2 0)) 2.0)) 1e-9))
+(test-case "angle of i" (< (abs (- (angle (make-rectangular 0 1)) 1.5707963267948966)) 1e-9))
+(test-case "real-part of real" (= (real-part 5) 5))
+(test-case "imag-part of real is zero" (= (imag-part 5) 0))
+(test-case "imag-part of inexact real is exact" (exact? (imag-part 5.0)))
+(test-case "magnitude of negative real" (= (magnitude -3) 3))
+(test-case "magnitude of rational stays exact" (= (magnitude -3/4) 3/4))
+(test-case "angle of negative real" (< (abs (- (angle -1) 3.141592653589793)) 1e-9))
+(test-case "angle of positive real is zero" (= (angle 2) 0))
+
 ;; --- Summary ---
 (newline)
 (display "--------------------") (newline)

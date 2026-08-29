@@ -43,6 +43,15 @@ pub fn populate_math(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "max", core.Value{ .procedure = math.max });
     try interp.root_env.set(interp, "min", core.Value{ .procedure = math.min });
     try interp.root_env.set(interp, "%", core.Value{ .procedure = math.mod });
+    try interp.root_env.set(interp, "numerator", core.Value{ .procedure = math.numerator_fn });
+    try interp.root_env.set(interp, "denominator", core.Value{ .procedure = math.denominator_fn });
+    try interp.root_env.set(interp, "rationalize", core.Value{ .procedure = math.rationalize_fn });
+    try interp.root_env.set(interp, "make-rectangular", core.Value{ .procedure = math.make_rectangular });
+    try interp.root_env.set(interp, "make-polar", core.Value{ .procedure = math.make_polar });
+    try interp.root_env.set(interp, "real-part", core.Value{ .procedure = math.real_part });
+    try interp.root_env.set(interp, "imag-part", core.Value{ .procedure = math.imag_part });
+    try interp.root_env.set(interp, "magnitude", core.Value{ .procedure = math.magnitude });
+    try interp.root_env.set(interp, "angle", core.Value{ .procedure = math.angle });
     try interp.root_env.set(interp, "floor", core.Value{ .procedure = math.floor_fn });
     try interp.root_env.set(interp, "ceiling", core.Value{ .procedure = math.ceiling });
     try interp.root_env.set(interp, "round", core.Value{ .procedure = math.round_fn });
