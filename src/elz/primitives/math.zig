@@ -624,21 +624,15 @@ pub fn exact_to_inexact(_: *interpreter.Interpreter, _: *core.Environment, args:
     };
 }
 
-pub fn inexact_to_exact(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn inexact_to_exact(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     return switch (v) {
         .exact_integer, .rational => v,
         .number => |n| blk: {
             if (std.math.isNan(n) or std.math.isInf(n)) break :blk ElzError.InvalidArgument;
-            if (@floor(n) == n) {
-                const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
-                const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
-                if (n <= max_safe and n >= min_safe) {
-                    break :blk Value{ .exact_integer = @intFromFloat(n) };
-                }
-            }
-            break :blk v; // lossy: keep as inexact
+            const r = dyadicFromFloat(n) catch break :blk v; // exact form out of range: keep as inexact
+            break :blk try ratToValue(r, false, env.allocator);
         },
         else => ElzError.InvalidArgument,
     };
@@ -845,6 +839,123 @@ pub fn rationalize_fn(_: *interpreter.Interpreter, env: *core.Environment, args:
     const result = try simplestRational(try ratSub128(x, abs_tol), try ratAdd128(x, abs_tol));
     const inexact = args.items[0] == .number or args.items[1] == .number;
     return ratToValue(result, inexact, env.allocator);
+}
+
+// --- R7RS numeric names and predicates ---
+
+pub fn exact_integer_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .exact_integer };
+}
+
+pub fn square_fn(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (!v.isNumeric()) return ElzError.InvalidArgument;
+    return numMul(v, v, env.allocator);
+}
+
+pub fn exact_integer_sqrt(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const v = args.items[0];
+    if (v != .exact_integer or v.exact_integer < 0) return ElzError.InvalidArgument;
+    const n: u64 = @intCast(v.exact_integer);
+    const s = isqrt(n);
+    const items = env.allocator.alloc(Value, 2) catch return ElzError.OutOfMemory;
+    items[0] = Value{ .exact_integer = @intCast(s) };
+    items[1] = Value{ .exact_integer = @intCast(n - s * s) };
+    const mv = env.allocator.create(core.MultiValues) catch return ElzError.OutOfMemory;
+    mv.* = .{ .items = items };
+    return Value{ .multi_values = mv };
+}
+
+pub fn finite_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return switch (args.items[0]) {
+        .exact_integer, .rational => Value{ .boolean = true },
+        .number => |n| Value{ .boolean = std.math.isFinite(n) },
+        .complex => |c| Value{ .boolean = std.math.isFinite(c.real) and std.math.isFinite(c.imag) },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn infinite_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return switch (args.items[0]) {
+        .exact_integer, .rational => Value{ .boolean = false },
+        .number => |n| Value{ .boolean = std.math.isInf(n) },
+        .complex => |c| Value{ .boolean = std.math.isInf(c.real) or std.math.isInf(c.imag) },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+pub fn nan_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return switch (args.items[0]) {
+        .exact_integer, .rational => Value{ .boolean = false },
+        .number => |n| Value{ .boolean = std.math.isNan(n) },
+        .complex => |c| Value{ .boolean = std.math.isNan(c.real) or std.math.isNan(c.imag) },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+// --- Floor and truncate division families ---
+
+fn intDivArgs(args: core.ValueList) ElzError!struct { a: i64, b: i64 } {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const a = args.items[0];
+    const b = args.items[1];
+    if (a != .exact_integer or b != .exact_integer) return ElzError.InvalidArgument;
+    if (b.exact_integer == 0) return ElzError.DivisionByZero;
+    if (a.exact_integer == std.math.minInt(i64) and b.exact_integer == -1) return ElzError.Overflow;
+    return .{ .a = a.exact_integer, .b = b.exact_integer };
+}
+
+fn twoValues(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
+    const items = alloc.alloc(Value, 2) catch return ElzError.OutOfMemory;
+    items[0] = a;
+    items[1] = b;
+    const mv = alloc.create(core.MultiValues) catch return ElzError.OutOfMemory;
+    mv.* = .{ .items = items };
+    return Value{ .multi_values = mv };
+}
+
+pub fn floor_div(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return twoValues(
+        Value{ .exact_integer = @divFloor(p.a, p.b) },
+        Value{ .exact_integer = @mod(p.a, p.b) },
+        env.allocator,
+    );
+}
+
+pub fn floor_quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return Value{ .exact_integer = @divFloor(p.a, p.b) };
+}
+
+pub fn floor_remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return Value{ .exact_integer = @mod(p.a, p.b) };
+}
+
+pub fn truncate_div(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return twoValues(
+        Value{ .exact_integer = @divTrunc(p.a, p.b) },
+        Value{ .exact_integer = @rem(p.a, p.b) },
+        env.allocator,
+    );
+}
+
+pub fn truncate_quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return Value{ .exact_integer = @divTrunc(p.a, p.b) };
+}
+
+pub fn truncate_remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try intDivArgs(args);
+    return Value{ .exact_integer = @rem(p.a, p.b) };
 }
 
 // --- Complex accessors and constructors ---
