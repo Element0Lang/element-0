@@ -200,3 +200,37 @@ test "directory_list returns list" {
     // Should be a list (pair or nil)
     try testing.expect(result == .pair or result == .nil);
 }
+
+/// `get_environment_variables` returns the process environment as an
+/// association list of (name . value) string pairs.
+/// Syntax: (get-environment-variables)
+pub fn get_environment_variables(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+
+    var result: core.Value = .nil;
+    var i: usize = 0;
+    while (std.c.environ[i]) |entry_ptr| : (i += 1) {
+        const entry = std.mem.span(entry_ptr);
+        const eq = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        const name = env.allocator.dupe(u8, entry[0..eq]) catch return ElzError.OutOfMemory;
+        const value = env.allocator.dupe(u8, entry[eq + 1 ..]) catch return ElzError.OutOfMemory;
+        const cell = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        cell.* = .{ .car = core.Value{ .string = name }, .cdr = core.Value{ .string = value } };
+        const link = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        link.* = .{ .car = core.Value{ .pair = cell }, .cdr = result };
+        result = core.Value{ .pair = link };
+    }
+    return result;
+}
+
+/// `command_line` returns the process argument list as a list of strings.
+/// The host stores the real argv on the interpreter; embedders that do not
+/// get a one-element placeholder list.
+/// Syntax: (command-line)
+pub fn command_line(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    if (interp.command_line) |v| return v;
+    const link = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+    link.* = .{ .car = core.Value{ .string = "elz" }, .cdr = .nil };
+    return core.Value{ .pair = link };
+}

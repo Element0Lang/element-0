@@ -147,15 +147,15 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
     * [x] `read-error?`, `file-error?` (predicates exist; internal read and file
       errors are not yet raised as kinded error objects)
 * Dynamic binding
-    * [ ] `make-parameter`, `parameterize`
+    * [x] `make-parameter`, `parameterize`
 * Process context (`(scheme process-context)`)
-    * [ ] `get-environment-variable` (a rename of `getenv`),
+    * [x] `get-environment-variable` (a rename of `getenv`),
       `get-environment-variables`
-    * [ ] `command-line`, `emergency-exit` (`exit` exists)
+    * [x] `command-line`, `emergency-exit` (`exit` exists)
 * Time (`(scheme time)`, over the existing `current-time` and `current-time-ms`)
-    * [ ] `current-second`, `current-jiffy`, `jiffies-per-second`
+    * [x] `current-second`, `current-jiffy`, `jiffies-per-second`
 * Lazy evaluation completions
-    * [ ] `promise?`, `delay-force` (`delay`, `force`, and `make-promise` exist)
+    * [x] `promise?`, `delay-force` (`delay`, `force`, and `make-promise` exist)
 * Eval and libraries
     * [ ] `environment` for `eval`, and `interaction-environment`
     * [ ] `define-library` surface syntax lowering to the existing module system

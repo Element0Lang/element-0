@@ -1024,5 +1024,35 @@
 (test-case "file-error? false on user error"
   (guard (e (#t (not (file-error? e)))) (error "plain")))
 
+;; --- Parameters ---
+(define %test-param (make-parameter 10))
+(test-case "parameter returns initial value" (= (%test-param) 10))
+(test-case "parameterize rebinds" (= (parameterize ((%test-param 20)) (%test-param)) 20))
+(test-case "parameterize restores"
+  (begin (parameterize ((%test-param 20)) (%test-param)) (= (%test-param) 10)))
+(test-case "parameterize nests"
+  (= (parameterize ((%test-param 1))
+       (parameterize ((%test-param 2)) (%test-param)))
+     2))
+(test-case "parameter converter"
+  (let ((q (make-parameter 5 (lambda (x) (* x 2)))))
+    (and (= (q) 10) (= (parameterize ((q 3)) (q)) 6))))
+(test-case "parameterize restores after error"
+  (begin
+    (try (parameterize ((%test-param 30)) (error "x")) (catch e #f))
+    (= (%test-param) 10)))
+
+;; --- Process context, time, and lazy completions ---
+(test-case "get-environment-variable" (string? (get-environment-variable "PATH")))
+(test-case "get-environment-variables" (pair? (assoc "PATH" (get-environment-variables))))
+(test-case "command-line" (and (pair? (command-line)) (string? (car (command-line)))))
+(test-case "current-second is inexact" (inexact? (current-second)))
+(test-case "current-jiffy is exact" (exact-integer? (current-jiffy)))
+(test-case "jiffies-per-second" (positive? (jiffies-per-second)))
+(test-case "promise? on delay" (promise? (delay 1)))
+(test-case "promise? false on number" (not (promise? 1)))
+(test-case "delay-force" (= (force (delay-force (delay 42))) 42))
+(test-case "make-promise round trip" (= (force (make-promise 7)) 7))
+
 ;; --- Run Summary ---
 (report-summary)

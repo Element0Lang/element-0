@@ -208,6 +208,9 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
     try interp.root_env.set(interp, "error", core.Value{ .procedure = control.error_fn });
     try interp.root_env.set(interp, "raise", core.Value{ .procedure = control.raise_fn });
+    try interp.root_env.set(interp, "get-environment-variables", core.Value{ .procedure = os.get_environment_variables });
+    try interp.root_env.set(interp, "command-line", core.Value{ .procedure = os.command_line });
+    try interp.root_env.set(interp, "promise?", core.Value{ .procedure = predicates.promise_p });
     try interp.root_env.set(interp, "raise-continuable", core.Value{ .procedure = control.raise_continuable_fn });
     try interp.root_env.set(interp, "with-exception-handler", core.Value{ .procedure = control.with_exception_handler });
     // The built-in record type behind error objects; accessors live in std.elz.

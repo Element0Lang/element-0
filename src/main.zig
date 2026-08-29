@@ -203,6 +203,27 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     interpreter_ptr.* = try elz.Interpreter.init(.{});
     elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
 
+    // Capture argv for (command-line), in order.
+    {
+        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);
+        defer arg_it.deinit();
+        var argv_list = std.ArrayListUnmanaged(elz.core.Value).empty;
+        defer argv_list.deinit(elz.gc_allocator);
+        while (arg_it.next()) |arg| {
+            const copy = try elz.gc_allocator.dupe(u8, arg);
+            try argv_list.append(elz.gc_allocator, elz.core.Value{ .string = copy });
+        }
+        var argv: elz.core.Value = .nil;
+        var i = argv_list.items.len;
+        while (i > 0) {
+            i -= 1;
+            const link = try elz.gc_allocator.create(elz.core.Pair);
+            link.* = .{ .car = argv_list.items[i], .cdr = argv };
+            argv = elz.core.Value{ .pair = link };
+        }
+        interpreter_ptr.command_line = argv;
+    }
+
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 

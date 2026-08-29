@@ -972,3 +972,70 @@
                   ,@(if (%guard-clauses-have-else? clauses)
                         '()
                         `((else (raise ,var)))))))))
+
+;;; ---------------------------------
+;;; Parameters, Process Context, Time, and Lazy Completions
+;;; ---------------------------------
+
+;;; (make-parameter init [converter])
+;;;
+;;; Returns a parameter object: a procedure that returns its current value
+;;; when called with no arguments. Rebind it dynamically with parameterize.
+(define (make-parameter init . conv)
+  (let* ((converter (if (null? conv) (lambda (x) x) (car conv)))
+         (value (converter init)))
+    (lambda args
+      (cond
+        ((null? args) value)
+        ((eq? (car args) '%param-set!) (set! value (cadr args)) (if #f #f))
+        ((eq? (car args) '%param-convert) (converter (cadr args)))
+        (else (error "parameter: unexpected arguments"))))))
+
+;;; (parameterize ((param value) ...) body ...)
+;;;
+;;; Rebinds each parameter to its converted value for the dynamic extent of
+;;; body, restoring the previous values on exit.
+(define-macro (parameterize bindings . body)
+  (let ((psyms (map (lambda (b) (gensym)) bindings))
+        (olds (map (lambda (b) (gensym)) bindings))
+        (news (map (lambda (b) (gensym)) bindings)))
+    `(let ,(map (lambda (ps b) `(,ps ,(car b))) psyms bindings)
+       (let ,(map (lambda (o ps) `(,o (,ps))) olds psyms)
+         (let ,(map (lambda (n ps b) `(,n (,ps '%param-convert ,(cadr b)))) news psyms bindings)
+           (dynamic-wind
+             (lambda () ,@(map (lambda (ps n) `(,ps '%param-set! ,n)) psyms news))
+             (lambda () ,@body)
+             (lambda () ,@(map (lambda (ps o) `(,ps '%param-set! ,o)) psyms olds))))))))
+
+;;; (get-environment-variable name)
+;;;
+;;; Returns the value of the environment variable name, or #f.
+(define get-environment-variable getenv)
+
+;;; (emergency-exit [status])
+;;;
+;;; Exits the process immediately.
+(define emergency-exit exit)
+
+;;; (current-second)
+;;;
+;;; Returns the current time in seconds since the epoch, as an inexact number.
+(define (current-second)
+  (* (current-time-ms) 0.001))
+
+;;; (current-jiffy)
+;;;
+;;; Returns the current time in jiffies (milliseconds), as an exact integer.
+(define (current-jiffy)
+  (exact (current-time-ms)))
+
+;;; (jiffies-per-second)
+;;;
+;;; Returns the number of jiffies in one second.
+(define (jiffies-per-second) 1000)
+
+;;; (delay-force expr)
+;;;
+;;; Returns a promise that, when forced, forces the promise produced by expr.
+(define-macro (delay-force expr)
+  `(delay (force ,expr)))

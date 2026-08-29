@@ -419,3 +419,10 @@ test "predicate primitives" {
     result = try is_equal(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == .boolean and result.boolean == true);
 }
+
+/// `promise_p` checks if a value is a promise.
+/// Syntax: (promise? obj)
+pub fn promise_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .promise };
+}

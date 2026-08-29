@@ -90,6 +90,8 @@ pub const Interpreter = struct {
     exception_handlers: std.ArrayListUnmanaged(core.Value) = .empty,
     /// The built-in record type used for error objects (set by env_setup).
     error_rtd: ?*core.RecordType = null,
+    /// The process argument list for (command-line), set by the host.
+    command_line: ?core.Value = null,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
