@@ -92,6 +92,9 @@ pub const Interpreter = struct {
     error_rtd: ?*core.RecordType = null,
     /// The process argument list for (command-line), set by the host.
     command_line: ?core.Value = null,
+    /// Libraries registered by define-library, keyed by the canonical
+    /// space-joined library name (e.g. "my lib").
+    library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives

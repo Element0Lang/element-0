@@ -1080,5 +1080,21 @@
     (list-set! l 1 v)
     (string=? (call-with-output-string (lambda (p) (write-shared l p))) "(#0=#(9) #0#)")))
 
+;; --- define-library ---
+(define-library (test lib1)
+  (export lib-add lib-const)
+  (import (scheme base))
+  (begin
+    (define lib-secret 99)
+    (define lib-const 5)
+    (define (lib-add a b) (+ a b lib-secret))))
+
+(import (test lib1))
+(test-case "define-library exports a procedure" (= (lib-add 1 2) 102))
+(test-case "define-library exports a constant" (= lib-const 5))
+(test-case "import of scheme base is accepted" (begin (import (scheme base)) #t))
+(test-case "import of unknown library raises"
+  (try (begin (eval '(import (no such lib))) #f) (catch e #t)))
+
 ;; --- Run Summary ---
 (report-summary)

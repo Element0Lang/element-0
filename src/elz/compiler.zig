@@ -324,6 +324,7 @@ pub const Compiler = struct {
             return ElzError.InvalidArgument;
         }
         if (std.mem.eql(u8, sym, "import")) return self.compileImport(args, env);
+        if (std.mem.eql(u8, sym, "define-library")) return self.compileDefineLibrary(args, env, fuel);
         if (std.mem.eql(u8, sym, "try")) return self.compileTry(args, env, tail, fuel);
 
         // Not a special form — regular function call.
@@ -1610,13 +1611,140 @@ pub const Compiler = struct {
 
     fn compileImport(self: *Compiler, args: Value, env: *core.Environment) ElzError!void {
         _ = env;
-        // (import "path") — load the module file at compile time and cache the result.
         if (args == .nil or args != .pair) return ElzError.WrongArgumentCount;
-        const path_val = args.pair.car;
-        if (args.pair.cdr != .nil) return ElzError.WrongArgumentCount;
-        const module_val = try self.interp.importModule(path_val);
-        const ci = try self.addConst(module_val);
-        _ = try self.emitBx(.load_const, ci);
+        // (import "path") — load the module file at compile time and cache the
+        // result; the expression's value is the module object.
+        if (args.pair.car == .string and args.pair.cdr == .nil) {
+            const module_val = try self.interp.importModule(args.pair.car);
+            const ci = try self.addConst(module_val);
+            _ = try self.emitBx(.load_const, ci);
+            return;
+        }
+        // R7RS form: (import (lib name) ...) — bind each registered library's
+        // exports into the global environment at compile time.
+        var cur = args;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            try self.importLibrarySpec(cur.pair.car);
+        }
+        _ = try self.emitOp(.load_unspecified);
+    }
+
+    /// Builds the canonical registry key for a library name list: parts joined
+    /// by single spaces (e.g. "my lib 2").
+    fn libraryKey(self: *Compiler, name: Value) ElzError![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer aw.deinit();
+        var cur = name;
+        var first = true;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            if (!first) aw.writer.writeAll(" ") catch return ElzError.OutOfMemory;
+            first = false;
+            switch (cur.pair.car) {
+                .symbol => |s| aw.writer.writeAll(s) catch return ElzError.OutOfMemory,
+                .exact_integer => |n| aw.writer.print("{d}", .{n}) catch return ElzError.OutOfMemory,
+                else => return ElzError.InvalidArgument,
+            }
+        }
+        if (cur != .nil or first) return ElzError.InvalidArgument;
+        return aw.toOwnedSlice() catch return ElzError.OutOfMemory;
+    }
+
+    fn importLibrarySpec(self: *Compiler, spec: Value) ElzError!void {
+        if (spec == .string) {
+            _ = try self.interp.importModule(spec);
+            return;
+        }
+        if (spec != .pair) return ElzError.InvalidArgument;
+        const key = try self.libraryKey(spec);
+        if (self.interp.library_registry.get(key)) |module| {
+            var it = module.exports.iterator();
+            while (it.next()) |entry| {
+                try self.interp.root_env.set(self.interp, entry.key_ptr.*, entry.value_ptr.*);
+            }
+            return;
+        }
+        // Built-in library names resolve to the global environment.
+        const head = spec.pair.car;
+        if (head == .symbol and (std.mem.eql(u8, head.symbol, "scheme") or std.mem.eql(u8, head.symbol, "elz"))) {
+            return;
+        }
+        self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "import: library ({s}) not found", .{key}) catch null;
+        return ElzError.SymbolNotFound;
+    }
+
+    /// Compiles (define-library (name ...) clause ...). The body is evaluated
+    /// at compile time in the global environment (matching how file modules
+    /// load); only the declared exports become the library's bindings, made
+    /// visible by (import (name ...)).
+    fn compileDefineLibrary(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
+        _ = fuel;
+        if (args != .pair or args.pair.car != .pair) return ElzError.InvalidArgument;
+        const key = try self.libraryKey(args.pair.car);
+
+        var export_names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer export_names.deinit(self.allocator);
+        var body_forms: std.ArrayListUnmanaged(Value) = .empty;
+        defer body_forms.deinit(self.allocator);
+
+        var cur = args.pair.cdr;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            const clause = cur.pair.car;
+            if (clause != .pair or clause.pair.car != .symbol) return ElzError.InvalidArgument;
+            const kind = clause.pair.car.symbol;
+            if (std.mem.eql(u8, kind, "export")) {
+                var e = clause.pair.cdr;
+                while (e == .pair) : (e = e.pair.cdr) {
+                    if (e.pair.car != .symbol) return ElzError.InvalidArgument;
+                    try export_names.append(self.allocator, e.pair.car.symbol);
+                }
+            } else if (std.mem.eql(u8, kind, "import")) {
+                var i = clause.pair.cdr;
+                while (i == .pair) : (i = i.pair.cdr) {
+                    try self.importLibrarySpec(i.pair.car);
+                }
+            } else if (std.mem.eql(u8, kind, "begin")) {
+                var b = clause.pair.cdr;
+                while (b == .pair) : (b = b.pair.cdr) {
+                    try body_forms.append(self.allocator, b.pair.car);
+                }
+            } else if (std.mem.eql(u8, kind, "include") or std.mem.eql(u8, kind, "include-ci")) {
+                const fold = std.mem.eql(u8, kind, "include-ci");
+                var f = clause.pair.cdr;
+                while (f == .pair) : (f = f.pair.cdr) {
+                    if (f.pair.car != .string) return ElzError.InvalidArgument;
+                    const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, f.pair.car.string, self.allocator, .limited(1 * 1024 * 1024)) catch return ElzError.FileNotFound;
+                    var forms = @import("parser.zig").readAll(source, self.allocator) catch |e| return e;
+                    defer forms.deinit(self.allocator);
+                    for (forms.items) |form| {
+                        try body_forms.append(self.allocator, if (fold) try self.foldCase(form) else form);
+                    }
+                }
+            } else {
+                return ElzError.InvalidArgument;
+            }
+        }
+
+        // Evaluate the body at compile time, then snapshot the exports.
+        if (body_forms.items.len > 0) {
+            var local_fuel: u64 = std.math.maxInt(u64);
+            const proto = try Compiler.compileTopLevel(self.allocator, self.interp, body_forms.items, env, &local_fuel);
+            var machine = try @import("vm.zig").VM.init(self.interp);
+            defer machine.deinit();
+            _ = try machine.runProto(proto, &local_fuel);
+        }
+
+        const module = self.allocator.create(core.Module) catch return ElzError.OutOfMemory;
+        module.* = .{ .exports = std.StringHashMap(Value).init(self.allocator) };
+        for (export_names.items) |name| {
+            const value = self.interp.root_env.get(name, self.interp) catch {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "define-library: exported name '{s}' is not defined", .{name}) catch null;
+                return ElzError.SymbolNotFound;
+            };
+            const owned = self.allocator.dupe(u8, name) catch return ElzError.OutOfMemory;
+            module.exports.put(owned, value) catch return ElzError.OutOfMemory;
+        }
+        self.interp.library_registry.put(self.interp.allocator, key, module) catch return ElzError.OutOfMemory;
+        _ = try self.emitOp(.load_unspecified);
     }
 
     // -----------------------------------------------------------------------

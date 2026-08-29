@@ -159,7 +159,9 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
 * Eval and libraries
     * [x] `environment` for `eval`, and `interaction-environment` (opaque markers;
       Elz has a single global environment)
-    * [ ] `define-library` surface syntax lowering to the existing module system
+    * [x] `define-library` surface syntax lowering to the existing module system
+      (body evaluates in the global environment like file modules; only declared
+      exports are bound by `import`)
     * [x] `include`, `include-ci`
 * Writer
     * [x] `write` with datum labels for cyclic data (required by R7RS),
