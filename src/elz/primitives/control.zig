@@ -5,24 +5,101 @@ const interpreter = @import("../interpreter.zig");
 const vm_mod = @import("../vm.zig");
 const writer_mod = @import("../writer.zig");
 
-/// `error` raises a catchable error with a message and irritants.
+/// Formats a raised value into a human-readable message for uncaught display.
+fn describeValue(allocator: std.mem.Allocator, v: core.Value) ?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    if (v == .string) {
+        aw.writer.writeAll(v.string) catch return null;
+    } else {
+        writer_mod.write(v, &aw.writer) catch return null;
+    }
+    return aw.toOwnedSlice() catch null;
+}
+
+/// Builds an error-object record: fields are (kind message irritants).
+fn makeErrorObject(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, kind: core.Value, message: core.Value, irritants: core.Value) ElzError!core.Value {
+    const rtd = interp.error_rtd orelse return ElzError.InvalidArgument;
+    const fields = allocator.alloc(core.Value, 3) catch return ElzError.OutOfMemory;
+    fields[0] = kind;
+    fields[1] = message;
+    fields[2] = irritants;
+    const rec = allocator.create(core.Record) catch return ElzError.OutOfMemory;
+    rec.* = .{ .rtd = rtd, .fields = fields };
+    return core.Value{ .record = rec };
+}
+
+/// Raises `obj` through the Zig error channel, recording it for catch sites.
+fn raiseValue(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, obj: core.Value) ElzError {
+    interp.current_exception = obj;
+    if (obj == .record and interp.error_rtd != null and obj.record.rtd == interp.error_rtd.?) {
+        interp.last_error_message = describeValue(allocator, obj.record.fields[1]);
+    } else {
+        interp.last_error_message = describeValue(allocator, obj);
+    }
+    return ElzError.UserError;
+}
+
+/// `error` raises an error object with a message and irritants.
 /// Syntax: (error message irritant ...)
-pub fn error_fn(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+pub fn error_fn(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
     if (args.items.len == 0) return ElzError.WrongArgumentCount;
 
-    var aw: std.Io.Writer.Allocating = .init(env.allocator);
-    errdefer aw.deinit();
-    if (args.items[0] == .string) {
-        aw.writer.writeAll(args.items[0].string) catch return ElzError.OutOfMemory;
-    } else {
-        writer_mod.write(args.items[0], &aw.writer) catch return ElzError.OutOfMemory;
+    var irritants: core.Value = .nil;
+    var i = args.items.len;
+    while (i > 1) {
+        i -= 1;
+        const p = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        p.* = .{ .car = args.items[i], .cdr = irritants };
+        irritants = core.Value{ .pair = p };
     }
-    for (args.items[1..]) |irritant| {
-        aw.writer.writeAll(" ") catch return ElzError.OutOfMemory;
-        writer_mod.write(irritant, &aw.writer) catch return ElzError.OutOfMemory;
+    const obj = try makeErrorObject(interp, env.allocator, core.Value{ .symbol = "user" }, args.items[0], irritants);
+    return raise_common(interp, env, obj, fuel, false);
+}
+
+/// `raise` raises an object. If an exception handler is installed, it is
+/// called on the object; the handler returning is itself an error.
+/// Syntax: (raise obj)
+pub fn raise_fn(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return raise_common(interp, env, args.items[0], fuel, false);
+}
+
+/// `raise-continuable` raises an object; the installed handler's return value
+/// becomes the value of the raise expression.
+/// Syntax: (raise-continuable obj)
+pub fn raise_continuable_fn(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return raise_common(interp, env, args.items[0], fuel, true);
+}
+
+fn raise_common(interp: *interpreter.Interpreter, env: *core.Environment, obj: core.Value, fuel: *u64, continuable: bool) ElzError!core.Value {
+    if (interp.exception_handlers.items.len > 0) {
+        // Call the innermost handler with it uninstalled, per R7RS.
+        const handler = interp.exception_handlers.pop().?;
+        var handler_args = core.ValueList.init(env.allocator);
+        defer handler_args.deinit();
+        try handler_args.append(obj);
+        const result = vm_mod.callProc(interp, handler, handler_args, fuel);
+        interp.exception_handlers.append(interp.allocator, handler) catch return ElzError.OutOfMemory;
+        const value = try result;
+        if (continuable) return value;
+        interp.last_error_message = "exception handler returned from non-continuable raise";
+        interp.current_exception = obj;
+        return ElzError.UserError;
     }
-    interp.last_error_message = aw.toOwnedSlice() catch return ElzError.OutOfMemory;
-    return ElzError.UserError;
+    return raiseValue(interp, env.allocator, obj);
+}
+
+/// `with-exception-handler` installs `handler` for the dynamic extent of `thunk`.
+/// Syntax: (with-exception-handler handler thunk)
+pub fn with_exception_handler(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    interp.exception_handlers.append(interp.allocator, args.items[0]) catch return ElzError.OutOfMemory;
+    defer _ = interp.exception_handlers.pop();
+    var no_args = core.ValueList.init(env.allocator);
+    defer no_args.deinit();
+    return vm_mod.callProc(interp, args.items[1], no_args, fuel);
 }
 
 /// `apply` is the implementation of the `apply` primitive function in Elz.
@@ -280,9 +357,14 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
     if (body_result) |val| {
         return val;
     } else |err| {
-        // Collect the error message before it's overwritten.
-        const msg = interp.last_error_message orelse @errorName(err);
-        const err_val = core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
+        // A raised value takes precedence; otherwise fall back to the message.
+        const err_val: core.Value = if (interp.current_exception) |exc| blk: {
+            interp.current_exception = null;
+            break :blk exc;
+        } else blk: {
+            const msg = interp.last_error_message orelse @errorName(err);
+            break :blk core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
+        };
         interp.last_error_message = null;
 
         var handler_args = core.ValueList.init(env.allocator);

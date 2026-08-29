@@ -918,3 +918,57 @@
   (let ((result (proc port)))
     (close-port port)
     result))
+
+;;; ---------------------------------
+;;; R7RS Exceptions
+;;; ---------------------------------
+
+;;; (error-object? obj)
+;;;
+;;; Returns #t if obj is an error object created by error.
+(define (error-object? obj)
+  (%record-of-type? obj %error-rtd))
+
+;;; (error-object-message err)
+;;;
+;;; Returns the message of an error object.
+(define (error-object-message err)
+  (%record-ref %error-rtd err 1))
+
+;;; (error-object-irritants err)
+;;;
+;;; Returns the list of irritants of an error object.
+(define (error-object-irritants err)
+  (%record-ref %error-rtd err 2))
+
+;;; (read-error? obj)
+;;;
+;;; Returns #t if obj is an error object raised by read.
+(define (read-error? obj)
+  (and (error-object? obj) (eq? (%record-ref %error-rtd obj 0) 'read)))
+
+;;; (file-error? obj)
+;;;
+;;; Returns #t if obj is an error object raised by a file operation.
+(define (file-error? obj)
+  (and (error-object? obj) (eq? (%record-ref %error-rtd obj 0) 'file)))
+
+;;; (%guard-clauses-have-else? clauses)
+;;;
+;;; Reports whether a guard clause list ends in an else clause.
+(define (%guard-clauses-have-else? clauses)
+  (any? (lambda (c) (eq? (car c) 'else)) clauses))
+
+;;; (guard (var clause ...) body ...)
+;;;
+;;; Evaluates body; if it raises, binds the raised object to var and
+;;; dispatches on the cond-style clauses. Reraises when no clause matches.
+(define-macro (guard spec . body)
+  (let ((var (car spec))
+        (clauses (cdr spec)))
+    `(try (begin ,@body)
+          (catch ,var
+            (cond ,@clauses
+                  ,@(if (%guard-clauses-have-else? clauses)
+                        '()
+                        `((else (raise ,var)))))))))

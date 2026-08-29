@@ -998,5 +998,31 @@
 (test-case "flush-output-port" (begin (flush-output-port) #t))
 (test-case "current-error-port is an output port" (output-port? (current-error-port)))
 
+;; --- R7RS exceptions ---
+(test-case "guard catches raise" (= (guard (e ((symbol? e) 1) (else 2)) (raise 'boom)) 1))
+(test-case "guard else clause" (= (guard (e (#f 1) (else 2)) (raise 'boom)) 2))
+(test-case "guard passes through body value" (= (guard (e (else 2)) 42) 42))
+(test-case "guard reraises when no clause matches"
+  (try (guard (e ((string? e) 1)) (raise 'sym))
+       (catch e2 (eq? e2 'sym))))
+(test-case "guard with arrow clause"
+  (= (guard (e ((memq e '(a b)) => length)) (raise 'b)) 1))
+(test-case "error makes an error object"
+  (guard (e ((error-object? e)
+             (and (string=? (error-object-message e) "boom")
+                  (equal? (error-object-irritants e) '(1 2)))))
+    (error "boom" 1 2)))
+(test-case "error-object? false on plain value" (not (error-object? 5)))
+(test-case "catch receives the raised object"
+  (try (raise 42) (catch e (= e 42))))
+(test-case "with-exception-handler continuable"
+  (= (with-exception-handler (lambda (e) 42) (lambda () (+ 1 (raise-continuable 'oops)))) 43))
+(test-case "with-exception-handler receives the object"
+  (equal? (with-exception-handler (lambda (e) e) (lambda () (raise-continuable 'x))) 'x))
+(test-case "read-error? false on user error"
+  (guard (e (#t (not (read-error? e)))) (error "plain")))
+(test-case "file-error? false on user error"
+  (guard (e (#t (not (file-error? e)))) (error "plain")))
+
 ;; --- Run Summary ---
 (report-summary)

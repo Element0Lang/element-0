@@ -83,6 +83,13 @@ pub const Interpreter = struct {
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
     stderr_port: ?*core.Port = null,
+    /// The value raised by `raise`/`raise-continuable`/`error`, carried
+    /// alongside the Zig error until a catch site consumes it.
+    current_exception: ?core.Value = null,
+    /// Handlers installed by with-exception-handler, innermost last.
+    exception_handlers: std.ArrayListUnmanaged(core.Value) = .empty,
+    /// The built-in record type used for error objects (set by env_setup).
+    error_rtd: ?*core.RecordType = null,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives

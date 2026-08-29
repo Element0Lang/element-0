@@ -207,6 +207,20 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "make-promise", core.Value{ .procedure = control.make_promise });
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
     try interp.root_env.set(interp, "error", core.Value{ .procedure = control.error_fn });
+    try interp.root_env.set(interp, "raise", core.Value{ .procedure = control.raise_fn });
+    try interp.root_env.set(interp, "raise-continuable", core.Value{ .procedure = control.raise_continuable_fn });
+    try interp.root_env.set(interp, "with-exception-handler", core.Value{ .procedure = control.with_exception_handler });
+    // The built-in record type behind error objects; accessors live in std.elz.
+    {
+        const rtd = try interp.allocator.create(core.RecordType);
+        const field_names = try interp.allocator.alloc([]const u8, 3);
+        field_names[0] = "kind";
+        field_names[1] = "message";
+        field_names[2] = "irritants";
+        rtd.* = .{ .name = "error-object", .field_names = field_names };
+        interp.error_rtd = rtd;
+        try interp.root_env.set(interp, "%error-rtd", core.Value{ .record_type = rtd });
+    }
     try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
     // Internal primitive backing the try/catch special form; not user-facing.
     try interp.root_env.set(interp, "%%try%%", core.Value{ .procedure = control.prim_try });

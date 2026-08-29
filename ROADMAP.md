@@ -139,12 +139,13 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
 `current-time`) with the R7RS surface.
 
 * Exceptions (mapped onto the existing `try`/`catch` mechanism)
-    * [ ] `raise`, `raise-continuable`
-    * [ ] `with-exception-handler`
-    * [ ] `guard` (depends on the Phase 2 expander)
-    * [x] `error` (raises a catchable UserError; the error-object accessors remain)
-    * [ ] `error-object?`, `error-object-message`, `error-object-irritants`
-    * [ ] `read-error?`, `file-error?`
+    * [x] `raise`, `raise-continuable`
+    * [x] `with-exception-handler`
+    * [x] `guard`
+    * [x] `error` (raises an error object through the try/catch channel)
+    * [x] `error-object?`, `error-object-message`, `error-object-irritants`
+    * [x] `read-error?`, `file-error?` (predicates exist; internal read and file
+      errors are not yet raised as kinded error objects)
 * Dynamic binding
     * [ ] `make-parameter`, `parameterize`
 * Process context (`(scheme process-context)`)
