@@ -68,6 +68,31 @@ pub fn write_proc(interp: *interpreter.Interpreter, env: *core.Environment, args
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     var aw: std.Io.Writer.Allocating = .init(env.allocator);
     defer aw.deinit();
+    writer.writeLabeled(env.allocator, args.items[0], &aw.writer, .cycles) catch return ElzError.ForeignFunctionError;
+    const port_opt: ?Value = if (args.items.len == 2) args.items[1] else null;
+    try flush_to_destination(interp, &aw, port_opt);
+    return Value.unspecified;
+}
+
+/// `write_shared_proc` is `write` with datum labels on all shared structure.
+/// Syntax: (write-shared obj) or (write-shared obj port)
+pub fn write_shared_proc(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
+    writer.writeLabeled(env.allocator, args.items[0], &aw.writer, .shared) catch return ElzError.ForeignFunctionError;
+    const port_opt: ?Value = if (args.items.len == 2) args.items[1] else null;
+    try flush_to_destination(interp, &aw, port_opt);
+    return Value.unspecified;
+}
+
+/// `write_simple_proc` is `write` without datum labels; it may not terminate
+/// beyond the depth guard on cyclic data.
+/// Syntax: (write-simple obj) or (write-simple obj port)
+pub fn write_simple_proc(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
     writer.write(args.items[0], &aw.writer) catch return ElzError.ForeignFunctionError;
     const port_opt: ?Value = if (args.items.len == 2) args.items[1] else null;
     try flush_to_destination(interp, &aw, port_opt);

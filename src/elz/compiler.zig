@@ -313,6 +313,8 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, sym, "let-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "letrec-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "syntax-rules")) return self.compileSyntaxRules(head, args, env);
+        if (std.mem.eql(u8, sym, "include")) return self.compileInclude(args, env, tail, false, fuel);
+        if (std.mem.eql(u8, sym, "include-ci")) return self.compileInclude(args, env, tail, true, fuel);
         if (std.mem.eql(u8, sym, "syntax-error")) {
             if (args == .pair and args.pair.car == .string) {
                 self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string}) catch null;
@@ -1343,6 +1345,52 @@ pub const Compiler = struct {
         for (jumps_to_end.items) |j| {
             self.patchJump(j);
         }
+    }
+
+    /// Recursively lowercases every symbol in a form, for include-ci.
+    fn foldCase(self: *Compiler, form: Value) ElzError!Value {
+        switch (form) {
+            .symbol => |s| {
+                const folded = self.allocator.dupe(u8, s) catch return ElzError.OutOfMemory;
+                for (folded) |*c| c.* = std.ascii.toLower(c.*);
+                return Value{ .symbol = folded };
+            },
+            .pair => |p| {
+                const new_pair = self.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+                new_pair.* = .{
+                    .car = try self.foldCase(p.car),
+                    .cdr = try self.foldCase(p.cdr),
+                };
+                return Value{ .pair = new_pair };
+            },
+            else => return form,
+        }
+    }
+
+    /// Compiles (include "file" ...) by splicing the files' forms in place at
+    /// compile time. include-ci case-folds symbols first.
+    fn compileInclude(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fold_case: bool, fuel: *u64) ElzError!void {
+        var emitted = false;
+        var cur = args;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            const filename_val = cur.pair.car;
+            if (filename_val != .string) return ElzError.InvalidArgument;
+            const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, filename_val.string, self.allocator, .limited(1 * 1024 * 1024)) catch {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: cannot read '{s}'", .{filename_val.string}) catch null;
+                return ElzError.FileNotFound;
+            };
+            var forms = @import("parser.zig").readAll(source, self.allocator) catch |e| return e;
+            defer forms.deinit(self.allocator);
+            const is_last_file = cur.pair.cdr == .nil;
+            for (forms.items, 0..) |form, i| {
+                if (emitted) _ = try self.emitOp(.pop);
+                const compiled_form = if (fold_case) try self.foldCase(form) else form;
+                const form_tail = tail and is_last_file and i == forms.items.len - 1;
+                try self.compileExpr(compiled_form, env, form_tail, fuel);
+                emitted = true;
+            }
+        }
+        if (!emitted) _ = try self.emitOp(.load_unspecified);
     }
 
     /// Compiles a case clause body with the key on top of the stack. A plain

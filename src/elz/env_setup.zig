@@ -236,6 +236,8 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
 pub fn populate_io(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "display", core.Value{ .procedure = io.display });
     try interp.root_env.set(interp, "write", core.Value{ .procedure = io.write_proc });
+    try interp.root_env.set(interp, "write-shared", core.Value{ .procedure = io.write_shared_proc });
+    try interp.root_env.set(interp, "write-simple", core.Value{ .procedure = io.write_simple_proc });
     try interp.root_env.set(interp, "newline", core.Value{ .procedure = io.newline });
     try interp.root_env.set(interp, "load", core.Value{ .procedure = io.load });
     try interp.root_env.set(interp, "read-string", core.Value{ .procedure = io.read_string });

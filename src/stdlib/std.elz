@@ -1039,3 +1039,15 @@
 ;;; Returns a promise that, when forced, forces the promise produced by expr.
 (define-macro (delay-force expr)
   `(delay (force ,expr)))
+
+;;; (interaction-environment)
+;;;
+;;; Returns the environment eval uses by default. Elz has a single global
+;;; environment, so this is an opaque marker accepted by eval.
+(define (interaction-environment) '%interaction-environment)
+
+;;; (environment import-spec ...)
+;;;
+;;; Returns an environment for eval. Elz has a single global environment,
+;;; so every import spec resolves to the interaction environment.
+(define (environment . import-specs) '%interaction-environment)

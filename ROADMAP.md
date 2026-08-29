@@ -157,11 +157,12 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
 * Lazy evaluation completions
     * [x] `promise?`, `delay-force` (`delay`, `force`, and `make-promise` exist)
 * Eval and libraries
-    * [ ] `environment` for `eval`, and `interaction-environment`
+    * [x] `environment` for `eval`, and `interaction-environment` (opaque markers;
+      Elz has a single global environment)
     * [ ] `define-library` surface syntax lowering to the existing module system
-    * [ ] `include`, `include-ci`
+    * [x] `include`, `include-ci`
 * Writer
-    * [ ] `write` with datum labels for cyclic data (required by R7RS),
+    * [x] `write` with datum labels for cyclic data (required by R7RS),
       `write-shared`, `write-simple`
 
 ## Phase 5: Delimited Continuations

@@ -1054,5 +1054,31 @@
 (test-case "delay-force" (= (force (delay-force (delay 42))) 42))
 (test-case "make-promise round trip" (= (force (make-promise 7)) 7))
 
+;; --- Eval environments, include, and the labeled writer ---
+(test-case "eval with interaction-environment" (= (eval '(+ 1 2) (interaction-environment)) 3))
+(test-case "eval with environment" (= (eval '(car '(5)) (environment '(scheme base))) 5))
+
+(include "tests/fixtures/include-me.elz")
+(test-case "include splices definitions" (= %included-value 42))
+(include-ci "tests/fixtures/include-ci-me.elz")
+(test-case "include-ci folds case" (= %ci-value 7))
+
+(test-case "write-simple output"
+  (string=? (call-with-output-string (lambda (p) (write-simple '(1 2) p))) "(1 2)"))
+(test-case "write on cyclic data terminates with labels"
+  (let ((l (list 1)))
+    (set-cdr! l l)
+    (string=? (call-with-output-string (lambda (p) (write l p))) "#0=(1 . #0#)")))
+(test-case "write on shared acyclic data has no labels"
+  (let ((v (vector 9)) (l (list 0 0)))
+    (list-set! l 0 v)
+    (list-set! l 1 v)
+    (string=? (call-with-output-string (lambda (p) (write l p))) "(#(9) #(9))")))
+(test-case "write-shared labels shared structure"
+  (let ((v (vector 9)) (l (list 0 0)))
+    (list-set! l 0 v)
+    (list-set! l 1 v)
+    (string=? (call-with-output-string (lambda (p) (write-shared l p))) "(#0=#(9) #0#)")))
+
 ;; --- Run Summary ---
 (report-summary)

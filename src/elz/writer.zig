@@ -359,3 +359,186 @@ test "write character special cases" {
     try write(Value{ .character = 'a' }, &w);
     try testing.expectEqualStrings("#\\a", w.buffered());
 }
+
+// ---------------------------------------------------------------------------
+// Labeled writing (R7RS write / write-shared): datum labels for cycles.
+// ---------------------------------------------------------------------------
+
+/// Which nodes receive datum labels.
+pub const LabelMode = enum {
+    /// Label only nodes that are part of a cycle (R7RS `write`).
+    cycles,
+    /// Label every shared node (R7RS `write-shared`).
+    shared,
+};
+
+fn ptrOf(value: Value) ?usize {
+    return switch (value) {
+        .pair => |p| @intFromPtr(p),
+        .vector => |v| @intFromPtr(v),
+        else => null,
+    };
+}
+
+const AnalyzeState = struct {
+    allocator: std.mem.Allocator,
+    /// 1 = on the current traversal path, 2 = fully traversed.
+    states: std.AutoHashMapUnmanaged(usize, u8) = .empty,
+    cyclic: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    shared: std.AutoHashMapUnmanaged(usize, void) = .empty,
+
+    fn deinit(self: *AnalyzeState) void {
+        self.states.deinit(self.allocator);
+        self.cyclic.deinit(self.allocator);
+        self.shared.deinit(self.allocator);
+    }
+
+    /// Returns true when the value was already seen (and marked accordingly).
+    fn checkSeen(self: *AnalyzeState, ptr: usize) !bool {
+        if (self.states.get(ptr)) |st| {
+            if (st == 1) {
+                try self.cyclic.put(self.allocator, ptr, {});
+            } else {
+                try self.shared.put(self.allocator, ptr, {});
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn analyze(self: *AnalyzeState, value: Value) !void {
+        switch (value) {
+            .pair => {
+                // Iterate the cdr chain so long lists do not recurse deeply.
+                // Chain nodes stay "on path" until the whole chain is done.
+                var chain: std.ArrayListUnmanaged(usize) = .empty;
+                defer chain.deinit(self.allocator);
+                var cur = value;
+                while (cur == .pair) {
+                    const ptr = @intFromPtr(cur.pair);
+                    if (try self.checkSeen(ptr)) break;
+                    try self.states.put(self.allocator, ptr, 1);
+                    try chain.append(self.allocator, ptr);
+                    try self.analyze(cur.pair.car);
+                    cur = cur.pair.cdr;
+                }
+                if (cur != .pair) try self.analyze(cur);
+                for (chain.items) |ptr| {
+                    try self.states.put(self.allocator, ptr, 2);
+                }
+            },
+            .vector => |v| {
+                const ptr = @intFromPtr(v);
+                if (try self.checkSeen(ptr)) return;
+                try self.states.put(self.allocator, ptr, 1);
+                for (v.items) |item| {
+                    try self.analyze(item);
+                }
+                try self.states.put(self.allocator, ptr, 2);
+            },
+            else => {},
+        }
+    }
+};
+
+const LabelWriter = struct {
+    allocator: std.mem.Allocator,
+    /// Labeled node -> assigned label index, or null before first emission.
+    labels: std.AutoHashMapUnmanaged(usize, ?usize) = .empty,
+    next_label: usize = 0,
+
+    fn deinit(self: *LabelWriter) void {
+        self.labels.deinit(self.allocator);
+    }
+
+    /// Emits "#n#" (returns true) for an already-printed labeled node, or the
+    /// "#n=" prefix (returns false) on its first emission.
+    fn emitLabel(self: *LabelWriter, ptr: usize, writer: anytype) !bool {
+        const entry = self.labels.getPtr(ptr) orelse return false;
+        if (entry.*) |n| {
+            try writer.print("#{d}#", .{n});
+            return true;
+        }
+        entry.* = self.next_label;
+        try writer.print("#{d}=", .{self.next_label});
+        self.next_label += 1;
+        return false;
+    }
+
+    fn writeValue(self: *LabelWriter, value: Value, writer: anytype, depth: usize) !void {
+        if (depth > MAX_PRINT_DEPTH) {
+            try writer.writeAll("...");
+            return;
+        }
+        switch (value) {
+            .pair => {
+                if (ptrOf(value)) |ptr| {
+                    if (self.labels.contains(ptr)) {
+                        if (try self.emitLabel(ptr, writer)) return;
+                    }
+                }
+                try writer.writeAll("(");
+                var cur = value.pair;
+                while (true) {
+                    try self.writeValue(cur.car, writer, depth + 1);
+                    switch (cur.cdr) {
+                        .pair => |next| {
+                            // A labeled tail must print in dotted position.
+                            if (self.labels.contains(@intFromPtr(next))) {
+                                try writer.writeAll(" . ");
+                                try self.writeValue(cur.cdr, writer, depth + 1);
+                                break;
+                            }
+                            try writer.writeAll(" ");
+                            cur = next;
+                        },
+                        .nil => break,
+                        else => {
+                            try writer.writeAll(" . ");
+                            try self.writeValue(cur.cdr, writer, depth + 1);
+                            break;
+                        },
+                    }
+                }
+                try writer.writeAll(")");
+            },
+            .vector => |v| {
+                if (self.labels.contains(@intFromPtr(v))) {
+                    if (try self.emitLabel(@intFromPtr(v), writer)) return;
+                }
+                try writer.writeAll("#(");
+                for (v.items, 0..) |item, i| {
+                    if (i > 0) try writer.writeAll(" ");
+                    try self.writeValue(item, writer, depth + 1);
+                }
+                try writer.writeAll(")");
+            },
+            else => try write(value, writer),
+        }
+    }
+};
+
+/// Writes `value` with datum labels: for cycles only (`write`), or for all
+/// shared structure (`write-shared`).
+pub fn writeLabeled(allocator: std.mem.Allocator, value: Value, writer: anytype, mode: LabelMode) !void {
+    var analysis = AnalyzeState{ .allocator = allocator };
+    defer analysis.deinit();
+    try analysis.analyze(value);
+
+    var lw = LabelWriter{ .allocator = allocator };
+    defer lw.deinit();
+    var it = analysis.cyclic.keyIterator();
+    while (it.next()) |ptr| {
+        try lw.labels.put(allocator, ptr.*, null);
+    }
+    if (mode == .shared) {
+        var sit = analysis.shared.keyIterator();
+        while (sit.next()) |ptr| {
+            try lw.labels.put(allocator, ptr.*, null);
+        }
+    }
+    if (lw.labels.count() == 0) {
+        return write(value, writer);
+    }
+    try lw.writeValue(value, writer, 0);
+}
