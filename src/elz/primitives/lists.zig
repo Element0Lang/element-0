@@ -325,6 +325,24 @@ pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     return Value.unspecified;
 }
 
+/// `list_set_bang` stores a value in element k of a list, in place.
+/// Implemented natively because car/cdr return deep clones, so a stdlib
+/// definition could not reach the original pairs.
+/// Syntax: (list-set! list k obj)
+pub fn list_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 3) return ElzError.WrongArgumentCount;
+    if (args.items[1] != .exact_integer or args.items[1].exact_integer < 0) return ElzError.InvalidArgument;
+    var cur = args.items[0];
+    var k = args.items[1].exact_integer;
+    while (k > 0) : (k -= 1) {
+        if (cur != .pair) return ElzError.InvalidArgument;
+        cur = cur.pair.cdr;
+    }
+    if (cur != .pair) return ElzError.InvalidArgument;
+    cur.pair.car = args.items[2];
+    return Value.unspecified;
+}
+
 /// `set_cdr` modifies the cdr of a pair.
 /// Syntax: (set-cdr! pair obj)
 pub fn set_cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {

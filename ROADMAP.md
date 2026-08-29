@@ -67,27 +67,27 @@ exists. The complex and rational values already exist in the tower, so this phas
 exposes the standard interface to them.
 
 * Rational accessors
-    * [ ] `numerator`, `denominator`
-    * [ ] `rationalize`
+    * [x] `numerator`, `denominator`
+    * [x] `rationalize`
 * Complex accessors and constructors (`(scheme complex)`)
-    * [ ] `make-rectangular`, `make-polar`
-    * [ ] `real-part`, `imag-part`, `magnitude`, `angle`
+    * [x] `make-rectangular`, `make-polar`
+    * [x] `real-part`, `imag-part`, `magnitude`, `angle`
 * R7RS numeric names and predicates
-    * [ ] `exact`, `inexact` (keep `exact->inexact`/`inexact->exact` as aliases)
-    * [ ] `exact-integer?`, `exact-integer-sqrt`, `square`
-    * [ ] `finite?`, `infinite?`, `nan?`
-    * [ ] `floor/`, `floor-quotient`, `floor-remainder`
-    * [ ] `truncate/`, `truncate-quotient`, `truncate-remainder`
+    * [x] `exact`, `inexact` (keep `exact->inexact`/`inexact->exact` as aliases)
+    * [x] `exact-integer?`, `exact-integer-sqrt`, `square`
+    * [x] `finite?`, `infinite?`, `nan?`
+    * [x] `floor/`, `floor-quotient`, `floor-remainder`
+    * [x] `truncate/`, `truncate-quotient`, `truncate-remainder`
 * Small list, string, vector, and character completions (mostly implementable in
   `std.elz`)
-    * [ ] `make-list`, `list-copy`, `list-set!`
-    * [ ] `string-map`, `string-for-each`, `string-copy!`
-    * [ ] `string-upcase`, `string-downcase`, `string-foldcase`, `char-foldcase`,
+    * [x] `make-list`, `list-copy`, `list-set!`
+    * [x] `string-map`, `string-for-each`, `string-copy!`
+    * [x] `string-upcase`, `string-downcase`, `string-foldcase`, `char-foldcase`,
       `digit-value`
-    * [ ] `vector-map`, `vector-for-each`, `vector-copy`, `vector-copy!`,
+    * [x] `vector-map`, `vector-for-each`, `vector-copy`, `vector-copy!`,
       `vector-append`, `vector->string`, `string->vector`
-    * [ ] `symbol=?`, `boolean=?`
-    * [ ] `write-string`
+    * [x] `symbol=?`, `boolean=?`
+    * [x] `write-string`
 
 ## Phase 2: Full `syntax-rules` and Derived Syntax
 
@@ -118,7 +118,7 @@ phase has the highest value. It requires restructuring the matcher and expander 
     * [ ] `bytevector-copy`, `bytevector-copy!`, `bytevector-append`
     * [ ] `utf8->string`, `string->utf8`
 * String ports
-    * [ ] `open-input-string`, `open-output-string`, `get-output-string`
+    * [x] `open-input-string`, `open-output-string`, `get-output-string`
 * Binary ports
     * [ ] `open-input-bytevector`, `open-output-bytevector`, `get-output-bytevector`
     * [ ] `open-binary-input-file`, `open-binary-output-file`

@@ -1055,30 +1055,45 @@ pub const Compiler = struct {
         const bindings = args.pair.car;
         const body = args.pair.cdr;
 
-        // Allocate all locals first (set to #f placeholder).
+        // Rewrite (letrec ((v e) ...) body) as (let ((v #f) ...) (set! v e) ... body)
+        // so the let's immediately-invoked lambda provides a fresh frame; allocating
+        // locals in the current stack context breaks at top level and in argument
+        // position, where the stack holds values below the new slots.
+        var names: std.ArrayListUnmanaged(Value) = .empty;
+        defer names.deinit(self.allocator);
+        var inits: std.ArrayListUnmanaged(Value) = .empty;
+        defer inits.deinit(self.allocator);
+
         var cur = bindings;
         while (cur != .nil) {
             const binding = cur.pair.car;
-            const var_name = binding.pair.car.symbol;
-            _ = try self.scope.addLocal(var_name);
-            _ = try self.emitOp(.load_false);
+            try names.append(self.allocator, binding.pair.car);
+            try inits.append(self.allocator, binding.pair.cdr.pair.car);
             cur = cur.pair.cdr;
         }
 
-        // Now store all locals from initializer start (find the first slot).
-        const first_slot: u8 = @intCast(self.scope.locals.items.len - listLen(bindings));
-        cur = bindings;
-        var i: u8 = first_slot;
-        while (cur != .nil) {
-            const binding = cur.pair.car;
-            const init_expr = binding.pair.cdr.pair.car;
-            try self.compileExpr(init_expr, env, false, fuel);
-            _ = try self.emitA(.store_local, i);
-            cur = cur.pair.cdr;
-            i += 1;
+        var new_body = body;
+        var i = names.items.len;
+        while (i > 0) {
+            i -= 1;
+            var set_form: Value = .nil;
+            set_form = try makePair(self.allocator, inits.items[i], set_form);
+            set_form = try makePair(self.allocator, names.items[i], set_form);
+            set_form = try makePair(self.allocator, Value{ .symbol = "set!" }, set_form);
+            new_body = try makePair(self.allocator, set_form, new_body);
         }
 
-        try self.compileBegin(body, env, tail, fuel);
+        var new_bindings: Value = .nil;
+        i = names.items.len;
+        while (i > 0) {
+            i -= 1;
+            const placeholder = try makePair(self.allocator, Value{ .boolean = false }, Value.nil);
+            const new_binding = try makePair(self.allocator, names.items[i], placeholder);
+            new_bindings = try makePair(self.allocator, new_binding, new_bindings);
+        }
+
+        const new_args = try makePair(self.allocator, new_bindings, new_body);
+        try self.compileLet(new_args, env, tail, false, fuel);
     }
 
     // -----------------------------------------------------------------------
@@ -1183,18 +1198,19 @@ pub const Compiler = struct {
             };
             if (arrow_not_bound) {
                 const proc_expr = clause_body.pair.cdr.pair.car;
-                // Allocate a temp local for the test result.
-                const tmp_slot = try self.scope.addLocal("__cond_arrow_tmp__");
+                // Keep the test value on the stack (no temp local: a local slot
+                // allocated here is wrong when cond appears in argument position).
                 try self.compileExpr(test_expr, env, false, fuel);
-                _ = try self.emitA(.store_local, tmp_slot);
-                _ = try self.emitA(.load_local, tmp_slot);
+                _ = try self.emitOp(.dup);
                 const jif = try self.emitJump(.jump_if_false);
-                // Truthy: call proc with stored test value.
+                // Truthy: [test]; call proc with it.
                 try self.compileExpr(proc_expr, env, false, fuel);
-                _ = try self.emitA(.load_local, tmp_slot);
+                _ = try self.emitOp(.swap);
                 _ = try self.emitA(.call, 1);
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
                 self.patchJump(jif);
+                // False: discard the test value.
+                _ = try self.emitOp(.pop);
                 continue;
             }
 
@@ -1336,7 +1352,6 @@ pub const Compiler = struct {
         const body = args.pair.cdr;
         try self.compileExpr(test_expr, env, false, fuel);
         const jif = try self.emitJump(.jump_if_false);
-        _ = try self.emitOp(.pop);
         try self.compileBegin(body, env, tail, fuel);
         const jmp = try self.emitJump(.jump);
         self.patchJump(jif);
@@ -1352,7 +1367,6 @@ pub const Compiler = struct {
         _ = try self.emitOp(.load_unspecified);
         const jmp = try self.emitJump(.jump);
         self.patchJump(jif);
-        _ = try self.emitOp(.pop);
         try self.compileBegin(body, env, tail, fuel);
         self.patchJump(jmp);
     }

@@ -304,7 +304,9 @@ pub const Interpreter = struct {
         self.time_check_counter +%= 1;
         if (self.time_check_counter & 0xFF == 0) {
             if (self.time_limit_ms) |limit| {
-                const elapsed = currentTimeMs() - (self.eval_start_ms orelse 0);
+                // No eval window yet (e.g. the stdlib load during init): nothing to limit.
+                const start = self.eval_start_ms orelse return;
+                const elapsed = currentTimeMs() - start;
                 if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
             }
         }

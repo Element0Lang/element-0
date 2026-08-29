@@ -820,5 +820,80 @@
     (vector-fill! v 1)
     (= (vector-ref v 0) 1)))
 
+;; --- R7RS small library completions ---
+(test-case "make-list with fill" (equal? (make-list 3 'x) '(x x x)))
+(test-case "make-list without fill has length" (= (length (make-list 3)) 3))
+(test-case "list-copy equal" (equal? (list-copy '(1 2 3)) '(1 2 3)))
+(test-case "list-copy is fresh"
+  (let* ((a (list 1 2 3)) (b (list-copy a)))
+    (set-car! b 9)
+    (and (= (car a) 1) (= (car b) 9))))
+(test-case "list-set!"
+  (let ((l (list 1 2 3)))
+    (list-set! l 1 'two)
+    (equal? l '(1 two 3))))
+
+(test-case "string-map single" (string=? (string-map char-upcase "abc") "ABC"))
+(test-case "string-map two strings"
+  (string=? (string-map (lambda (a b) (if (char<? a b) a b)) "cat" "bat") "bat"))
+(test-case "string-for-each collects"
+  (let ((acc '()))
+    (string-for-each (lambda (c) (set! acc (cons c acc))) "ab")
+    (equal? acc '(#\b #\a))))
+(test-case "string-copy! basic"
+  (let ((to (string-copy "abcde")))
+    (string-copy! to 1 "xy")
+    (string=? to "axyde")))
+(test-case "string-copy! with start end"
+  (let ((to (string-copy "abcde")))
+    (string-copy! to 0 "wxyz" 1 3)
+    (string=? to "xycde")))
+
+(test-case "string-upcase" (string=? (string-upcase "aBc") "ABC"))
+(test-case "string-downcase" (string=? (string-downcase "AbC") "abc"))
+(test-case "string-foldcase" (string=? (string-foldcase "AbC") "abc"))
+(test-case "char-foldcase" (char=? (char-foldcase #\A) #\a))
+(test-case "digit-value of 7" (= (digit-value #\7) 7))
+(test-case "digit-value of letter is false" (not (digit-value #\a)))
+
+(test-case "vector-map" (equal? (vector->list (vector-map + (vector 1 2) (vector 10 20))) '(11 22)))
+(test-case "vector-for-each collects"
+  (let ((acc '()))
+    (vector-for-each (lambda (x) (set! acc (cons x acc))) (vector 1 2))
+    (equal? acc '(2 1))))
+(test-case "vector-copy full" (equal? (vector->list (vector-copy (vector 1 2 3))) '(1 2 3)))
+(test-case "vector-copy range" (equal? (vector->list (vector-copy (vector 1 2 3 4) 1 3)) '(2 3)))
+(test-case "vector-copy is fresh"
+  (let* ((a (vector 1 2)) (b (vector-copy a)))
+    (vector-set! b 0 9)
+    (and (= (vector-ref a 0) 1) (= (vector-ref b 0) 9))))
+(test-case "vector-copy! basic"
+  (let ((to (vector 1 2 3 4 5)))
+    (vector-copy! to 1 (vector 8 9))
+    (equal? (vector->list to) '(1 8 9 4 5))))
+(test-case "vector-copy! overlapping forward"
+  (let ((v (vector 1 2 3 4 5)))
+    (vector-copy! v 1 v 0 4)
+    (equal? (vector->list v) '(1 1 2 3 4))))
+(test-case "vector-copy! overlapping backward"
+  (let ((v (vector 1 2 3 4 5)))
+    (vector-copy! v 0 v 1 5)
+    (equal? (vector->list v) '(2 3 4 5 5))))
+(test-case "vector-append" (equal? (vector->list (vector-append (vector 1) (vector 2 3))) '(1 2 3)))
+(test-case "vector->string" (string=? (vector->string (vector #\a #\b)) "ab"))
+(test-case "string->vector" (equal? (vector->list (string->vector "ab")) '(#\a #\b)))
+
+(test-case "write-string round-trip"
+  (begin
+    (with-output-to-file "tmp-write-string.txt" (lambda () (write-string "hi there")))
+    (let ((s (with-input-from-file "tmp-write-string.txt" (lambda () (read-line)))))
+      (delete-file "tmp-write-string.txt")
+      (string=? s "hi there"))))
+
+(test-case "symbol=? true" (symbol=? 'a 'a 'a))
+(test-case "symbol=? false" (not (symbol=? 'a 'b)))
+(test-case "boolean=? true" (boolean=? #f #f))
+(test-case "boolean=? false" (not (boolean=? #t #f)))
+
 ;; --- Run Summary ---
 (report-summary)

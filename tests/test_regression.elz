@@ -238,4 +238,38 @@
 (test-case "map over single element"
   (equal? (map (lambda (x) (* x 2)) '(5)) '(10)))
 
+;; Regression: letrec broke outside a plain function-body position because it
+;; allocated locals in the current stack context (top level, argument position).
+(test-case "letrec value binding in argument position"
+  (= (letrec ((x 5)) x) 5))
+(test-case "letrec backward reference"
+  (= (letrec ((g (lambda () 42)) (f (lambda () (g)))) (f)) 42))
+(test-case "letrec mutual recursion"
+  (letrec ((even2? (lambda (n) (if (= n 0) #t (odd2? (- n 1)))))
+           (odd2? (lambda (n) (if (= n 0) #f (even2? (- n 1))))))
+    (and (even2? 10) (odd2? 9))))
+(test-case "letrec inside let body"
+  (= (let ((base 1))
+       (letrec ((f (lambda (n) (if (= n 0) base (f (- n 1))))))
+         (f 3)))
+     1))
+
+;; Regression: when and unless emitted a spurious pop after jump_if_false
+;; (which already pops the condition), corrupting the stack in value position.
+(test-case "when in argument position, true" (= (when #t 42) 42))
+(test-case "when in argument position, false" (equal? (when #f 42) (if #f #f)))
+(test-case "unless in argument position, false" (= (unless #f 42) 42))
+(test-case "when as statement"
+  (let ((acc 0))
+    (when #t (set! acc 1))
+    (unless #t (set! acc 2))
+    (= acc 1)))
+
+;; Regression: the arrow clause of cond allocated a temp local in the current
+;; stack context, corrupting the stack in argument position.
+(test-case "cond arrow in argument position"
+  (= 25 (cond ((+ 2 3) => (lambda (x) (* x x))) (else 0))))
+(test-case "cond arrow false clause in argument position"
+  (= 7 (cond (#f => (lambda (x) x)) (else 7))))
+
 (report-summary)

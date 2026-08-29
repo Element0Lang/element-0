@@ -598,3 +598,164 @@
            (error "boolean=?: not a boolean" (car items)))
           ((eq? b (car items)) (loop (cdr items)))
           (else #f)))))
+
+;;; ---------------------------------
+;;; R7RS Small Library Completions
+;;; ---------------------------------
+
+;;; (make-list k [fill])
+;;;
+;;; Returns a list of k elements, each set to fill (or an unspecified value).
+(define (make-list k . fill)
+  (let ((f (if (null? fill) (if #f #f) (car fill))))
+    (let loop ((n k) (acc '()))
+      (if (<= n 0) acc (loop (- n 1) (cons f acc))))))
+
+;;; (list-copy lst)
+;;;
+;;; Returns a fresh copy of the spine of lst. Improper tails are shared.
+(define (list-copy lst)
+  (if (pair? lst)
+      (cons (car lst) (list-copy (cdr lst)))
+      lst))
+
+;;; (symbol=? sym1 sym2 ...)
+;;;
+;;; Returns #t if all arguments are the same symbol, #f otherwise.
+(define (symbol=? a . rest)
+  (and (symbol? a)
+       (let loop ((items rest))
+         (cond
+           ((null? items) #t)
+           ((eq? a (car items)) (loop (cdr items)))
+           (else #f)))))
+
+;;; (string-map proc str1 str2 ...)
+;;;
+;;; Applies proc element-wise to the characters of the strings and returns a
+;;; new string of the results. Stops at the shortest string.
+(define (string-map proc . strs)
+  (list->string (apply map proc (map string->list strs))))
+
+;;; (string-for-each proc str1 str2 ...)
+;;;
+;;; Applies proc element-wise to the characters of the strings, in order,
+;;; for its side effects.
+(define (string-for-each proc . strs)
+  (apply map proc (map string->list strs))
+  (if #f #f))
+
+;;; (string-copy! to at from [start [end]])
+;;;
+;;; Copies the characters of from between start and end into to, starting
+;;; at index at. The source range is snapshotted first, so overlapping
+;;; copies within one string are safe.
+(define (string-copy! to at from . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (string-length from) (cadr se)))
+         (chars (string->list (substring from start end))))
+    (let loop ((i at) (cs chars))
+      (if (null? cs)
+          (if #f #f)
+          (begin
+            (string-set! to i (car cs))
+            (loop (+ i 1) (cdr cs)))))))
+
+;;; (string-upcase str)
+;;;
+;;; Returns a new string with every character upcased.
+(define (string-upcase str)
+  (string-map char-upcase str))
+
+;;; (string-downcase str)
+;;;
+;;; Returns a new string with every character downcased.
+(define (string-downcase str)
+  (string-map char-downcase str))
+
+;;; (string-foldcase str)
+;;;
+;;; Returns a new string case-folded for caseless comparison.
+(define (string-foldcase str)
+  (string-downcase str))
+
+;;; (char-foldcase char)
+;;;
+;;; Returns the case-folded form of char.
+(define (char-foldcase c)
+  (char-downcase c))
+
+;;; (digit-value char)
+;;;
+;;; Returns the numeric value of a decimal digit character, or #f.
+(define (digit-value c)
+  (if (char-numeric? c)
+      (- (char->integer c) (char->integer #\0))
+      #f))
+
+;;; (vector-map proc vec1 vec2 ...)
+;;;
+;;; Applies proc element-wise to the vectors and returns a new vector of the
+;;; results. Stops at the shortest vector.
+(define (vector-map proc . vecs)
+  (list->vector (apply map proc (map vector->list vecs))))
+
+;;; (vector-for-each proc vec1 vec2 ...)
+;;;
+;;; Applies proc element-wise to the vectors, in order, for its side effects.
+(define (vector-for-each proc . vecs)
+  (apply map proc (map vector->list vecs))
+  (if #f #f))
+
+;;; (vector-copy vec [start [end]])
+;;;
+;;; Returns a fresh vector holding the elements of vec between start and end.
+(define (vector-copy vec . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (vector-length vec) (cadr se))))
+    (let loop ((i (- end 1)) (acc '()))
+      (if (< i start)
+          (list->vector acc)
+          (loop (- i 1) (cons (vector-ref vec i) acc))))))
+
+;;; (vector-copy! to at from [start [end]])
+;;;
+;;; Copies the elements of from between start and end into to, starting at
+;;; index at. The source range is snapshotted first, so overlapping copies
+;;; within one vector are safe.
+(define (vector-copy! to at from . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (vector-length from) (cadr se)))
+         (elems (vector->list (vector-copy from start end))))
+    (let loop ((i at) (es elems))
+      (if (null? es)
+          (if #f #f)
+          (begin
+            (vector-set! to i (car es))
+            (loop (+ i 1) (cdr es)))))))
+
+;;; (vector-append vec ...)
+;;;
+;;; Returns a fresh vector holding the elements of the vectors in order.
+(define (vector-append . vecs)
+  (list->vector (apply append (map vector->list vecs))))
+
+;;; (vector->string vec [start [end]])
+;;;
+;;; Returns a string holding the characters of vec between start and end.
+(define (vector->string vec . se)
+  (list->string (vector->list (apply vector-copy vec se))))
+
+;;; (string->vector str [start [end]])
+;;;
+;;; Returns a vector holding the characters of str between start and end.
+(define (string->vector str . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (string-length str) (cadr se))))
+    (list->vector (string->list (substring str start end)))))
+
+;;; (write-string str [port])
+;;;
+;;; Writes the characters of str to port (default: the current output port).
+(define (write-string str . port)
+  (apply display str port))

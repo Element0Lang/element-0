@@ -102,6 +102,7 @@ pub fn populate_lists(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "map", core.Value{ .procedure = lists.map });
     try interp.root_env.set(interp, "list-ref", core.Value{ .procedure = lists.list_ref });
     try interp.root_env.set(interp, "list-tail", core.Value{ .procedure = lists.list_tail });
+    try interp.root_env.set(interp, "list-set!", core.Value{ .procedure = lists.list_set_bang });
     try interp.root_env.set(interp, "memq", core.Value{ .procedure = lists.memq });
     try interp.root_env.set(interp, "assq", core.Value{ .procedure = lists.assq });
     try interp.root_env.set(interp, "pair?", core.Value{ .procedure = lists.is_pair });

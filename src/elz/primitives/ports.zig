@@ -57,15 +57,23 @@ pub fn close_output_port(_: *interpreter.Interpreter, _: *core.Environment, args
     return Value.unspecified;
 }
 
-/// `read_line` reads a line from an input port.
-/// Syntax: (read-line port)
-pub fn read_line(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+/// Resolves the port argument for a read primitive: an explicit port when one
+/// is given, the interpreter's current input port when the argument is omitted.
+fn inputPortArg(interp: *interpreter.Interpreter, args: core.ValueList) ElzError!*core.Port {
+    if (args.items.len == 0) {
+        return interp.currentInputPort() catch return ElzError.OutOfMemory;
+    }
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-
     const port_val = args.items[0];
     if (port_val != .port) return ElzError.InvalidArgument;
+    return port_val.port;
+}
 
-    const line = port_val.port.readLine(env.allocator) catch return ElzError.IOError;
+/// `read_line` reads a line from an input port.
+/// Syntax: (read-line) or (read-line port)
+pub fn read_line(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    const line = port.readLine(env.allocator) catch return ElzError.IOError;
     if (line) |l| {
         return Value{ .string = l };
     }
@@ -74,14 +82,10 @@ pub fn read_line(_: *interpreter.Interpreter, env: *core.Environment, args: core
 }
 
 /// `read_char` reads a single character from an input port.
-/// Syntax: (read-char port)
-pub fn read_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-
-    const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
-
-    const char = port_val.port.readChar() catch return ElzError.IOError;
+/// Syntax: (read-char) or (read-char port)
+pub fn read_char(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    const char = port.readChar() catch return ElzError.IOError;
     if (char) |c| {
         return Value{ .character = c };
     }
@@ -90,14 +94,10 @@ pub fn read_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 }
 
 /// `peek_char` returns the next character on an input port without consuming it.
-/// Syntax: (peek-char port)
-pub fn peek_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-
-    const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
-
-    const char = port_val.port.peekChar() catch return ElzError.IOError;
+/// Syntax: (peek-char) or (peek-char port)
+pub fn peek_char(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    const char = port.peekChar() catch return ElzError.IOError;
     if (char) |c| {
         return Value{ .character = c };
     }
@@ -107,13 +107,10 @@ pub fn peek_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 /// `char_ready_p` reports whether a character is available on an input port.
 /// File-backed ports always have a character available until end-of-file, so this
 /// simply returns `#t` for any open input port.
-/// Syntax: (char-ready? port)
-pub fn char_ready_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-
-    const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
-    return Value{ .boolean = port_val.port.is_input and port_val.port.is_open };
+/// Syntax: (char-ready?) or (char-ready? port)
+pub fn char_ready_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    return Value{ .boolean = port.is_input and port.is_open };
 }
 
 /// `write_char` writes a single character to an output port as UTF-8.
