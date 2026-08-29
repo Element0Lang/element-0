@@ -1096,5 +1096,27 @@
 (test-case "import of unknown library raises"
   (try (begin (eval '(import (no such lib))) #f) (catch e #t)))
 
+;; --- Delimited continuations ---
+(test-case "reset without shift" (= (reset (+ 1 2)) 3))
+(test-case "shift aborts to the prompt" (= (reset (+ 1 (shift k 42))) 42))
+(test-case "continuation invoked once" (= (reset (+ 1 (shift k (k 5)))) 6))
+(test-case "continuation is multi-shot"
+  (= (reset (+ 1 (shift k (+ (k 1) (k 2))))) 5))
+(test-case "nested resets" (= (reset (+ 1 (reset (+ 10 (shift k (k 100)))))) 111))
+(test-case "shift binds to the nearest prompt"
+  (= (reset (* 2 (reset (+ 1 (shift k 5))))) 10))
+(test-case "stored continuation survives its reset"
+  (let ((saved #f))
+    (reset (+ 1 (shift k (set! saved k) 0)))
+    (= (saved 10) 11)))
+(test-case "continuation is a procedure"
+  (reset (+ 1 (shift k (procedure? k)))))
+(test-case "shift without reset raises"
+  (try (begin (shift k 1) #f) (catch e #t)))
+(test-case "prompts do not cross native frames"
+  (try (begin (reset (map (lambda (x) (shift k 1)) '(1))) #f) (catch e #t)))
+(test-case "shift through pure Elz frames reaches the prompt"
+  (equal? (reset (for-each (lambda (x) (shift k 'aborted)) '(1))) 'aborted))
+
 ;; --- Run Summary ---
 (report-summary)

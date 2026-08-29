@@ -180,6 +180,10 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .bytevector => |bv| av == bv,
             else => false,
         },
+        .continuation => |av| switch (b) {
+            .continuation => |bv| av == bv,
+            else => false,
+        },
         .record_type => |av| switch (b) {
             .record_type => |bv| av == bv,
             else => false,
@@ -302,7 +306,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .vm_closure, .foreign_procedure => true,
+        .procedure, .vm_closure, .foreign_procedure, .continuation => true,
         else => false,
     } };
 }

@@ -371,6 +371,7 @@ const special_form_names: []const []const u8 = &.{
     "begin",        "let",          "let*",         "letrec",
     "do",           "delay",        "try",          "catch",
     "import",       "else",         "...",          "_",
+    "reset",        "shift",
 };
 
 fn is_special_form_name(name: []const u8) bool {

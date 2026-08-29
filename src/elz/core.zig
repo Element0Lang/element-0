@@ -205,6 +205,15 @@ pub const CallFrame = struct {
     stack_base: usize,
 };
 
+/// A delimited continuation captured by `shift`: the value-stack and frame
+/// segment between the enclosing `reset` prompt and the shift call site.
+/// Frame stack_base values are stored relative to the prompt base, so the
+/// segment can be reinstated at any stack position (multi-shot).
+pub const Continuation = struct {
+    stack: []Value,
+    frames: []CallFrame,
+};
+
 /// Represents a macro transformer in Element 0.
 /// Macros are procedures that transform code before evaluation.
 pub const Macro = struct {
@@ -623,6 +632,8 @@ pub const Value = union(enum) {
     syntax_rules: *SyntaxRulesMacro,
     /// A bytevector (mutable fixed-size byte array).
     bytevector: *Bytevector,
+    /// A delimited continuation captured by shift.
+    continuation: *Continuation,
     /// A record type descriptor created by define-record-type.
     record_type: *RecordType,
     /// A record instance.
@@ -676,7 +687,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .record_type, .record, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .record_type, .record, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

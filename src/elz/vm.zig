@@ -36,6 +36,16 @@ pub const VM = struct {
     open_upvalues: ?*Upvalue,
     /// Optional fuel counter: decremented each instruction; returns ExecutionBudgetExceeded when 0.
     fuel: ?*u64 = null,
+    /// Active reset prompts, innermost last. Per-VM, so a shift cannot see a
+    /// prompt across a native (nested VM) boundary.
+    prompts: std.ArrayListUnmanaged(Prompt) = .empty,
+
+    pub const Prompt = struct {
+        /// Stack height where the reset expression's value belongs.
+        stack_base: usize,
+        /// Frame count at the prompt; the delimited extent lives above it.
+        boundary_frames: usize,
+    };
 
     pub fn init(interp: *@import("interpreter.zig").Interpreter) !VM {
         const alloc = interp.allocator;
@@ -54,6 +64,7 @@ pub const VM = struct {
     pub fn deinit(self: *VM) void {
         self.interp.allocator.free(self.stack);
         self.interp.allocator.free(self.frames);
+        self.prompts.deinit(self.interp.allocator);
     }
 
     // -----------------------------------------------------------------------
@@ -170,6 +181,29 @@ pub const VM = struct {
                 };
                 args.deinit();
                 try self.push(result);
+            },
+            .continuation => |cont| {
+                if (argc != 1) return ElzError.WrongArgumentCount;
+                const v = self.pop();
+                _ = self.pop(); // the continuation value itself
+                // Reinstating the segment installs a fresh prompt around it.
+                self.prompts.append(self.interp.allocator, .{
+                    .stack_base = self.stack_top,
+                    .boundary_frames = self.frame_count,
+                }) catch return ElzError.OutOfMemory;
+                const base = self.stack_top;
+                if (base + cont.stack.len + 1 > STACK_SIZE) return ElzError.StackOverflow;
+                if (self.frame_count + cont.frames.len > FRAMES_SIZE) return ElzError.StackOverflow;
+                @memcpy(self.stack[base .. base + cont.stack.len], cont.stack);
+                self.stack_top = base + cont.stack.len;
+                for (cont.frames) |fr| {
+                    var nf = fr;
+                    nf.stack_base += base;
+                    self.frames[self.frame_count] = nf;
+                    self.frame_count += 1;
+                }
+                // The resume value becomes the value of the original shift.
+                try self.push(v);
             },
             .syntax_rules, .macro => {
                 // Macros should have been expanded at compile time.
@@ -376,6 +410,46 @@ pub const VM = struct {
                         return result;
                     }
                     try self.push(result);
+                    // Returning into the frame that pushed a prompt ends its extent.
+                    while (self.prompts.items.len > 0 and
+                        self.prompts.items[self.prompts.items.len - 1].boundary_frames >= self.frame_count)
+                    {
+                        _ = self.prompts.pop();
+                    }
+                },
+
+                .reset_prompt => {
+                    const thunk = self.pop();
+                    try self.prompts.append(self.interp.allocator, .{
+                        .stack_base = self.stack_top,
+                        .boundary_frames = self.frame_count,
+                    });
+                    try self.push(thunk);
+                    try self.callValue(thunk, 0, false);
+                },
+
+                .shift_capture => {
+                    const handler = self.pop();
+                    if (self.prompts.items.len == 0) {
+                        self.interp.last_error_message = "shift: no enclosing reset in this extent (prompts do not cross native frames)";
+                        return ElzError.InvalidArgument;
+                    }
+                    const p = self.prompts.items[self.prompts.items.len - 1];
+                    // Close upvalues into the captured region so the captured
+                    // copy and the live stack share cells.
+                    self.closeUpvaluesAbove(p.stack_base);
+                    const alloc = self.interp.allocator;
+                    const seg_stack = alloc.dupe(Value, self.stack[p.stack_base..self.stack_top]) catch return ElzError.OutOfMemory;
+                    const seg_frames = alloc.dupe(CallFrame, self.frames[p.boundary_frames..self.frame_count]) catch return ElzError.OutOfMemory;
+                    for (seg_frames) |*fr| fr.stack_base -= p.stack_base;
+                    const cont = alloc.create(core.Continuation) catch return ElzError.OutOfMemory;
+                    cont.* = .{ .stack = seg_stack, .frames = seg_frames };
+                    // Unwind to the prompt; the prompt stays for the handler body.
+                    self.stack_top = p.stack_base;
+                    self.frame_count = p.boundary_frames;
+                    try self.push(handler);
+                    try self.push(Value{ .continuation = cont });
+                    try self.callValue(handler, 1, false);
                 },
 
                 // --- Stack ---
@@ -491,6 +565,7 @@ pub const VM = struct {
         cl.* = .{ .proto = proto, .upvals = &.{} };
         self.frames[0] = .{ .closure = cl, .ip = 0, .stack_base = 0 };
         self.frame_count = 1;
+        self.prompts.clearRetainingCapacity();
         // Start with an empty working stack. The body code is responsible for
         // initialising its own locals (letrec emits load_false, let pushes init values).
         self.stack_top = 0;

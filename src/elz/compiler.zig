@@ -313,6 +313,8 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, sym, "let-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "letrec-syntax")) return self.compileLetSyntax(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "syntax-rules")) return self.compileSyntaxRules(head, args, env);
+        if (std.mem.eql(u8, sym, "reset")) return self.compileReset(args, env, fuel);
+        if (std.mem.eql(u8, sym, "shift")) return self.compileShift(args, env, fuel);
         if (std.mem.eql(u8, sym, "include")) return self.compileInclude(args, env, tail, false, fuel);
         if (std.mem.eql(u8, sym, "include-ci")) return self.compileInclude(args, env, tail, true, fuel);
         if (std.mem.eql(u8, sym, "syntax-error")) {
@@ -1346,6 +1348,24 @@ pub const Compiler = struct {
         for (jumps_to_end.items) |j| {
             self.patchJump(j);
         }
+    }
+
+    /// Compiles (reset body ...) as a thunk plus the reset_prompt opcode.
+    fn compileReset(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
+        if (args != .pair) return ElzError.InvalidArgument;
+        try self.compileLambdaArgs(.nil, args, env, fuel);
+        _ = try self.emitOp(.reset_prompt);
+    }
+
+    /// Compiles (shift k body ...) as (lambda (k) body ...) plus shift_capture.
+    fn compileShift(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
+        if (args != .pair or args.pair.car != .symbol) return ElzError.InvalidArgument;
+        const body = args.pair.cdr;
+        if (body != .pair) return ElzError.InvalidArgument;
+        const param_pair = self.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
+        param_pair.* = .{ .car = args.pair.car, .cdr = .nil };
+        try self.compileLambdaArgs(Value{ .pair = param_pair }, body, env, fuel);
+        _ = try self.emitOp(.shift_capture);
     }
 
     /// Recursively lowercases every symbol in a form, for include-ci.

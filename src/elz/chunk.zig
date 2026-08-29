@@ -28,6 +28,10 @@ pub const OpCode = enum(u8) {
     tail_call, // a = argc; tail-call optimised
     return_val, // returns top of stack, pops call frame
 
+    // --- Delimited continuations ---
+    reset_prompt, // pops a thunk, pushes a prompt, calls the thunk
+    shift_capture, // pops a handler, captures up to the nearest prompt, calls handler(k)
+
     // --- Stack manipulation ---
     pop, // discard top of stack
     dup, // duplicate top of stack

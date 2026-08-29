@@ -120,7 +120,7 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
             try w.writeByte('"');
         },
         // Non-serializable types
-        .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .bytevector, .record_type, .record, .unspecified => {
+        .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .record_type, .record, .unspecified => {
             return error.OutOfMemory; // Signal unsupported type
         },
     }

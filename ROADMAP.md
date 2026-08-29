@@ -173,9 +173,12 @@ This phase adds `shift`/`reset` to the VM. Frames and the stack are already heap
 slices, so capturing a delimited segment copies only the frames between the prompt and
 the capture point.
 
-* [ ] `reset`/`shift` (prompt and capture opcodes, and segment copy and restore)
-* [ ] `dynamic-wind` integration with captured segments
-* [ ] FFI boundary rule (an error when a `reset`/`shift` pair straddles a native frame)
+* [x] `reset`/`shift` (prompt and capture opcodes, and segment copy and restore;
+  continuations are multi-shot and survive their reset)
+* [ ] `dynamic-wind` integration with captured segments (before and after thunks
+  do not re-fire when a captured segment is reinstated)
+* [x] FFI boundary rule (prompts are per VM run, so a shift inside a nested
+  native call raises instead of capturing across the boundary)
 * [ ] Documentation of the `call/cc` = `call/ec` semantics in the manual
 
 ---
