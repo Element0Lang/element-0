@@ -878,3 +878,34 @@
                          (apply (lambda ,formals ,@body) ,args-sym))))))
                 clauses)
          (#t (error "case-lambda: no matching clause"))))))
+
+;;; (define-record-type name (ctor field ...) pred (field accessor [modifier]) ...)
+;;;
+;;; Defines a record type: name is bound to the type descriptor, ctor
+;;; constructs instances (unlisted fields start unspecified), pred tests
+;;; membership, and each field spec defines an accessor and an optional
+;;; modifier.
+(define-macro (define-record-type type-name ctor-spec pred . field-specs)
+  (let ((field-names (map car field-specs))
+        (ctor-name (car ctor-spec))
+        (ctor-args (cdr ctor-spec)))
+    `(begin
+       (define ,type-name (%make-record-type ',type-name ',field-names))
+       (define (,ctor-name ,@ctor-args)
+         (%make-record ,type-name
+                       (list ,@(map (lambda (f) (if (memq f ctor-args) f '(if #f #f)))
+                                    field-names))))
+       (define (,pred x) (%record-of-type? x ,type-name))
+       ,@(let loop ((specs field-specs) (i 0))
+           (if (null? specs)
+               '()
+               (let* ((spec (car specs))
+                      (accessor (cadr spec))
+                      (rest (cddr spec))
+                      (acc-def `(define (,accessor r) (%record-ref ,type-name r ,i)))
+                      (more (loop (cdr specs) (+ i 1))))
+                 (if (null? rest)
+                     (cons acc-def more)
+                     (cons acc-def
+                           (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
+                                 more)))))))))

@@ -9,6 +9,7 @@ const io = @import("./primitives/io.zig");
 const modules = @import("./primitives/modules.zig");
 const process = @import("./primitives/process.zig");
 const vectors = @import("./primitives/vectors.zig");
+const records = @import("./primitives/records.zig");
 const hashmaps = @import("./primitives/hashmaps.zig");
 const ports = @import("./primitives/ports.zig");
 const os = @import("./primitives/os.zig");
@@ -276,6 +277,11 @@ pub fn populate_vectors(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "list->vector", core.Value{ .procedure = vectors.list_to_vector });
     try interp.root_env.set(interp, "vector->list", core.Value{ .procedure = vectors.vector_to_list });
     try interp.root_env.set(interp, "vector-fill!", core.Value{ .procedure = vectors.vector_fill_bang });
+    try interp.root_env.set(interp, "%make-record-type", core.Value{ .procedure = records.make_record_type });
+    try interp.root_env.set(interp, "%make-record", core.Value{ .procedure = records.make_record });
+    try interp.root_env.set(interp, "%record-of-type?", core.Value{ .procedure = records.record_of_type_p });
+    try interp.root_env.set(interp, "%record-ref", core.Value{ .procedure = records.record_ref });
+    try interp.root_env.set(interp, "%record-set!", core.Value{ .procedure = records.record_set_bang });
 }
 
 /// Populates the interpreter's root environment with hash map primitive functions.

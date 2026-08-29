@@ -288,6 +288,19 @@ pub const Complex = struct {
     imag: f64,
 };
 
+/// A record type descriptor created by define-record-type. Type identity is
+/// pointer identity: two definitions with the same name are distinct types.
+pub const RecordType = struct {
+    name: []const u8,
+    field_names: [][]const u8,
+};
+
+/// A record instance. `fields` is indexed in the order of the type's field_names.
+pub const Record = struct {
+    rtd: *RecordType,
+    fields: []Value,
+};
+
 /// A dynamic-wind frame: a (before, after) pair pushed onto the interpreter
 /// dynamic winder chain. The chain is innermost-first.
 pub const Winder = struct {
@@ -601,6 +614,10 @@ pub const Value = union(enum) {
     multi_values: *MultiValues,
     /// A `syntax-rules` based macro transformer.
     syntax_rules: *SyntaxRulesMacro,
+    /// A record type descriptor created by define-record-type.
+    record_type: *RecordType,
+    /// A record instance.
+    record: *Record,
     /// The `nil` or empty list value.
     nil,
     /// An unspecified or void value.
@@ -650,7 +667,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .record_type, .record, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

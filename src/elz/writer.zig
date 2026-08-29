@@ -158,6 +158,16 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             try writer.writeAll(sr.name);
             try writer.writeAll(">");
         },
+        .record_type => |rtd| {
+            try writer.writeAll("#<record-type:");
+            try writer.writeAll(rtd.name);
+            try writer.writeAll(">");
+        },
+        .record => |rec| {
+            try writer.writeAll("#<");
+            try writer.writeAll(rec.rtd.name);
+            try writer.writeAll(">");
+        },
         .unspecified => try writer.writeAll("#<unspecified>"),
     }
 }

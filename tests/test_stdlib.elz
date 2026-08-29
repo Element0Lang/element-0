@@ -895,5 +895,29 @@
 (test-case "boolean=? true" (boolean=? #f #f))
 (test-case "boolean=? false" (not (boolean=? #t #f)))
 
+;; --- define-record-type ---
+(define-record-type point (make-point x y) point? (x point-x set-point-x!) (y point-y))
+(define-record-type box (make-box v) box? (v box-v))
+
+(test-case "record predicate true" (point? (make-point 1 2)))
+(test-case "record predicate false on number" (not (point? 5)))
+(test-case "record predicate false on other record" (not (point? (make-box 1))))
+(test-case "record accessor x" (= (point-x (make-point 1 2)) 1))
+(test-case "record accessor y" (= (point-y (make-point 1 2)) 2))
+(test-case "record modifier"
+  (let ((p (make-point 1 2)))
+    (set-point-x! p 10)
+    (= (point-x p) 10)))
+(test-case "record accessor wrong type raises"
+  (try (begin (point-x 5) #f) (catch e #t)))
+(test-case "record accessor other record raises"
+  (try (begin (point-x (make-box 1)) #f) (catch e #t)))
+
+(define-record-type partial (make-partial a) partial? (a partial-a) (b partial-b set-partial-b!))
+(test-case "constructor with subset of fields"
+  (let ((r (make-partial 1)))
+    (set-partial-b! r 2)
+    (and (= (partial-a r) 1) (= (partial-b r) 2))))
+
 ;; --- Run Summary ---
 (report-summary)

@@ -173,6 +173,14 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .syntax_rules => |bv| av == bv,
             else => false,
         },
+        .record_type => |av| switch (b) {
+            .record_type => |bv| av == bv,
+            else => false,
+        },
+        .record => |av| switch (b) {
+            .record => |bv| av == bv,
+            else => false,
+        },
         .unspecified => b == .unspecified,
     };
 }

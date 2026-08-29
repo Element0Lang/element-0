@@ -111,7 +111,7 @@ phase has the highest value. It requires restructuring the matcher and expander 
 ## Phase 3: R7RS Data Types and Port Completions
 
 * Records
-    * [ ] `define-record-type` (a new tagged value in `core.zig` with constructor,
+    * [x] `define-record-type` (a new tagged value in `core.zig` with constructor,
       predicate, accessors, and modifiers)
 * Bytevectors (a good fit for Zig interop)
     * [ ] `bytevector`, `make-bytevector`, `bytevector?`, `bytevector-length`
