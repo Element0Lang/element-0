@@ -948,5 +948,55 @@
 (test-case "bytevector ref out of range raises"
   (try (begin (bytevector-u8-ref #u8(1) 5) #f) (catch e #t)))
 
+;; --- Binary ports and port plumbing ---
+(test-case "eof-object satisfies eof-object?" (eof-object? (eof-object)))
+(test-case "binary-port? on bytevector port" (binary-port? (open-input-bytevector #u8(1 2))))
+(test-case "textual-port? on string port" (textual-port? (open-input-string "hi")))
+(test-case "string port is not binary" (not (binary-port? (open-input-string "hi"))))
+(test-case "read-u8 sequence"
+  (let ((p (open-input-bytevector #u8(1 2))))
+    (and (= (read-u8 p) 1) (= (read-u8 p) 2) (eof-object? (read-u8 p)))))
+(test-case "peek-u8 does not consume"
+  (let ((p (open-input-bytevector #u8(9))))
+    (and (= (peek-u8 p) 9) (= (read-u8 p) 9))))
+(test-case "u8-ready?" (u8-ready? (open-input-bytevector #u8(1))))
+(test-case "output bytevector round trip"
+  (let ((p (open-output-bytevector)))
+    (write-u8 7 p)
+    (write-bytevector #u8(8 9) p)
+    (equal? (get-output-bytevector p) #u8(7 8 9))))
+(test-case "read-bytevector"
+  (let ((p (open-input-bytevector #u8(1 2 3 4))))
+    (equal? (read-bytevector 3 p) #u8(1 2 3))))
+(test-case "read-bytevector at eof"
+  (let ((p (open-input-bytevector (bytevector))))
+    (eof-object? (read-bytevector 3 p))))
+(test-case "read-bytevector!"
+  (let ((p (open-input-bytevector #u8(5 6)))
+        (bv (make-bytevector 4 0)))
+    (and (= (read-bytevector! bv p 1 3) 2)
+         (equal? bv #u8(0 5 6 0)))))
+(test-case "binary file round trip"
+  (begin
+    (let ((out (open-binary-output-file "tmp-bin.bin")))
+      (write-bytevector #u8(0 255 128) out)
+      (close-port out))
+    (let* ((in (open-binary-input-file "tmp-bin.bin"))
+           (bv (read-bytevector 3 in)))
+      (close-port in)
+      (delete-file "tmp-bin.bin")
+      (equal? bv #u8(0 255 128)))))
+(test-case "input-port-open? tracks close-port"
+  (let ((p (open-input-string "x")))
+    (and (input-port-open? p)
+         (begin (close-port p) (not (input-port-open? p))))))
+(test-case "output-port-open?" (output-port-open? (open-output-string)))
+(test-case "call-with-port closes the port"
+  (let ((p (open-input-string "hello")))
+    (and (string=? (call-with-port p (lambda (q) (read-line q))) "hello")
+         (not (input-port-open? p)))))
+(test-case "flush-output-port" (begin (flush-output-port) #t))
+(test-case "current-error-port is an output port" (output-port? (current-error-port)))
+
 ;; --- Run Summary ---
 (report-summary)

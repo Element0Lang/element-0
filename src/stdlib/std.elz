@@ -909,3 +909,12 @@
                      (cons acc-def
                            (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
                                  more)))))))))
+
+;;; (call-with-port port proc)
+;;;
+;;; Calls proc with port, closes the port when proc returns, and returns
+;;; the result of proc.
+(define (call-with-port port proc)
+  (let ((result (proc port)))
+    (close-port port)
+    result))

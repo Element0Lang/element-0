@@ -390,6 +390,8 @@ pub const Port = struct {
     name: []const u8,
     /// One-byte lookahead buffer used by `peekChar`.
     peek_buffer: ?u8 = null,
+    /// Whether this is a binary port (bytevector or binary file backed).
+    binary: bool = false,
 
     pub const Kind = union(enum) {
         /// An OS file handle.

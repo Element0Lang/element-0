@@ -356,6 +356,26 @@ pub fn populate_globals(interp: *interpreter.Interpreter) !void {
 pub fn populate_ports(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
     try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+    try interp.root_env.set(interp, "eof-object", core.Value{ .procedure = ports.eof_object });
+    try interp.root_env.set(interp, "open-input-bytevector", core.Value{ .procedure = ports.open_input_bytevector });
+    try interp.root_env.set(interp, "open-output-bytevector", core.Value{ .procedure = ports.open_output_bytevector });
+    try interp.root_env.set(interp, "get-output-bytevector", core.Value{ .procedure = ports.get_output_bytevector });
+    try interp.root_env.set(interp, "open-binary-input-file", core.Value{ .procedure = ports.open_binary_input_file });
+    try interp.root_env.set(interp, "open-binary-output-file", core.Value{ .procedure = ports.open_binary_output_file });
+    try interp.root_env.set(interp, "read-u8", core.Value{ .procedure = ports.read_u8 });
+    try interp.root_env.set(interp, "peek-u8", core.Value{ .procedure = ports.peek_u8 });
+    try interp.root_env.set(interp, "u8-ready?", core.Value{ .procedure = ports.u8_ready_p });
+    try interp.root_env.set(interp, "write-u8", core.Value{ .procedure = ports.write_u8 });
+    try interp.root_env.set(interp, "read-bytevector", core.Value{ .procedure = ports.read_bytevector });
+    try interp.root_env.set(interp, "read-bytevector!", core.Value{ .procedure = ports.read_bytevector_bang });
+    try interp.root_env.set(interp, "write-bytevector", core.Value{ .procedure = ports.write_bytevector });
+    try interp.root_env.set(interp, "binary-port?", core.Value{ .procedure = ports.binary_port_p });
+    try interp.root_env.set(interp, "textual-port?", core.Value{ .procedure = ports.textual_port_p });
+    try interp.root_env.set(interp, "close-port", core.Value{ .procedure = ports.close_port });
+    try interp.root_env.set(interp, "input-port-open?", core.Value{ .procedure = ports.input_port_open_p });
+    try interp.root_env.set(interp, "output-port-open?", core.Value{ .procedure = ports.output_port_open_p });
+    try interp.root_env.set(interp, "flush-output-port", core.Value{ .procedure = ports.flush_output_port });
+    try interp.root_env.set(interp, "current-error-port", core.Value{ .procedure = ports.current_error_port });
     try interp.root_env.set(interp, "open-input-string", core.Value{ .procedure = ports.open_input_string });
     try interp.root_env.set(interp, "open-output-string", core.Value{ .procedure = ports.open_output_string });
     try interp.root_env.set(interp, "get-output-string", core.Value{ .procedure = ports.get_output_string });

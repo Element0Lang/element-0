@@ -441,3 +441,230 @@ test "string port primitives" {
     try testing.expect(str_val == .string);
     try testing.expectEqualStrings("hello world", str_val.string);
 }
+
+// ---------------------------------------------------------------------------
+// Binary ports and port plumbing (R7RS)
+// ---------------------------------------------------------------------------
+
+const EOF_VALUE = Value{ .symbol = "eof" };
+
+/// Resolves the port argument for an output primitive at args[index]: explicit
+/// when given, the current output port when omitted.
+fn outputPortArg(interp: *interpreter.Interpreter, args: core.ValueList, index: usize) ElzError!*core.Port {
+    if (args.items.len == index) {
+        return interp.currentOutputPort() catch return ElzError.OutOfMemory;
+    }
+    if (args.items[index] != .port) return ElzError.InvalidArgument;
+    return args.items[index].port;
+}
+
+/// Syntax: (eof-object)
+pub fn eof_object(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    return EOF_VALUE;
+}
+
+/// Syntax: (open-input-bytevector bv)
+pub fn open_input_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    const copy = env.allocator.dupe(u8, args.items[0].bytevector.items) catch return ElzError.OutOfMemory;
+    const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    port.* = core.Port.fromString(env.allocator, copy) catch return ElzError.OutOfMemory;
+    port.binary = true;
+    return Value{ .port = port };
+}
+
+/// Syntax: (open-output-bytevector)
+pub fn open_output_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
+    port.* = core.Port.openStringOutput(env.allocator) catch return ElzError.OutOfMemory;
+    port.binary = true;
+    return Value{ .port = port };
+}
+
+/// Syntax: (get-output-bytevector port)
+pub fn get_output_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    const bytes = args.items[0].port.getString(env.allocator) catch return ElzError.InvalidArgument;
+    const bv = env.allocator.create(core.Bytevector) catch return ElzError.OutOfMemory;
+    bv.* = .{ .items = @constCast(bytes) };
+    return Value{ .bytevector = bv };
+}
+
+/// Syntax: (open-binary-input-file path)
+pub fn open_binary_input_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
+    const result = try open_input_file(interp, env, args, fuel);
+    result.port.binary = true;
+    return result;
+}
+
+/// Syntax: (open-binary-output-file path)
+pub fn open_binary_output_file(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
+    const result = try open_output_file(interp, env, args, fuel);
+    result.port.binary = true;
+    return result;
+}
+
+/// Syntax: (read-u8) or (read-u8 port)
+pub fn read_u8(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    const byte = port.readChar() catch return ElzError.IOError;
+    if (byte) |b| return Value{ .exact_integer = b };
+    return EOF_VALUE;
+}
+
+/// Syntax: (peek-u8) or (peek-u8 port)
+pub fn peek_u8(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    const byte = port.peekChar() catch return ElzError.IOError;
+    if (byte) |b| return Value{ .exact_integer = b };
+    return EOF_VALUE;
+}
+
+/// Syntax: (u8-ready?) or (u8-ready? port)
+pub fn u8_ready_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try inputPortArg(interp, args);
+    return Value{ .boolean = port.is_input and port.is_open };
+}
+
+/// Syntax: (write-u8 byte) or (write-u8 byte port)
+pub fn write_u8(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0 or args.items[0].exact_integer > 255) return ElzError.InvalidArgument;
+    const port = try outputPortArg(interp, args, 1);
+    const byte = [1]u8{@intCast(args.items[0].exact_integer)};
+    port.writeString(&byte) catch return ElzError.IOError;
+    return Value.unspecified;
+}
+
+/// Syntax: (read-bytevector k) or (read-bytevector k port)
+pub fn read_bytevector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0) return ElzError.InvalidArgument;
+    const k: usize = @intCast(args.items[0].exact_integer);
+    var port_args = args;
+    port_args.items = args.items[1..];
+    const port = try inputPortArg(interp, port_args);
+
+    var bytes: std.ArrayListUnmanaged(u8) = .empty;
+    defer bytes.deinit(env.allocator);
+    var i: usize = 0;
+    while (i < k) : (i += 1) {
+        const byte = port.readChar() catch return ElzError.IOError;
+        if (byte) |b| {
+            try bytes.append(env.allocator, b);
+        } else break;
+    }
+    if (bytes.items.len == 0 and k > 0) return EOF_VALUE;
+    const bv = env.allocator.create(core.Bytevector) catch return ElzError.OutOfMemory;
+    bv.* = .{ .items = try bytes.toOwnedSlice(env.allocator) };
+    return Value{ .bytevector = bv };
+}
+
+/// Syntax: (read-bytevector! bv) or (read-bytevector! bv port [start [end]])
+pub fn read_bytevector_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 4) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    const items = args.items[0].bytevector.items;
+    const port = if (args.items.len >= 2) blk: {
+        if (args.items[1] != .port) return ElzError.InvalidArgument;
+        break :blk args.items[1].port;
+    } else interp.currentInputPort() catch return ElzError.OutOfMemory;
+    var start: usize = 0;
+    var end: usize = items.len;
+    if (args.items.len >= 3) {
+        if (args.items[2] != .exact_integer or args.items[2].exact_integer < 0) return ElzError.InvalidArgument;
+        start = @intCast(args.items[2].exact_integer);
+    }
+    if (args.items.len == 4) {
+        if (args.items[3] != .exact_integer or args.items[3].exact_integer < 0) return ElzError.InvalidArgument;
+        end = @intCast(args.items[3].exact_integer);
+    }
+    if (start > end or end > items.len) return ElzError.InvalidArgument;
+
+    var count: usize = 0;
+    while (start + count < end) {
+        const byte = port.readChar() catch return ElzError.IOError;
+        if (byte) |b| {
+            items[start + count] = b;
+            count += 1;
+        } else break;
+    }
+    if (count == 0 and start < end) return EOF_VALUE;
+    return Value{ .exact_integer = @intCast(count) };
+}
+
+/// Syntax: (write-bytevector bv) or (write-bytevector bv port [start [end]])
+pub fn write_bytevector(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 4) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    const items = args.items[0].bytevector.items;
+    const port = try outputPortArg(interp, args, if (args.items.len >= 2) 1 else args.items.len);
+    var start: usize = 0;
+    var end: usize = items.len;
+    if (args.items.len >= 3) {
+        if (args.items[2] != .exact_integer or args.items[2].exact_integer < 0) return ElzError.InvalidArgument;
+        start = @intCast(args.items[2].exact_integer);
+    }
+    if (args.items.len == 4) {
+        if (args.items[3] != .exact_integer or args.items[3].exact_integer < 0) return ElzError.InvalidArgument;
+        end = @intCast(args.items[3].exact_integer);
+    }
+    if (start > end or end > items.len) return ElzError.InvalidArgument;
+    port.writeString(items[start..end]) catch return ElzError.IOError;
+    return Value.unspecified;
+}
+
+/// Syntax: (binary-port? obj)
+pub fn binary_port_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .port and args.items[0].port.binary };
+}
+
+/// Syntax: (textual-port? obj)
+pub fn textual_port_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .port and !args.items[0].port.binary };
+}
+
+/// Syntax: (close-port port)
+pub fn close_port(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    args.items[0].port.close();
+    return Value.unspecified;
+}
+
+/// Syntax: (input-port-open? port)
+pub fn input_port_open_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    const port = args.items[0].port;
+    return Value{ .boolean = port.is_input and port.is_open };
+}
+
+/// Syntax: (output-port-open? port)
+pub fn output_port_open_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    const port = args.items[0].port;
+    return Value{ .boolean = !port.is_input and port.is_open };
+}
+
+/// Syntax: (flush-output-port) or (flush-output-port port)
+/// Ports write through unbuffered, so this only validates its argument.
+pub fn flush_output_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const port = try outputPortArg(interp, args, 0);
+    if (port.is_input) return ElzError.InvalidArgument;
+    return Value.unspecified;
+}
+
+/// Syntax: (current-error-port)
+pub fn current_error_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    const port = interp.currentErrorPort() catch return ElzError.OutOfMemory;
+    return Value{ .port = port };
+}

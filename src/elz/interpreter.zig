@@ -82,6 +82,7 @@ pub const Interpreter = struct {
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
+    stderr_port: ?*core.Port = null,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
@@ -333,6 +334,15 @@ pub const Interpreter = struct {
         const port = try self.allocator.create(core.Port);
         port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
         self.stdout_port = port;
+        return port;
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard error stream.
+    pub fn currentErrorPort(self: *Interpreter) !*core.Port {
+        if (self.stderr_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stderr(), false, "<stderr>");
+        self.stderr_port = port;
         return port;
     }
 };

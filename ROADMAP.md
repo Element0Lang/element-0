@@ -122,16 +122,16 @@ phase has the highest value. It requires restructuring the matcher and expander 
 * String ports
     * [x] `open-input-string`, `open-output-string`, `get-output-string`
 * Binary ports
-    * [ ] `open-input-bytevector`, `open-output-bytevector`, `get-output-bytevector`
-    * [ ] `open-binary-input-file`, `open-binary-output-file`
-    * [ ] `read-u8`, `write-u8`, `peek-u8`, `u8-ready?`, `read-bytevector`,
+    * [x] `open-input-bytevector`, `open-output-bytevector`, `get-output-bytevector`
+    * [x] `open-binary-input-file`, `open-binary-output-file`
+    * [x] `read-u8`, `write-u8`, `peek-u8`, `u8-ready?`, `read-bytevector`,
       `read-bytevector!`, `write-bytevector`
-    * [ ] `binary-port?`, `textual-port?`
+    * [x] `binary-port?`, `textual-port?`
 * Port plumbing
-    * [ ] `current-error-port`
-    * [ ] `close-port`, `call-with-port`, `flush-output-port`
-    * [ ] `input-port-open?`, `output-port-open?`
-    * [ ] `eof-object` (the constructor; the predicate exists)
+    * [x] `current-error-port`
+    * [x] `close-port`, `call-with-port`, `flush-output-port`
+    * [x] `input-port-open?`, `output-port-open?`
+    * [x] `eof-object` (the constructor; the predicate exists)
 
 ## Phase 4: Exceptions, Parameters, and Environment
 
