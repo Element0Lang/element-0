@@ -57,7 +57,11 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
             },
             else => {
                 // #( is the vector literal prefix — emit it as a two-character token.
-                if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
+                // #u8( is the bytevector literal prefix — emit it as a four-character token.
+                if (char == '#' and i + 3 < source.len and std.mem.eql(u8, source[i .. i + 4], "#u8(")) {
+                    try tokens.append(allocator, source[i .. i + 4]);
+                    i += 4;
+                } else if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
                     try tokens.append(allocator, source[i .. i + 2]);
                     i += 2;
                 } else {
@@ -112,6 +116,26 @@ const Parser = struct {
             const p2 = try self.allocator.create(core.Pair);
             p2.* = .{ .car = sym, .cdr = Value{ .pair = p1 } };
             return Value{ .pair = p2 };
+        }
+        if (std.mem.eql(u8, token, "#u8(")) {
+            var bytes = std.ArrayListUnmanaged(u8).empty;
+            defer bytes.deinit(self.allocator);
+            while (true) {
+                if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
+                const next = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next, ")")) {
+                    self.position += 1;
+                    break;
+                }
+                const elem = try self.parse_form();
+                if (elem != .exact_integer or elem.exact_integer < 0 or elem.exact_integer > 255) {
+                    return ElzError.InvalidArgument;
+                }
+                try bytes.append(self.allocator, @intCast(elem.exact_integer));
+            }
+            const bv = try self.allocator.create(core.Bytevector);
+            bv.* = core.Bytevector{ .items = try bytes.toOwnedSlice(self.allocator) };
+            return Value{ .bytevector = bv };
         }
         if (std.mem.eql(u8, token, "#(")) {
             var items = std.ArrayListUnmanaged(Value).empty;

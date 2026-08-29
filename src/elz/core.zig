@@ -288,6 +288,11 @@ pub const Complex = struct {
     imag: f64,
 };
 
+/// A mutable fixed-size array of bytes.
+pub const Bytevector = struct {
+    items: []u8,
+};
+
 /// A record type descriptor created by define-record-type. Type identity is
 /// pointer identity: two definitions with the same name are distinct types.
 pub const RecordType = struct {
@@ -614,6 +619,8 @@ pub const Value = union(enum) {
     multi_values: *MultiValues,
     /// A `syntax-rules` based macro transformer.
     syntax_rules: *SyntaxRulesMacro,
+    /// A bytevector (mutable fixed-size byte array).
+    bytevector: *Bytevector,
     /// A record type descriptor created by define-record-type.
     record_type: *RecordType,
     /// A record instance.
@@ -667,7 +674,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .record_type, .record, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .record_type, .record, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

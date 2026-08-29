@@ -68,6 +68,9 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
                     try stack.append(allocator, .{ .a = v1.items[k], .b = v2.items[k] });
                 }
             },
+            .bytevector => |bv1| {
+                if (!std.mem.eql(u8, bv1.items, b.bytevector.items)) return false;
+            },
             else => {
                 // For all other types, if they have the same type but are not
                 // `eqv?`, they are not `equal?`. This handles numbers, booleans,
@@ -171,6 +174,10 @@ fn is_eqv_internal(a: Value, b: Value) bool {
         },
         .syntax_rules => |av| switch (b) {
             .syntax_rules => |bv| av == bv,
+            else => false,
+        },
+        .bytevector => |av| switch (b) {
+            .bytevector => |bv| av == bv,
             else => false,
         },
         .record_type => |av| switch (b) {

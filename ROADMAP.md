@@ -114,10 +114,11 @@ phase has the highest value. It requires restructuring the matcher and expander 
     * [x] `define-record-type` (a new tagged value in `core.zig` with constructor,
       predicate, accessors, and modifiers)
 * Bytevectors (a good fit for Zig interop)
-    * [ ] `bytevector`, `make-bytevector`, `bytevector?`, `bytevector-length`
-    * [ ] `bytevector-u8-ref`, `bytevector-u8-set!`
-    * [ ] `bytevector-copy`, `bytevector-copy!`, `bytevector-append`
-    * [ ] `utf8->string`, `string->utf8`
+    * [x] `bytevector`, `make-bytevector`, `bytevector?`, `bytevector-length`
+    * [x] `bytevector-u8-ref`, `bytevector-u8-set!`
+    * [x] `bytevector-copy`, `bytevector-copy!`, `bytevector-append`
+    * [x] `utf8->string`, `string->utf8`
+    * [x] `#u8(...)` literals in the parser
 * String ports
     * [x] `open-input-string`, `open-output-string`, `get-output-string`
 * Binary ports

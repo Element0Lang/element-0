@@ -158,6 +158,14 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             try writer.writeAll(sr.name);
             try writer.writeAll(">");
         },
+        .bytevector => |bv| {
+            try writer.writeAll("#u8(");
+            for (bv.items, 0..) |byte, i| {
+                if (i > 0) try writer.writeAll(" ");
+                try writer.print("{d}", .{byte});
+            }
+            try writer.writeAll(")");
+        },
         .record_type => |rtd| {
             try writer.writeAll("#<record-type:");
             try writer.writeAll(rtd.name);
