@@ -30,7 +30,7 @@ pub fn make_vector(_: *interpreter.Interpreter, env: *core.Environment, args: co
     const items = try env.allocator.alloc(Value, length);
 
     for (items) |*item| {
-        item.* = try fill.deep_clone(env.allocator);
+        item.* = fill;
     }
 
     vec.* = .{ .items = items };
@@ -44,7 +44,7 @@ pub fn vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
     const items = try env.allocator.alloc(Value, args.items.len);
 
     for (args.items, 0..) |arg, i| {
-        items[i] = try arg.deep_clone(env.allocator);
+        items[i] = arg;
     }
 
     vec.* = .{ .items = items };
@@ -121,7 +121,7 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
     current = list;
     var i: usize = 0;
     while (current != .nil) {
-        items[i] = try current.pair.car.deep_clone(env.allocator);
+        items[i] = current.pair.car;
         current = current.pair.cdr;
         i += 1;
     }
@@ -132,14 +132,14 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
 
 /// `vector_fill_bang` fills every slot of a vector with a given value.
 /// Syntax: (vector-fill! vec fill)
-pub fn vector_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
     const fill = args.items[1];
     const vec = vec_val.vector;
     for (vec.items) |*slot| {
-        slot.* = try fill.deep_clone(env.allocator);
+        slot.* = fill;
     }
     return Value.unspecified;
 }
@@ -160,7 +160,7 @@ pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args:
         i -= 1;
         const pair = try env.allocator.create(core.Pair);
         pair.* = .{
-            .car = try vec.items[i].deep_clone(env.allocator),
+            .car = vec.items[i],
             .cdr = result,
         };
         result = Value{ .pair = pair };

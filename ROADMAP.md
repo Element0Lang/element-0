@@ -189,8 +189,8 @@ the capture point.
   the compiler carries them into a per-instruction line table, and uncaught
   runtime errors report `At: file:line`. Stack traces remain future work.
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
-  `tests/vendor/` and runs via `make test-conformance`. Current score: 803 of
-  973 checks pass (82 percent). The suite reports but does not gate the build.
+  `tests/vendor/` and runs via `make test-conformance`. Current score: 806 of
+  973 checks pass (83 percent). The suite reports but does not gate the build.
 * [ ] Documentation: a language reference covering every implemented procedure and the
   embedding API.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).

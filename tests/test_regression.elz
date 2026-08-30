@@ -290,4 +290,36 @@
 (test-case "octal integer literal" (= #o17 15))
 (test-case "binary integer literal" (= #b101 5))
 
+;; Regression: list and vector primitives deep-cloned their arguments and
+;; results, so mutation never propagated through shared structure and every
+;; car/cdr was O(n). They now share structure per R7RS.
+(test-case "set-car! through a cdr chain"
+  (let ((l (list 1 2 3)))
+    (set-car! (cdr l) 'x)
+    (equal? l '(1 x 3))))
+(test-case "cons shares its arguments"
+  (let* ((tail (list 2 3)) (l (cons 1 tail)))
+    (set-car! tail 'x)
+    (equal? l '(1 x 3))))
+(test-case "append shares the last list"
+  (let* ((tail (list 3 4)) (l (append (list 1 2) tail)))
+    (set-car! tail 'x)
+    (equal? l '(1 2 x 4))))
+(test-case "list-tail shares structure"
+  (let ((l (list 1 2 3)))
+    (set-car! (list-tail l 1) 'x)
+    (equal? l '(1 x 3))))
+(test-case "list elements keep identity"
+  (let* ((inner (list 1)) (l (list inner)))
+    (set-car! inner 'x)
+    (equal? l '((x)))))
+(test-case "make-vector shares the fill object"
+  (let* ((inner (list 1)) (v (make-vector 2 inner)))
+    (set-car! (vector-ref v 0) 'x)
+    (equal? (vector-ref v 1) '(x))))
+(test-case "vector->list shares elements"
+  (let* ((inner (list 1)) (v (vector inner)))
+    (set-car! (car (vector->list v)) 'x)
+    (equal? (vector-ref v 0) '(x))))
+
 (report-summary)

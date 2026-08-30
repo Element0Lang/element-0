@@ -16,8 +16,8 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = try env.allocator.create(core.Pair);
     p.* = .{
-        .car = try args.items[0].deep_clone(env.allocator),
-        .cdr = try args.items[1].deep_clone(env.allocator),
+        .car = args.items[0],
+        .cdr = args.items[1],
     };
     return Value{ .pair = p };
 }
@@ -29,11 +29,11 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The `car` of the pair.
-pub fn car(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    return p.pair.car.deep_clone(env.allocator);
+    return p.pair.car;
 }
 
 /// `cdr` returns the second element of a pair.
@@ -43,11 +43,11 @@ pub fn car(_: *interpreter.Interpreter, env: *core.Environment, args: core.Value
 ///
 /// Returns:
 /// The `cdr` of the pair.
-pub fn cdr(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    return p.pair.cdr.deep_clone(env.allocator);
+    return p.pair.cdr;
 }
 
 /// `list` creates a new list from its arguments.
@@ -64,7 +64,7 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
         i -= 1;
         const p = try env.allocator.create(core.Pair);
         p.* = .{
-            .car = try args.items[i].deep_clone(env.allocator),
+            .car = args.items[i],
             .cdr = head,
         };
         head = Value{ .pair = p };
@@ -125,7 +125,7 @@ pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
                 else => return ElzError.InvalidArgument,
             };
             const new_pair = try env.allocator.create(core.Pair);
-            new_pair.* = .{ .car = try p_node.car.deep_clone(env.allocator), .cdr = .nil };
+            new_pair.* = .{ .car = p_node.car, .cdr = .nil };
             if (result_head == .nil) {
                 result_head = Value{ .pair = new_pair };
                 result_tail = new_pair;
@@ -138,7 +138,7 @@ pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
             current_node = p_node.cdr;
         }
     }
-    const last_list = try args.items[args.items.len - 1].deep_clone(env.allocator);
+    const last_list = args.items[args.items.len - 1];
     if (result_head == .nil) {
         return last_list;
     } else {
@@ -166,7 +166,7 @@ pub fn reverse(_: *interpreter.Interpreter, env: *core.Environment, args: core.V
             else => return ElzError.InvalidArgument,
         };
         const new_pair = try env.allocator.create(core.Pair);
-        new_pair.* = .{ .car = try p_node.car.deep_clone(env.allocator), .cdr = head };
+        new_pair.* = .{ .car = p_node.car, .cdr = head };
         head = Value{ .pair = new_pair };
         current = p_node.cdr;
     }
@@ -226,7 +226,7 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
 
 /// `list_ref` returns the k-th element of a list.
 /// Syntax: (list-ref list k)
-pub fn list_ref(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
@@ -236,12 +236,12 @@ pub fn list_ref(_: *interpreter.Interpreter, env: *core.Environment, args: core.
         current = current.pair.cdr;
     }
     if (current != .pair) return ElzError.InvalidArgument;
-    return current.pair.car.deep_clone(env.allocator);
+    return current.pair.car;
 }
 
 /// `list_tail` returns the sublist of a list starting at position k.
 /// Syntax: (list-tail list k)
-pub fn list_tail(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_tail(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
@@ -250,7 +250,7 @@ pub fn list_tail(_: *interpreter.Interpreter, env: *core.Environment, args: core
         if (current != .pair) return ElzError.InvalidArgument;
         current = current.pair.cdr;
     }
-    return current.deep_clone(env.allocator);
+    return current;
 }
 
 /// `memq` returns the first sublist whose car is eq? to obj, or #f.
@@ -326,8 +326,6 @@ pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 }
 
 /// `list_set_bang` stores a value in element k of a list, in place.
-/// Implemented natively because car/cdr return deep clones, so a stdlib
-/// definition could not reach the original pairs.
 /// Syntax: (list-set! list k obj)
 pub fn list_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
