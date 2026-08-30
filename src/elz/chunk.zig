@@ -113,6 +113,10 @@ pub const FuncProto = struct {
     local_count: u8,
     /// Nested function prototypes compiled inside this one.
     sub_protos: std.ArrayList(*FuncProto),
+    /// Source line per instruction (parallel to `instructions`), 0 when unknown.
+    lines: std.ArrayList(u32),
+    /// Source file this function was compiled from, "" when unknown.
+    source_file: []const u8,
     /// Allocator used for all dynamic storage above.
     allocator: std.mem.Allocator,
 
@@ -126,6 +130,8 @@ pub const FuncProto = struct {
             .upval_descs = .empty,
             .local_count = 0,
             .sub_protos = .empty,
+            .lines = .empty,
+            .source_file = "",
             .allocator = allocator,
         };
     }

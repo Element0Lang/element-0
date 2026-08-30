@@ -35,8 +35,8 @@ fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     }
 }
 
-fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
-    var forms = elz.parser.readAll(source, interpreter.allocator) catch |err| {
+fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const u8) !void {
+    var forms = elz.parser.readAllTracked(source, interpreter.allocator, source_name, &interpreter.source_locations) catch |err| {
         std.debug.print("Parse Error: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -46,6 +46,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
         var fuel: u64 = std.math.maxInt(u64);
+        interpreter.last_error_message = null;
         last_result = interpreter.evalForm(&form, &fuel) catch |err| {
             var buffer: [4096]u8 = undefined;
             const stdout_file = std.Io.File.stdout();
@@ -55,6 +56,12 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
             try stdout.print("ErrorCode: {s}\n", .{@errorName(err)});
             if (interpreter.last_error_message) |msg| {
                 try stdout.print("Message: {s}\n", .{msg});
+            }
+            if (interpreter.last_error_line) |line| {
+                const file = interpreter.last_error_file orelse "?";
+                try stdout.print("At: {s}:{d}\n", .{ file, line });
+                interpreter.last_error_line = null;
+                interpreter.last_error_file = null;
             }
             try stdout.writeAll("In form: ");
             try elz.write(form, stdout);
@@ -101,6 +108,7 @@ fn repl(interpreter: *elz.Interpreter) !void {
             var last_result: elz.Value = .nil;
             for (forms.items) |form| {
                 var fuel: u64 = std.math.maxInt(u64);
+                interpreter.last_error_message = null;
                 last_result = interpreter.evalForm(&form, &fuel) catch |err| {
                     var buffer: [4096]u8 = undefined;
                     const stdout_file = std.Io.File.stdout();
@@ -183,7 +191,7 @@ fn rootExec(ctx: chilli.CommandContext) !void {
                 std.debug.print("[VERBOSE] Executing {d} bytes of source code...\n", .{source.len});
             }
 
-            try exec(interpreter, source);
+            try exec(interpreter, source, filename);
             return;
         }
     }

@@ -131,10 +131,43 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
 
 /// The parser for Element 0 source code.
 /// It holds the state of the parsing process.
+/// A source location attached to a parsed form.
+pub const SourceLoc = struct {
+    file: []const u8,
+    line: u32,
+};
+
+/// Maps a Pair pointer (as usize) to the source location of its opening paren.
+pub const FormLocations = std.AutoHashMapUnmanaged(usize, SourceLoc);
+
 const Parser = struct {
     tokens: std.ArrayList([]const u8),
     position: usize,
     allocator: std.mem.Allocator,
+    /// Set when tracking locations: the original source and its file name.
+    source: []const u8 = "",
+    file: []const u8 = "",
+    locations: ?*FormLocations = null,
+
+    /// The 1-based line number of a token (a slice into `source`).
+    fn lineOf(self: *const Parser, token: []const u8) u32 {
+        const off = @intFromPtr(token.ptr) - @intFromPtr(self.source.ptr);
+        var line: u32 = 1;
+        for (self.source[0..off]) |c| {
+            if (c == '\n') line += 1;
+        }
+        return line;
+    }
+
+    fn recordLocation(self: *Parser, form: Value, token: []const u8) void {
+        const locs = self.locations orelse return;
+        if (form != .pair) return;
+        if (@intFromPtr(token.ptr) < @intFromPtr(self.source.ptr)) return;
+        locs.put(self.allocator, @intFromPtr(form.pair), .{
+            .file = self.file,
+            .line = self.lineOf(token),
+        }) catch {};
+    }
 
     /// Parses a single form from the token stream.
     ///
@@ -217,6 +250,7 @@ const Parser = struct {
             return Value{ .vector = vec };
         }
         if (std.mem.eql(u8, token, "(")) {
+            const open_token = token;
             var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
@@ -239,6 +273,7 @@ const Parser = struct {
                         p.* = .{ .car = values.items[j], .cdr = result };
                         result = Value{ .pair = p };
                     }
+                    self.recordLocation(result, open_token);
                     return result;
                 }
                 if (std.mem.eql(u8, next_token, ".")) {
@@ -484,6 +519,12 @@ pub fn read(source: []const u8, allocator: std.mem.Allocator) ElzError!Value {
 /// Returns:
 /// An `ArrayList` of parsed `Value`s, or an error if parsing fails.
 pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(Value) {
+    return readAllTracked(source, allocator, "", null);
+}
+
+/// Like `readAll`, but records the file and line of every parsed pair into
+/// `locations` (keyed by pair pointer) for error reporting.
+pub fn readAllTracked(source: []const u8, allocator: std.mem.Allocator, file: []const u8, locations: ?*FormLocations) !std.ArrayListUnmanaged(Value) {
     var tokens = tokenize(source, allocator) catch |err| {
         return err;
     };
@@ -494,6 +535,9 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         .tokens = tokens,
         .position = 0,
         .allocator = allocator,
+        .source = source,
+        .file = file,
+        .locations = locations,
     };
 
     var forms = std.ArrayListUnmanaged(Value).empty;

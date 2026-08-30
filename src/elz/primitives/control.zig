@@ -366,6 +366,8 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
             break :blk core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
         };
         interp.last_error_message = null;
+        interp.last_error_line = null;
+        interp.last_error_file = null;
 
         var handler_args = core.ValueList.init(env.allocator);
         defer handler_args.deinit();

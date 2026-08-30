@@ -104,6 +104,9 @@ pub const Compiler = struct {
     scope: Scope,
     /// Pointer to the enclosing compiler (for nested lambdas).
     enclosing: ?*Compiler,
+    /// Source location of the form currently being compiled (0 / "" unknown).
+    current_line: u32 = 0,
+    current_file: []const u8 = "",
     /// Interpreter reference for macro expansion.
     interp: *@import("interpreter.zig").Interpreter,
     /// Tracked stack depth: number of values currently on the runtime stack above
@@ -120,9 +123,12 @@ pub const Compiler = struct {
     ) !Compiler {
         const proto = try allocator.create(FuncProto);
         proto.* = FuncProto.init(allocator, name);
+        if (enclosing) |enc| proto.source_file = enc.current_file;
         return .{
             .allocator = allocator,
             .proto = proto,
+            .current_line = if (enclosing) |enc| enc.current_line else 0,
+            .current_file = if (enclosing) |enc| enc.current_file else "",
             .scope = Scope.init(allocator, null),
             .enclosing = enclosing,
             .interp = interp,
@@ -167,23 +173,25 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn emit(self: *Compiler, instr: Instruction) !usize {
-        return self.proto.emit(instr);
+        const idx = try self.proto.emit(instr);
+        try self.proto.lines.append(self.allocator, self.current_line);
+        return idx;
     }
 
     fn emitOp(self: *Compiler, op: OpCode) !usize {
-        return self.proto.emit(Instruction.init_op(op));
+        return self.emit(Instruction.init_op(op));
     }
 
     fn emitA(self: *Compiler, op: OpCode, a: u8) !usize {
-        return self.proto.emit(Instruction.init_a(op, a));
+        return self.emit(Instruction.init_a(op, a));
     }
 
     fn emitBx(self: *Compiler, op: OpCode, bx: u16) !usize {
-        return self.proto.emit(Instruction.init_bx(op, bx));
+        return self.emit(Instruction.init_bx(op, bx));
     }
 
     fn emitJump(self: *Compiler, op: OpCode) !usize {
-        return self.proto.emit(Instruction.init_offset(op, 0));
+        return self.emit(Instruction.init_offset(op, 0));
     }
 
     fn patchJump(self: *Compiler, idx: usize) void {
@@ -219,6 +227,13 @@ pub const Compiler = struct {
     /// Compile one expression. `tail` is true when this expression is in tail
     /// position (may emit tail_call instead of call).
     pub fn compileExpr(self: *Compiler, expr: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        if (expr == .pair) {
+            if (self.interp.source_locations.get(@intFromPtr(expr.pair))) |loc| {
+                self.current_line = loc.line;
+                self.current_file = loc.file;
+                if (self.proto.source_file.len == 0) self.proto.source_file = loc.file;
+            }
+        }
         switch (expr) {
             // --- Self-evaluating atoms ---
             .nil => _ = try self.emitOp(.load_nil),

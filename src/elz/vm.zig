@@ -569,7 +569,21 @@ pub const VM = struct {
         // Start with an empty working stack. The body code is responsible for
         // initialising its own locals (letrec emits load_false, let pushes init values).
         self.stack_top = 0;
-        const result = self.run();
+        const result = self.run() catch |err| {
+            // Record the source location of the failing instruction. Keep the
+            // innermost location when nested VM runs propagate the error.
+            if (self.frame_count > 0 and self.interp.last_error_line == null) {
+                const fr = self.frames[self.frame_count - 1];
+                const ip = if (fr.ip > 0) fr.ip - 1 else 0;
+                const lines = fr.closure.proto.lines.items;
+                if (ip < lines.len and lines[ip] != 0) {
+                    self.interp.last_error_line = lines[ip];
+                    self.interp.last_error_file = fr.closure.proto.source_file;
+                }
+            }
+            self.closeUpvaluesAbove(0);
+            return err;
+        };
         // Close all open upvalues before the stack is freed: this copies any open
         // upvalue values into the cell so subsequent accesses via the closed pointer
         // (from callProc or runFromEval) see valid values.

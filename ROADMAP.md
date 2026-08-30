@@ -185,8 +185,9 @@ the capture point.
 
 ## Beyond the Standard
 
-* [ ] Source locations in errors: line and column tracked from the parser through to
-  runtime error reports and stack traces.
+* [x] Source locations in errors: the parser records each form's file and line,
+  the compiler carries them into a per-instruction line table, and uncaught
+  runtime errors report `At: file:line`. Stack traces remain future work.
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
   `tests/vendor/` and runs via `make test-conformance`. Current score: 803 of
   973 checks pass (82 percent). The suite reports but does not gate the build.

@@ -95,6 +95,11 @@ pub const Interpreter = struct {
     /// Libraries registered by define-library, keyed by the canonical
     /// space-joined library name (e.g. "my lib").
     library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
+    /// Source locations of parsed forms, keyed by pair pointer.
+    source_locations: parser.FormLocations = .empty,
+    /// Location of the most recent uncaught runtime error, when known.
+    last_error_file: ?[]const u8 = null,
+    last_error_line: ?u32 = null,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
@@ -158,7 +163,7 @@ pub const Interpreter = struct {
         try env_setup.populate_regex(&self);
 
         const std_lib_source = @embedFile("../stdlib/std.elz");
-        var std_lib_forms = try parser.readAll(std_lib_source, allocator);
+        var std_lib_forms = try parser.readAllTracked(std_lib_source, allocator, "<stdlib>", &self.source_locations);
         defer std_lib_forms.deinit(allocator);
 
         if (std_lib_forms.items.len > 0) {
@@ -188,7 +193,7 @@ pub const Interpreter = struct {
     /// Returns:
     /// The `core.Value` of the last evaluated expression, or an error if parsing or evaluation fails.
     pub fn evalString(self: *Interpreter, source: []const u8, fuel: *u64) !core.Value {
-        var forms = try parser.readAll(source, self.allocator);
+        var forms = try parser.readAllTracked(source, self.allocator, "<eval>", &self.source_locations);
         defer forms.deinit(self.allocator);
 
         if (forms.items.len == 0) return .unspecified;
@@ -225,7 +230,7 @@ pub const Interpreter = struct {
         };
         defer self.allocator.free(source_bytes);
 
-        var forms = @import("parser.zig").readAll(source_bytes, self.allocator) catch {
+        var forms = @import("parser.zig").readAllTracked(source_bytes, self.allocator, try self.allocator.dupe(u8, path_str), &self.source_locations) catch {
             self.last_error_message = "Failed to parse module file.";
             return core.ElzError.InvalidArgument;
         };
