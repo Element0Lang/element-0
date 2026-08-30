@@ -187,8 +187,9 @@ the capture point.
 
 * [ ] Source locations in errors: line and column tracked from the parser through to
   runtime error reports and stack traces.
-* [ ] R7RS conformance suite: a vendored external test suite (e.g., Chibi's) as a
-  conformance gate with a public compliance score.
+* [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
+  `tests/vendor/` and runs via `make test-conformance`. Current score: 803 of
+  973 checks pass (82 percent). The suite reports but does not gate the build.
 * [ ] Documentation: a language reference covering every implemented procedure and the
   embedding API.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).

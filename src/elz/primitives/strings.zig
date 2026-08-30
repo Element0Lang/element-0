@@ -20,6 +20,58 @@ fn toIndex(v: Value) ElzError!usize {
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a single symbol.
+/// Folds an ASCII character to lowercase; non-ASCII code points fold to
+/// themselves (case operations are ASCII-only).
+fn foldChar(c: u32) u32 {
+    if (c < 128) return std.ascii.toLower(@intCast(c));
+    return c;
+}
+
+fn isAsciiClass(c: u32, comptime pred: fn (u8) bool) bool {
+    if (c >= 128) return false;
+    return pred(@intCast(c));
+}
+
+/// Chained n-ary character comparison.
+fn chainChars(args: core.ValueList, comptime fold: bool, comptime ok: fn (std.math.Order) bool) ElzError!Value {
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
+    for (args.items[0 .. args.items.len - 1], args.items[1..]) |a, b| {
+        if (a != .character or b != .character) return ElzError.InvalidArgument;
+        const ca = if (fold) foldChar(a.character) else a.character;
+        const cb = if (fold) foldChar(b.character) else b.character;
+        const o: std.math.Order = if (ca < cb) .lt else if (ca > cb) .gt else .eq;
+        if (!ok(o)) return Value{ .boolean = false };
+    }
+    return Value{ .boolean = true };
+}
+
+/// Chained n-ary string comparison.
+fn chainStrings(args: core.ValueList, comptime ci: bool, comptime ok: fn (std.math.Order) bool) ElzError!Value {
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
+    for (args.items[0 .. args.items.len - 1], args.items[1..]) |a, b| {
+        if (a != .string or b != .string) return ElzError.InvalidArgument;
+        const o = if (ci) string_ci_compare(a.string, b.string) else std.mem.order(u8, a.string, b.string);
+        if (!ok(o)) return Value{ .boolean = false };
+    }
+    return Value{ .boolean = true };
+}
+
+fn okEq(o: std.math.Order) bool {
+    return o == .eq;
+}
+fn okLt(o: std.math.Order) bool {
+    return o == .lt;
+}
+fn okGt(o: std.math.Order) bool {
+    return o == .gt;
+}
+fn okLe(o: std.math.Order) bool {
+    return o != .gt;
+}
+fn okGe(o: std.math.Order) bool {
+    return o != .lt;
+}
+
 pub fn symbol_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const sym = args.items[0];
@@ -75,129 +127,91 @@ pub fn string_append(_: *interpreter.Interpreter, env: *core.Environment, args: 
 /// Parameters:
 /// - `args`: A `ValueList` containing two characters.
 pub fn char_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = a.character == b.character };
+    return chainChars(args, false, okEq);
 }
 
 /// `char_lt` checks if the first character is less than the second.
 pub fn char_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = a.character < b.character };
+    return chainChars(args, false, okLt);
 }
 
 /// `char_gt` checks if the first character is greater than the second.
 pub fn char_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = a.character > b.character };
+    return chainChars(args, false, okGt);
 }
 
 /// `char_le` checks if the first character is less than or equal to the second.
 pub fn char_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = a.character <= b.character };
+    return chainChars(args, false, okLe);
 }
 
 /// `char_ge` checks if the first character is greater than or equal to the second.
 pub fn char_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = a.character >= b.character };
+    return chainChars(args, false, okGe);
 }
 
 pub fn char_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) == std.ascii.toLower(@intCast(b.character)) };
+    return chainChars(args, true, okEq);
 }
 
 pub fn char_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) < std.ascii.toLower(@intCast(b.character)) };
+    return chainChars(args, true, okLt);
 }
 
 pub fn char_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) > std.ascii.toLower(@intCast(b.character)) };
+    return chainChars(args, true, okGt);
 }
 
 pub fn char_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) <= std.ascii.toLower(@intCast(b.character)) };
+    return chainChars(args, true, okLe);
 }
 
 pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .character or b != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.toLower(@intCast(a.character)) >= std.ascii.toLower(@intCast(b.character)) };
+    return chainChars(args, true, okGe);
 }
 
 pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.isAlphabetic(@intCast(args.items[0].character)) };
+    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isAlphabetic) };
 }
 
 pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.isDigit(@intCast(args.items[0].character)) };
+    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isDigit) };
 }
 
 pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.isWhitespace(@intCast(args.items[0].character)) };
+    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isWhitespace) };
 }
 
 pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.isUpper(@intCast(args.items[0].character)) };
+    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isUpper) };
 }
 
 pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.ascii.isLower(@intCast(args.items[0].character)) };
+    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isLower) };
 }
 
 pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .character = std.ascii.toUpper(@intCast(args.items[0].character)) };
+    const c = args.items[0].character;
+    return Value{ .character = if (c < 128) std.ascii.toUpper(@intCast(c)) else c };
 }
 
 pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .character = std.ascii.toLower(@intCast(args.items[0].character)) };
+    const c = args.items[0].character;
+    return Value{ .character = if (c < 128) std.ascii.toLower(@intCast(c)) else c };
 }
 
 /// `char_to_integer` converts a character to its Unicode code point.
@@ -492,55 +506,31 @@ pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
 /// `string_eq` checks if two strings are equal.
 /// Syntax: (string=? str1 str2)
 pub fn string_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .string or b != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = std.mem.eql(u8, a.string, b.string) };
+    return chainStrings(args, false, okEq);
 }
 
 /// `string_lt` checks if the first string is lexicographically less than the second.
 /// Syntax: (string<? str1 str2)
 pub fn string_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .string or b != .string) return ElzError.InvalidArgument;
-    const order = std.mem.order(u8, a.string, b.string);
-    return Value{ .boolean = order == .lt };
+    return chainStrings(args, false, okLt);
 }
 
 /// `string_gt` checks if the first string is lexicographically greater than the second.
 /// Syntax: (string>? str1 str2)
 pub fn string_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .string or b != .string) return ElzError.InvalidArgument;
-    const order = std.mem.order(u8, a.string, b.string);
-    return Value{ .boolean = order == .gt };
+    return chainStrings(args, false, okGt);
 }
 
 /// `string_le` checks if the first string is lexicographically less than or equal to the second.
 /// Syntax: (string<=? str1 str2)
 pub fn string_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .string or b != .string) return ElzError.InvalidArgument;
-    const order = std.mem.order(u8, a.string, b.string);
-    return Value{ .boolean = order != .gt };
+    return chainStrings(args, false, okLe);
 }
 
 /// `string_ge` checks if the first string is lexicographically greater than or equal to the second.
 /// Syntax: (string>=? str1 str2)
 pub fn string_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .string or b != .string) return ElzError.InvalidArgument;
-    const order = std.mem.order(u8, a.string, b.string);
-    return Value{ .boolean = order != .lt };
+    return chainStrings(args, false, okGe);
 }
 
 fn string_ci_compare(a: []const u8, b: []const u8) std.math.Order {
@@ -552,41 +542,31 @@ fn string_ci_compare(a: []const u8, b: []const u8) std.math.Order {
         if (ca == null and cb == null) return .eq;
         if (ca == null) return .lt;
         if (cb == null) return .gt;
-        const la: u8 = std.ascii.toLower(@intCast(ca.?));
-        const lb: u8 = std.ascii.toLower(@intCast(cb.?));
+        const la: u32 = foldChar(ca.?);
+        const lb: u32 = foldChar(cb.?);
         if (la < lb) return .lt;
         if (la > lb) return .gt;
     }
 }
 
 pub fn string_ci_eq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .eq };
+    return chainStrings(args, true, okEq);
 }
 
 pub fn string_ci_lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .lt };
+    return chainStrings(args, true, okLt);
 }
 
 pub fn string_ci_le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) != .gt };
+    return chainStrings(args, true, okLe);
 }
 
 pub fn string_ci_gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) == .gt };
+    return chainStrings(args, true, okGt);
 }
 
 pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string or args.items[1] != .string) return ElzError.InvalidArgument;
-    return Value{ .boolean = string_ci_compare(args.items[0].string, args.items[1].string) != .lt };
+    return chainStrings(args, true, okGe);
 }
 
 pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {

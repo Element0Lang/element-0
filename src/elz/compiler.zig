@@ -289,6 +289,12 @@ pub const Compiler = struct {
 
         const sym = head.symbol;
 
+        // A lexically bound name shadows any special form of the same name,
+        // e.g. (let ((if list)) (if 1 2 3)) calls the variable.
+        if (try self.resolveVar(sym) != .global) {
+            return self.compileCall(head, args, env, tail, fuel);
+        }
+
         if (std.mem.eql(u8, sym, "quote")) return self.compileQuote(args);
         if (std.mem.eql(u8, sym, "quasiquote")) return self.compileQuasiquote(args.pair.car, env, fuel);
         if (std.mem.eql(u8, sym, "if")) return self.compileIf(args, env, tail, fuel);
@@ -472,9 +478,10 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileIf(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        if (args != .pair or args.pair.cdr != .pair) return ElzError.IfInvalidArguments;
         const test_expr = args.pair.car;
         const then_expr = args.pair.cdr.pair.car;
-        const has_else = args.pair.cdr.pair.cdr != .nil;
+        const has_else = args.pair.cdr.pair.cdr == .pair;
         const else_expr: Value = if (has_else) args.pair.cdr.pair.cdr.pair.car else .unspecified;
 
         try self.compileExpr(test_expr, env, false, fuel);

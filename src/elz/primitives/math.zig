@@ -287,44 +287,67 @@ fn cmp2(a: Value, b: Value) ElzError!std.math.Order {
     return .eq;
 }
 
+/// Chained n-ary comparison: true when every adjacent pair satisfies `ok`.
+fn chainCompare(args: core.ValueList, comptime ok: fn (std.math.Order) bool) ElzError!Value {
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
+    for (args.items[0 .. args.items.len - 1], args.items[1..]) |a, b| {
+        const o = try cmp2(a, b);
+        if (!ok(o)) return Value{ .boolean = false };
+    }
+    return Value{ .boolean = true };
+}
+
 pub fn le(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const o = try cmp2(args.items[0], args.items[1]);
-    return Value{ .boolean = o != .gt };
+    return chainCompare(args, struct {
+        fn ok(o: std.math.Order) bool {
+            return o != .gt;
+        }
+    }.ok);
 }
 
 pub fn lt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const o = try cmp2(args.items[0], args.items[1]);
-    return Value{ .boolean = o == .lt };
+    return chainCompare(args, struct {
+        fn ok(o: std.math.Order) bool {
+            return o == .lt;
+        }
+    }.ok);
 }
 
 pub fn ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const o = try cmp2(args.items[0], args.items[1]);
-    return Value{ .boolean = o != .lt };
+    return chainCompare(args, struct {
+        fn ok(o: std.math.Order) bool {
+            return o != .lt;
+        }
+    }.ok);
 }
 
 pub fn gt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const o = try cmp2(args.items[0], args.items[1]);
-    return Value{ .boolean = o == .gt };
+    return chainCompare(args, struct {
+        fn ok(o: std.math.Order) bool {
+            return o == .gt;
+        }
+    }.ok);
 }
 
 pub fn eq_num(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
+    for (args.items[0 .. args.items.len - 1], args.items[1..]) |ca, cb| {
+        if (!try numEq2(ca, cb)) return Value{ .boolean = false };
+    }
+    return Value{ .boolean = true };
+}
+
+fn numEq2(a: Value, b: Value) ElzError!bool {
     if (!a.isNumeric() or !b.isNumeric()) return ElzError.InvalidArgument;
     if (a == .complex or b == .complex) {
         const ar: f64 = if (a == .complex) a.complex.real else toF64(a);
         const ai: f64 = if (a == .complex) a.complex.imag else 0;
         const br: f64 = if (b == .complex) b.complex.real else toF64(b);
         const bi: f64 = if (b == .complex) b.complex.imag else 0;
-        return Value{ .boolean = ar == br and ai == bi };
+        return ar == br and ai == bi;
     }
     const o = try cmp2(a, b);
-    return Value{ .boolean = o == .eq };
+    return o == .eq;
 }
 
 fn isqrt(n: u64) u64 {

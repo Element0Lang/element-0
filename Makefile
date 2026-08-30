@@ -31,7 +31,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz bench test test-elz test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -105,6 +105,10 @@ test: ## Run tests
 test-elz: ## Run Element 0 standard library tests
 	@echo "Running Element 0 standard library tests..."
 	@$(ZIG) build test-elz $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
+
+test-conformance: build ## Run the vendored R7RS conformance suite and report a score
+	@echo "Running the R7RS conformance suite..."
+	@./zig-out/bin/elz-repl --file tests/r7rs_conformance.elz | tail -6
 
 test-prop: ## Run property-based tests
 	@echo "Running property-based tests..."
