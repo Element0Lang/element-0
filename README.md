@@ -32,7 +32,8 @@ The implementation is named Elz (pronounced "el-zee") and can be easily integrat
 * Easy to extend with Zig functions via the use of FFI or directly writing Element 0 code
 * A ggod tradeoff between performance and simplicity
 
-See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
+See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features, and the
+[language reference](docs/language-reference.md) for the language as implemented.
 
 > [!IMPORTANT]
 > This project is in early development, so bugs and breaking changes are expected.
@@ -188,6 +189,9 @@ Result of (zig-mul 7 6) is: 42
 -----
 
 ### Documentation
+
+The [language reference](docs/language-reference.md) describes the lexical syntax, special forms, standard
+procedures, and the known deviations from R7RS-small.
 
 You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 

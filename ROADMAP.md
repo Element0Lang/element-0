@@ -179,7 +179,8 @@ the capture point.
   do not re-fire when a captured segment is reinstated)
 * [x] FFI boundary rule (prompts are per VM run, so a shift inside a nested
   native call raises instead of capturing across the boundary)
-* [ ] Documentation of the `call/cc` = `call/ec` semantics in the manual
+* [x] Documentation of the `call/cc` = `call/ec` semantics in the manual
+  (see `docs/language-reference.md`)
 
 ---
 
@@ -191,6 +192,7 @@ the capture point.
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
   `tests/vendor/` and runs via `make test-conformance`. Current score: 888 of
   977 checks pass (91 percent). The suite reports but does not gate the build.
-* [ ] Documentation: a language reference covering every implemented procedure and the
-  embedding API.
+* [x] Documentation: `docs/language-reference.md` covers the lexical syntax, special
+  forms, standard procedures, extensions, and deviations. The embedding API is
+  covered by the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
