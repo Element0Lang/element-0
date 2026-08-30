@@ -1126,5 +1126,35 @@
 (test-case "n-ary string less than" (string<? "a" "b" "c"))
 (test-case "n-ary case-insensitive char" (char-ci=? #\a #\A #\a))
 
+;; --- Conformance-driven fixes ---
+(test-case "unicode upcase greek" (string=? (string-upcase "γλώσσα") "ΓΛΏΣΣΑ"))
+(test-case "unicode downcase greek" (string=? (string-downcase "ΓΛΏΣΣΑ") "γλώσσα"))
+(test-case "unicode ci string compare" (string-ci=? "ΑΒΓ" "αβγ"))
+(test-case "string-copy with range" (string=? (string-copy "abc" 1 2) "b"))
+(test-case "string->list with range" (equal? (string->list "abc" 1) '(#\b #\c)))
+(test-case "string-fill! with range"
+  (let ((str (make-string 5 #\x)))
+    (string-fill! str #\- 2)
+    (string=? str "xx---")))
+(test-case "vector->list with range" (equal? (vector->list (vector 'a 'b 'c) 1 2) '(b)))
+(test-case "vector-fill! with range"
+  (let ((v (vector 1 2 3 4 5)))
+    (vector-fill! v 'x 2 4)
+    (equal? (vector->list v) '(1 2 x x 5))))
+(test-case "map stops at shortest list" (equal? (map + '(1 2 3) '(4 5 6 7)) '(5 7 9)))
+(test-case "member with comparator" (equal? (member "B" '("a" "b" "c") string-ci=?) '("b" "c")))
+(test-case "assoc with comparator" (equal? (assoc 2 '((1 1) (2 4) (3 9)) =) '(2 4)))
+(test-case "make-promise idempotent on promises"
+  (= (force (make-promise (make-promise (+ 2 2)))) 4))
+(test-case "inf and nan literals" (and (infinite? +inf.0) (nan? +nan.0) (= -inf.0 (- +inf.0))))
+(test-case "complex literal" (and (complex? 3+4i) (= (real-part 3+4i) 3.0) (= (imag-part 3+4i) 4.0)))
+(test-case "exact zero imaginary is real" (and (real? -2.5+0i) (integer? 3+0i)))
+(test-case "long boolean literals" (and #true (not #false)))
+(test-case "read parses vector literals from string ports"
+  (equal? (read (open-input-string "#(a b)")) (vector 'a 'b)))
+(test-case "read consumes one datum at a time"
+  (let ((p (open-input-string "#true 6")))
+    (and (eq? (read p) #t) (= (read p) 6))))
+
 ;; --- Run Summary ---
 (report-summary)

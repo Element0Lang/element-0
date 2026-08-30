@@ -277,12 +277,13 @@
 ;;;
 ;;; Returns:
 ;;;   The sublist starting with obj, or #f if obj is not found.
-(define (member obj lst)
-  (if (null? lst)
-      #f
-      (if (equal? obj (car lst))
-          lst
-          (member obj (cdr lst)))))
+(define (member obj lst . compare)
+  (let ((same? (if (null? compare) equal? (car compare))))
+    (let loop ((l lst))
+      (cond
+        ((null? l) #f)
+        ((same? obj (car l)) l)
+        (else (loop (cdr l)))))))
 
 ;;; (memv obj lst)
 ;;;
@@ -304,12 +305,13 @@
 ;;;
 ;;; Returns:
 ;;;   The pair whose car is obj, or #f if no such pair is found.
-(define (assoc obj alist)
-  (if (null? alist)
-      #f
-      (if (equal? obj (caar alist))
-          (car alist)
-          (assoc obj (cdr alist)))))
+(define (assoc obj alist . compare)
+  (let ((same? (if (null? compare) equal? (car compare))))
+    (let loop ((al alist))
+      (cond
+        ((null? al) #f)
+        ((same? obj (caar al)) (car al))
+        (else (loop (cdr al)))))))
 
 ;;; (assv obj alist)
 ;;;

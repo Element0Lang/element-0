@@ -304,14 +304,71 @@ const Parser = struct {
     }
 };
 
+/// Parses the real-number part of a complex literal: decimal, inf, or nan.
+fn parseRealText(text: []const u8) ?f64 {
+    if (std.mem.eql(u8, text, "+inf.0")) return std.math.inf(f64);
+    if (std.mem.eql(u8, text, "-inf.0")) return -std.math.inf(f64);
+    if (std.mem.eql(u8, text, "+nan.0") or std.mem.eql(u8, text, "-nan.0")) return std.math.nan(f64);
+    return std.fmt.parseFloat(f64, text) catch null;
+}
+
+/// Parses a rectangular complex literal (ending in i). An exact-zero
+/// imaginary part ("+0i") yields the real part alone, per R7RS typing.
+fn parseComplex(text: []const u8, allocator: std.mem.Allocator) ElzError!Value {
+    const body = text[0 .. text.len - 1];
+    // Split at the sign of the imaginary part: the last +/- not at position 0
+    // and not part of an exponent or inf/nan spelling.
+    var split: ?usize = null;
+    var i = body.len;
+    while (i > 1) {
+        i -= 1;
+        const c = body[i];
+        if (c == '+' or c == '-') {
+            const prev = body[i - 1];
+            if (prev == 'e' or prev == 'E') continue;
+            // "inf.0" / "nan.0" contain no signs, so any other +/- splits.
+            if (std.mem.endsWith(u8, body[0..i], "inf.") or std.mem.endsWith(u8, body[0..i], "nan.")) continue;
+            split = i;
+            break;
+        }
+    }
+    var real_text: []const u8 = "";
+    var imag_text: []const u8 = body;
+    if (split) |at| {
+        real_text = body[0..at];
+        imag_text = body[at..];
+    }
+    if (imag_text.len == 0) return ElzError.InvalidArgument;
+    if (imag_text[0] != '+' and imag_text[0] != '-') {
+        // No sign on the imaginary part means this is not a complex literal.
+        return ElzError.InvalidArgument;
+    }
+    // An exact-zero imaginary part makes the value real.
+    if (std.mem.eql(u8, imag_text, "+0") or std.mem.eql(u8, imag_text, "-0")) {
+        if (real_text.len == 0) return Value{ .exact_integer = 0 };
+        return parse_atom(real_text, allocator);
+    }
+    const imag: f64 = if (imag_text.len == 1)
+        (if (imag_text[0] == '+') @as(f64, 1) else @as(f64, -1))
+    else
+        parseRealText(imag_text) orelse return ElzError.InvalidArgument;
+    const real: f64 = if (real_text.len == 0)
+        0
+    else
+        parseRealText(real_text) orelse return ElzError.InvalidArgument;
+    const c = allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = real, .imag = imag };
+    return Value{ .complex = c };
+}
+
 /// Parses an atomic value from a token.
 ///
 /// - `token`: The token to parse.
 /// - `allocator`: The memory allocator to use.
 /// - `return`: The parsed `Value`.
 fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
-    if (std.mem.eql(u8, token, "#t")) return Value{ .boolean = true };
-    if (std.mem.eql(u8, token, "#f")) return Value{ .boolean = false };
+    if (std.mem.eql(u8, token, "#t") or std.mem.eql(u8, token, "#true")) return Value{ .boolean = true };
+    if (std.mem.eql(u8, token, "#f") or std.mem.eql(u8, token, "#false")) return Value{ .boolean = false };
     if (token.len >= 2 and token[0] == '"' and token[token.len - 1] == '"') {
         var unescaped = std.ArrayListUnmanaged(u8).empty;
         defer unescaped.deinit(allocator);
@@ -474,6 +531,15 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         }
     }
 
+    if (std.mem.eql(u8, rest, "+inf.0")) return Value{ .number = std.math.inf(f64) };
+    if (std.mem.eql(u8, rest, "-inf.0")) return Value{ .number = -std.math.inf(f64) };
+    if (std.mem.eql(u8, rest, "+nan.0") or std.mem.eql(u8, rest, "-nan.0")) return Value{ .number = std.math.nan(f64) };
+
+    // Complex literal: <real><sign><imag>i, e.g. 3+4i, -2.5+0.0i, +inf.0i.
+    if (rest.len >= 2 and (rest[rest.len - 1] == 'i' or rest[rest.len - 1] == 'I')) {
+        if (parseComplex(rest, allocator)) |v| return v else |_| {}
+    }
+
     const num = std.fmt.parseFloat(f64, rest) catch {
         if (force_exact != null) return ElzError.InvalidArgument;
         return Value{ .symbol = try allocator.dupe(u8, token) };
@@ -507,6 +573,27 @@ pub fn read(source: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         .allocator = allocator,
     };
     return parser.parse_form();
+}
+
+/// Parses the first datum in `source`. Returns the value and the byte offset
+/// just past its final token, or null when the source holds no datum.
+pub fn readOne(source: []const u8, allocator: std.mem.Allocator) ElzError!?struct { value: Value, consumed: usize } {
+    var tokens = tokenize(source, allocator) catch |err| return err;
+    defer tokens.deinit(allocator);
+    if (tokens.items.len == 0) return null;
+
+    var p = Parser{
+        .tokens = tokens,
+        .position = 0,
+        .allocator = allocator,
+        .source = source,
+    };
+    const v = try p.parse_form();
+    const consumed = if (p.position < p.tokens.items.len) blk: {
+        const next_tok = p.tokens.items[p.position];
+        break :blk @intFromPtr(next_tok.ptr) - @intFromPtr(source.ptr);
+    } else source.len;
+    return .{ .value = v, .consumed = consumed };
 }
 
 /// Reads and parses all forms from a string of source code.

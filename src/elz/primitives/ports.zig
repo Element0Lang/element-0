@@ -272,6 +272,28 @@ pub fn read(interp: *interpreter.Interpreter, env: *core.Environment, args: core
         break :blk interp.currentInputPort() catch return ElzError.OutOfMemory;
     };
 
+    // String-input ports use the full parser directly, advancing the port by
+    // the bytes the datum consumed.
+    switch (port.kind) {
+        .string_input => |*sk| {
+            var start = sk.pos;
+            if (port.peek_buffer != null) {
+                // A pending peek holds a byte already consumed from the stream.
+                port.peek_buffer = null;
+                if (start > 0) start -= 1;
+            }
+            if (start >= sk.source.len) return Value{ .symbol = "eof" };
+            const one = parser.readOne(sk.source[start..], env.allocator) catch |err| return err;
+            if (one == null) {
+                sk.pos = sk.source.len;
+                return Value{ .symbol = "eof" };
+            }
+            sk.pos = start + one.?.consumed;
+            return one.?.value;
+        },
+        else => {},
+    }
+
     const slurped = slurp_one_datum(port, env.allocator) catch return ElzError.IOError;
     if (slurped == null) return Value{ .symbol = "eof" };
     defer env.allocator.free(slurped.?);

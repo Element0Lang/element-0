@@ -193,15 +193,15 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
     var call_args = core.ValueList.init(env.allocator);
     defer call_args.deinit();
     while (true) {
-        // Check if all lists are exhausted (stop at shortest).
-        var all_done = true;
+        // Stop at the shortest list (R7RS): done when any cursor is exhausted.
+        var any_done = false;
         for (cursors) |cur| {
-            if (cur != .nil) {
-                all_done = false;
+            if (cur != .pair) {
+                any_done = true;
                 break;
             }
         }
-        if (all_done) break;
+        if (any_done) break;
         // Collect one element from each list.
         call_args.items.len = 0;
         for (0..num_lists) |i| {

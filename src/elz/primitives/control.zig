@@ -239,9 +239,11 @@ pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environm
 /// `make-promise` wraps a no-argument thunk (produced by `delay`) in a Promise.
 pub fn make_promise(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const thunk = args.items[0];
+    const v = args.items[0];
+    // A promise is returned unchanged; any other value becomes a forced promise.
+    if (v == .promise) return v;
     const pr = try env.allocator.create(core.Promise);
-    pr.* = .{ .expr = thunk, .env = interp.root_env, .forced = false, .result = .unspecified };
+    pr.* = .{ .expr = .unspecified, .env = interp.root_env, .forced = true, .result = v };
     return core.Value{ .promise = pr };
 }
 

@@ -20,11 +20,85 @@ fn toIndex(v: Value) ElzError!usize {
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a single symbol.
-/// Folds an ASCII character to lowercase; non-ASCII code points fold to
-/// themselves (case operations are ASCII-only).
-fn foldChar(c: u32) u32 {
+/// Simple one-to-one Unicode case mapping covering ASCII, Latin-1, Greek,
+/// and Cyrillic. Multi-character special casings (like the German sharp s
+/// to "SS") are not applied.
+fn unicodeUpcase(c: u32) u32 {
+    if (c < 128) return std.ascii.toUpper(@intCast(c));
+    return switch (c) {
+        0x00E0...0x00F6, 0x00F8...0x00FE => c - 0x20, // Latin-1
+        0x03B1...0x03C1, 0x03C3...0x03C9 => c - 0x20, // Greek alpha to omega
+        0x03C2 => 0x03A3, // final sigma
+        0x03AC => 0x0386,
+        0x03AD...0x03AF => c - 0x25,
+        0x03CC => 0x038C,
+        0x03CD...0x03CE => c - 0x3F,
+        0x0430...0x044F => c - 0x20, // Cyrillic
+        0x0450...0x045F => c - 0x50,
+        else => c,
+    };
+}
+
+fn unicodeDowncase(c: u32) u32 {
     if (c < 128) return std.ascii.toLower(@intCast(c));
-    return c;
+    return switch (c) {
+        0x00C0...0x00D6, 0x00D8...0x00DE => c + 0x20, // Latin-1
+        0x0391...0x03A1, 0x03A3...0x03A9 => c + 0x20, // Greek
+        0x0386 => 0x03AC,
+        0x0388...0x038A => c + 0x25,
+        0x038C => 0x03CC,
+        0x038E...0x038F => c + 0x3F,
+        0x0410...0x042F => c + 0x20, // Cyrillic
+        0x0400...0x040F => c + 0x50,
+        else => c,
+    };
+}
+
+/// Resolves optional character-indexed [start [end]] arguments (starting at
+/// args index `from`) into a byte slice of `str`.
+fn sliceByChars(str: []const u8, args: []const Value, from: usize) ElzError![]const u8 {
+    if (args.len > from + 2) return ElzError.WrongArgumentCount;
+    var start: usize = 0;
+    var end_opt: ?usize = null;
+    if (args.len > from) {
+        if (args[from] != .exact_integer or args[from].exact_integer < 0) return ElzError.InvalidArgument;
+        start = @intCast(args[from].exact_integer);
+    }
+    if (args.len > from + 1) {
+        if (args[from + 1] != .exact_integer or args[from + 1].exact_integer < 0) return ElzError.InvalidArgument;
+        end_opt = @intCast(args[from + 1].exact_integer);
+        if (end_opt.? < start) return ElzError.InvalidArgument;
+    }
+
+    var byte_start: usize = str.len;
+    var byte_end: usize = str.len;
+    if (start == 0) byte_start = 0;
+    var ci: usize = 0;
+    var i: usize = 0;
+    while (i < str.len) {
+        if (ci == start) byte_start = i;
+        if (end_opt) |e| {
+            if (ci == e) {
+                byte_end = i;
+                break;
+            }
+        }
+        const l = std.unicode.utf8ByteSequenceLength(str[i]) catch return ElzError.InvalidArgument;
+        i += l;
+        ci += 1;
+    }
+    if (i >= str.len) {
+        if (start > ci) return ElzError.InvalidArgument;
+        if (end_opt) |e| {
+            if (e > ci) return ElzError.InvalidArgument;
+        }
+    }
+    return str[byte_start..byte_end];
+}
+
+/// Case-folds a character using the simple Unicode case mapping.
+fn foldChar(c: u32) u32 {
+    return unicodeDowncase(c);
 }
 
 fn isAsciiClass(c: u32, comptime pred: fn (u8) bool) bool {
@@ -203,15 +277,13 @@ pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args
 pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    const c = args.items[0].character;
-    return Value{ .character = if (c < 128) std.ascii.toUpper(@intCast(c)) else c };
+    return Value{ .character = unicodeUpcase(args.items[0].character) };
 }
 
 pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    const c = args.items[0].character;
-    return Value{ .character = if (c < 128) std.ascii.toLower(@intCast(c)) else c };
+    return Value{ .character = unicodeDowncase(args.items[0].character) };
 }
 
 /// `char_to_integer` converts a character to its Unicode code point.
@@ -570,15 +642,17 @@ pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 }
 
 pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
-    return Value{ .string = try env.allocator.dupe(u8, args.items[0].string) };
+    const slice = try sliceByChars(args.items[0].string, args.items, 1);
+    return Value{ .string = try env.allocator.dupe(u8, slice) };
 }
 
 pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
-    var it = std.unicode.Utf8View.initUnchecked(args.items[0].string).iterator();
+    const slice = try sliceByChars(args.items[0].string, args.items, 1);
+    var it = std.unicode.Utf8View.initUnchecked(slice).iterator();
     var result: Value = .nil;
     var chars = std.ArrayListUnmanaged(u21).empty;
     defer chars.deinit(env.allocator);
@@ -646,15 +720,18 @@ pub fn string_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: 
 }
 
 pub fn string_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[1] != .character) return ElzError.InvalidArgument;
     const s = args.items[0].string;
     const cp: u21 = @intCast(args.items[1].character);
     var buf: [4]u8 = undefined;
     const char_len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
-    if (s.len % char_len != 0) return ElzError.InvalidArgument;
-    const mutable: []u8 = @constCast(s);
+    const slice = try sliceByChars(s, args.items, 2);
+    // In-place fill: the fill character must have the same byte length as the
+    // characters it replaces, since strings cannot be resized in place.
+    if (slice.len % char_len != 0) return ElzError.InvalidArgument;
+    const mutable: []u8 = @constCast(slice);
     var i: usize = 0;
     while (i + char_len <= mutable.len) : (i += char_len) {
         @memcpy(mutable[i .. i + char_len], buf[0..char_len]);

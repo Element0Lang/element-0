@@ -132,13 +132,32 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
 
 /// `vector_fill_bang` fills every slot of a vector with a given value.
 /// Syntax: (vector-fill! vec fill)
+/// Resolves optional [start [end]] arguments (from args index `from`) against
+/// an element count.
+fn rangeArgs(args: []const Value, from: usize, len: usize) ElzError!struct { start: usize, end: usize } {
+    if (args.len > from + 2) return ElzError.WrongArgumentCount;
+    var start: usize = 0;
+    var end: usize = len;
+    if (args.len > from) {
+        if (args[from] != .exact_integer or args[from].exact_integer < 0) return ElzError.InvalidArgument;
+        start = @intCast(args[from].exact_integer);
+    }
+    if (args.len > from + 1) {
+        if (args[from + 1] != .exact_integer or args[from + 1].exact_integer < 0) return ElzError.InvalidArgument;
+        end = @intCast(args[from + 1].exact_integer);
+    }
+    if (start > end or end > len) return ElzError.InvalidArgument;
+    return .{ .start = start, .end = end };
+}
+
 pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
     const fill = args.items[1];
     const vec = vec_val.vector;
-    for (vec.items) |*slot| {
+    const r = try rangeArgs(args.items, 2, vec.items.len);
+    for (vec.items[r.start..r.end]) |*slot| {
         slot.* = fill;
     }
     return Value.unspecified;
@@ -147,16 +166,17 @@ pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args:
 /// `vector_to_list` converts a vector to a list.
 /// Syntax: (vector->list vec)
 pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
 
     const vec = vec_val.vector;
+    const r = try rangeArgs(args.items, 1, vec.items.len);
 
     var result: Value = Value.nil;
-    var i = vec.items.len;
-    while (i > 0) {
+    var i = r.end;
+    while (i > r.start) {
         i -= 1;
         const pair = try env.allocator.create(core.Pair);
         pair.* = .{
