@@ -190,9 +190,6 @@ Result of (zig-mul 7 6) is: 42
 
 ### Documentation
 
-The [language reference](docs/language-reference.md) describes the lexical syntax, special forms, standard
-procedures, and the known deviations from R7RS-small.
-
 You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
 
 #### Standard Library
