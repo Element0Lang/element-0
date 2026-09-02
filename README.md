@@ -186,6 +186,23 @@ Result of (* 10 5) is: 50
 Result of (zig-mul 7 6) is: 42
 ```
 
+##### Restricting What a Script Can Do
+
+`Interpreter.init` takes a `SandboxFlags` value that selects which built-in capabilities the script can reach.
+Every group is enabled by default.
+
+```zig
+var interpreter = try elz.Interpreter.init(.{
+    .enable_filesystem = false, // No file ports, `load`, `include`, or module imports
+    .enable_process = false, // No `exit` and no environment variables
+    .time_limit_ms = 100, // Give up after 100 milliseconds
+});
+```
+
+A disabled group's procedures are not bound at all, so a script that calls one gets a `SymbolNotFound` error.
+The compile-time forms that read files (`include`, `include-ci`, and `import`) report `PermissionDenied` when the filesystem is disabled.
+The other groups are `enable_math`, `enable_lists`, `enable_predicates`, `enable_strings`, and `enable_io`.
+
 -----
 
 ### Documentation

@@ -97,9 +97,12 @@ pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core
 /// Helper for converting a numeric `Value` to a non-negative `usize` index.
 fn toIndex(v: Value) ElzError!usize {
     return switch (v) {
-        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .exact_integer => |i| std.math.cast(usize, i) orelse ElzError.InvalidArgument,
         .number => |n| blk: {
-            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            // Reject non-finite and out-of-range values: `@intFromFloat` is
+            // illegal behavior unless the value fits the destination type.
+            if (!std.math.isFinite(n) or n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) break :blk ElzError.InvalidArgument;
             break :blk @intFromFloat(n);
         },
         else => ElzError.InvalidArgument,

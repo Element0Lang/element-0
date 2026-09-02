@@ -65,4 +65,9 @@ pub const ElzError = error{
     Overflow,
     /// The VM call stack or value stack overflowed.
     StackOverflow,
+    /// A capability disabled by `SandboxFlags` was used (filesystem or process access).
+    PermissionDenied,
+    /// A body needs more local slots, parameters, or arguments than the
+    /// bytecode format allows (the limit is 255 per frame).
+    TooManyLocals,
 };

@@ -195,7 +195,7 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_control(interp: *interpreter.Interpreter) !void {
+pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     try interp.root_env.set(interp, "apply", core.Value{ .procedure = control.apply });
     try interp.root_env.set(interp, "eval", core.Value{ .procedure = control.eval_proc });
     try interp.root_env.set(interp, "call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
@@ -205,10 +205,13 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "dynamic-wind", core.Value{ .procedure = control.dynamic_wind });
     try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
     try interp.root_env.set(interp, "make-promise", core.Value{ .procedure = control.make_promise });
+    try interp.root_env.set(interp, "%%make-delayed%%", core.Value{ .procedure = control.make_delayed });
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
     try interp.root_env.set(interp, "error", core.Value{ .procedure = control.error_fn });
     try interp.root_env.set(interp, "raise", core.Value{ .procedure = control.raise_fn });
-    try interp.root_env.set(interp, "get-environment-variables", core.Value{ .procedure = os.get_environment_variables });
+    if (flags.enable_process) {
+        try interp.root_env.set(interp, "get-environment-variables", core.Value{ .procedure = os.get_environment_variables });
+    }
     try interp.root_env.set(interp, "command-line", core.Value{ .procedure = os.command_line });
     try interp.root_env.set(interp, "promise?", core.Value{ .procedure = predicates.promise_p });
     try interp.root_env.set(interp, "raise-continuable", core.Value{ .procedure = control.raise_continuable_fn });
@@ -233,13 +236,16 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_io(interp: *interpreter.Interpreter) !void {
+pub fn populate_io(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     try interp.root_env.set(interp, "display", core.Value{ .procedure = io.display });
     try interp.root_env.set(interp, "write", core.Value{ .procedure = io.write_proc });
     try interp.root_env.set(interp, "write-shared", core.Value{ .procedure = io.write_shared_proc });
     try interp.root_env.set(interp, "write-simple", core.Value{ .procedure = io.write_simple_proc });
     try interp.root_env.set(interp, "newline", core.Value{ .procedure = io.newline });
-    try interp.root_env.set(interp, "load", core.Value{ .procedure = io.load });
+    // `load` reads and runs a file, so it also needs filesystem access.
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "load", core.Value{ .procedure = io.load });
+    }
     try interp.root_env.set(interp, "read-string", core.Value{ .procedure = io.read_string });
 }
 
@@ -255,7 +261,10 @@ pub fn populate_modules(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_process(interp: *interpreter.Interpreter) !void {
+pub fn populate_process(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    // `exit` terminates the host process, so it is unavailable when process
+    // access is disabled.
+    if (!flags.enable_process) return;
     try interp.root_env.set(interp, "exit", core.Value{ .procedure = process.exit });
 }
 
@@ -263,13 +272,17 @@ pub fn populate_process(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_os(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set(interp, "getenv", core.Value{ .procedure = os.getenv });
-    try interp.root_env.set(interp, "file-exists?", core.Value{ .procedure = os.file_exists });
-    try interp.root_env.set(interp, "delete-file", core.Value{ .procedure = os.delete_file });
-    try interp.root_env.set(interp, "current-directory", core.Value{ .procedure = os.current_directory });
-    try interp.root_env.set(interp, "directory-list", core.Value{ .procedure = os.directory_list });
-    try interp.root_env.set(interp, "rename-file", core.Value{ .procedure = os.rename_file });
+pub fn populate_os(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    if (flags.enable_process) {
+        try interp.root_env.set(interp, "getenv", core.Value{ .procedure = os.getenv });
+    }
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "file-exists?", core.Value{ .procedure = os.file_exists });
+        try interp.root_env.set(interp, "delete-file", core.Value{ .procedure = os.delete_file });
+        try interp.root_env.set(interp, "current-directory", core.Value{ .procedure = os.current_directory });
+        try interp.root_env.set(interp, "directory-list", core.Value{ .procedure = os.directory_list });
+        try interp.root_env.set(interp, "rename-file", core.Value{ .procedure = os.rename_file });
+    }
 }
 
 /// Populates the interpreter's root environment with date/time primitive functions.
@@ -372,15 +385,17 @@ pub fn populate_globals(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_ports(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
-    try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+pub fn populate_ports(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
+        try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+        try interp.root_env.set(interp, "open-binary-input-file", core.Value{ .procedure = ports.open_binary_input_file });
+        try interp.root_env.set(interp, "open-binary-output-file", core.Value{ .procedure = ports.open_binary_output_file });
+    }
     try interp.root_env.set(interp, "eof-object", core.Value{ .procedure = ports.eof_object });
     try interp.root_env.set(interp, "open-input-bytevector", core.Value{ .procedure = ports.open_input_bytevector });
     try interp.root_env.set(interp, "open-output-bytevector", core.Value{ .procedure = ports.open_output_bytevector });
     try interp.root_env.set(interp, "get-output-bytevector", core.Value{ .procedure = ports.get_output_bytevector });
-    try interp.root_env.set(interp, "open-binary-input-file", core.Value{ .procedure = ports.open_binary_input_file });
-    try interp.root_env.set(interp, "open-binary-output-file", core.Value{ .procedure = ports.open_binary_output_file });
     try interp.root_env.set(interp, "read-u8", core.Value{ .procedure = ports.read_u8 });
     try interp.root_env.set(interp, "peek-u8", core.Value{ .procedure = ports.peek_u8 });
     try interp.root_env.set(interp, "u8-ready?", core.Value{ .procedure = ports.u8_ready_p });

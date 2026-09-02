@@ -71,6 +71,16 @@ pub const Environment = struct {
     /// Returns:
     /// The `Value` bound to the symbol, or `ElzError.SymbolNotFound` if the symbol is not found.
     pub fn get(self: *const Environment, name: []const u8, interp: *interpreter.Interpreter) ElzError!Value {
+        if (self.lookup(name)) |value| return value;
+        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Symbol '{s}' not found.", .{name}) catch null;
+        return ElzError.SymbolNotFound;
+    }
+
+    /// Looks a symbol up without reporting an error. Callers that treat a miss
+    /// as an ordinary outcome (such as the compiler probing for a macro) must
+    /// use this, so a failed probe does not leave a misleading message behind
+    /// in `interp.last_error_message`.
+    pub fn lookup(self: *const Environment, name: []const u8) ?Value {
         var current_env: ?*const Environment = self;
         while (current_env) |env| {
             if (env.bindings.capacity() > 0) {
@@ -83,8 +93,7 @@ pub const Environment = struct {
             }
             current_env = env.outer;
         }
-        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Symbol '{s}' not found.", .{name}) catch null;
-        return ElzError.SymbolNotFound;
+        return null;
     }
 
     /// Checks if a symbol is bound in the current environment or any of its outer environments.
@@ -125,6 +134,13 @@ pub const Environment = struct {
         const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
         _ = interp;
+    }
+
+    /// Removes a binding from this environment only. Returns true when a
+    /// binding was present. Used to undo the compile-time transformer bindings
+    /// that `let-syntax` installs for the extent of its body.
+    pub fn remove(self: *Environment, name: []const u8) bool {
+        return self.bindings.remove(name);
     }
 
     /// Updates the value of an existing symbol in the current environment or any of its outer environments.
@@ -203,6 +219,16 @@ pub const CallFrame = struct {
     ip: usize,
     /// Index in the value stack where this frame's locals start.
     stack_base: usize,
+};
+
+/// An escape continuation created by `call/ec` (and by `call/cc`, which is
+/// escape-only). Invoking it unwinds to the `call/ec` frame that created it:
+/// the `id` lets that frame recognise its own jump, so an inner `call/ec` no
+/// longer swallows a jump aimed at an outer one. `active` becomes false once
+/// the creating frame has returned, which makes a stale invocation reportable.
+pub const Escape = struct {
+    id: u64,
+    active: bool = true,
 };
 
 /// A delimited continuation captured by `shift`: the value-stack and frame
@@ -499,25 +525,34 @@ pub const Port = struct {
         self.is_open = false;
     }
 
+    /// Reads one line, without its terminating delimiter (LF, CRLF, or CR, per
+    /// R7RS). Returns null only at end of input: a blank line yields an empty
+    /// string, and a line of any length is returned whole.
     pub fn readLine(self: *Port, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.is_input or !self.is_open) return null;
-        var buf: [4096]u8 = undefined;
-        var len: usize = 0;
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        var saw_input = false;
 
-        while (len < buf.len - 1) {
+        while (true) {
             const c_opt = try self.readChar();
             if (c_opt == null) {
-                if (len == 0) return null;
+                if (!saw_input) return null; // end of input before any character
                 break;
             }
+            saw_input = true;
             const c = c_opt.?;
             if (c == '\n') break;
-            buf[len] = c;
-            len += 1;
+            if (c == '\r') {
+                if (try self.peekChar()) |next| {
+                    if (next == '\n') _ = try self.readChar();
+                }
+                break;
+            }
+            try out.append(allocator, c);
         }
 
-        if (len == 0) return null;
-        return try allocator.dupe(u8, buf[0..len]);
+        return try out.toOwnedSlice(allocator);
     }
 
     pub fn readChar(self: *Port) !?u8 {
@@ -634,6 +669,8 @@ pub const Value = union(enum) {
     bytevector: *Bytevector,
     /// A delimited continuation captured by shift.
     continuation: *Continuation,
+    /// An escape continuation created by `call/ec` or `call/cc`.
+    escape: *Escape,
     /// A record type descriptor created by define-record-type.
     record_type: *RecordType,
     /// A record instance.
@@ -687,7 +724,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .record_type, .record, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

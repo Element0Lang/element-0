@@ -53,7 +53,9 @@ const Scope = struct {
     }
 
     /// Allocate a new local slot in this scope. Returns the slot index.
+    /// Slot indices are one byte wide, so a frame holds at most 255 locals.
     fn addLocal(self: *Scope, name: []const u8) !u8 {
+        if (self.locals.items.len >= std.math.maxInt(u8)) return ElzError.TooManyLocals;
         const slot: u8 = @intCast(self.locals.items.len);
         try self.locals.append(self.allocator, .{ .name = name, .slot = slot, .depth = self.depth });
         return slot;
@@ -70,12 +72,14 @@ const Scope = struct {
         return null;
     }
 
-    /// Add an upvalue descriptor and return its index.
+    /// Add an upvalue descriptor and return its index. Upvalue indices are one
+    /// byte wide, so a closure captures at most 255 variables.
     fn addUpval(self: *Scope, desc: UpvalDesc) !u8 {
         for (self.upval_descs.items, 0..) |existing, i| {
             if (existing.is_local == desc.is_local and existing.index == desc.index)
                 return @intCast(i);
         }
+        if (self.upval_descs.items.len >= std.math.maxInt(u8)) return ElzError.TooManyLocals;
         const idx: u8 = @intCast(self.upval_descs.items.len);
         try self.upval_descs.append(self.allocator, desc);
         return idx;
@@ -203,12 +207,57 @@ pub const Compiler = struct {
     }
 
     // -----------------------------------------------------------------------
+    // Shape checks for special forms
+    //
+    // The form-specific compilers below index their operand lists directly
+    // (`args.pair.car` and friends). Without these checks a malformed form such
+    // as `(define)` or `(let 1 2)` would index a union field that is not active
+    // and abort the process, which an embedder cannot catch. Each check reports
+    // a syntax error instead.
+    // -----------------------------------------------------------------------
+
+    /// Records a "malformed <name> form" message and returns a syntax error.
+    fn badForm(self: *Compiler, name: []const u8) ElzError {
+        self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "malformed {s} form", .{name}) catch null;
+        return ElzError.InvalidArgument;
+    }
+
+    /// Requires `list` to be a proper list holding at least `min` elements.
+    fn requireOperands(self: *Compiler, name: []const u8, list: Value, min: usize) ElzError!void {
+        var n: usize = 0;
+        var cur = list;
+        while (cur == .pair) : (cur = cur.pair.cdr) n += 1;
+        if (cur != .nil or n < min) return self.badForm(name);
+    }
+
+    /// Requires `v` to be a pair and returns it.
+    fn requirePair(self: *Compiler, name: []const u8, v: Value) ElzError!*core.Pair {
+        if (v != .pair) return self.badForm(name);
+        return v.pair;
+    }
+
+    /// Requires `v` to be a symbol and returns its name.
+    fn requireSymbol(self: *Compiler, name: []const u8, v: Value) ElzError![]const u8 {
+        if (v != .symbol) return self.badForm(name);
+        return v.symbol;
+    }
+
+    /// Requires a `(name init)` binding pair and returns both parts.
+    fn requireBinding(self: *Compiler, name: []const u8, v: Value) ElzError!struct { name: Value, init: Value } {
+        const p = try self.requirePair(name, v);
+        const rest = try self.requirePair(name, p.cdr);
+        if (rest.cdr != .nil) return self.badForm(name);
+        if (p.car != .symbol) return self.badForm(name);
+        return .{ .name = p.car, .init = rest.car };
+    }
+
+    // -----------------------------------------------------------------------
     // Macro expansion
     // -----------------------------------------------------------------------
 
     fn tryExpandMacro(self: *Compiler, head: Value, args: Value, env: *core.Environment, fuel: *u64) !?Value {
         if (head != .symbol) return null;
-        const looked_up = env.get(head.symbol, self.interp) catch return null;
+        const looked_up = env.lookup(head.symbol) orelse return null;
         switch (looked_up) {
             .syntax_rules => |sr| {
                 return try macros_mod.expandSyntaxRules(self.interp, sr, args, env, fuel);
@@ -310,6 +359,9 @@ pub const Compiler = struct {
             return self.compileCall(head, args, env, tail, fuel);
         }
 
+        // Validate the operand list's shape once, before dispatch.
+        if (minOperands(sym)) |min| try self.requireOperands(sym, args, min);
+
         if (std.mem.eql(u8, sym, "quote")) return self.compileQuote(args);
         if (std.mem.eql(u8, sym, "quasiquote")) return self.compileQuasiquote(args.pair.car, env, fuel);
         if (std.mem.eql(u8, sym, "if")) return self.compileIf(args, env, tail, fuel);
@@ -399,28 +451,31 @@ pub const Compiler = struct {
                 };
                 // (unquote x) at level 1 → compile x
                 if (level == 1 and unquote_is_global) {
-                    return self.compileExpr(p.cdr.pair.car, env, false, fuel);
+                    const operand = try self.requirePair("unquote", p.cdr);
+                    return self.compileExpr(operand.car, env, false, fuel);
                 }
                 // (unquote x) at level > 1 → produce (unquote (qq-expand x level-1))
                 if (level > 1 and unquote_is_global) {
+                    const operand = try self.requirePair("unquote", p.cdr);
                     const ci = try self.addConst(Value{ .symbol = "unquote" });
                     _ = try self.emitBx(.load_const, ci);
-                    try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
+                    try self.compileQQ(operand.car, env, level - 1, fuel);
                     _ = try self.emitA(.make_list, 1);
                     _ = try self.emitOp(.cons);
                     return;
                 }
                 // (unquote-splicing x) at level > 1 → produce (unquote-splicing (qq-expand x level-1))
                 if (level > 1 and unquote_splice_is_global) {
+                    const operand = try self.requirePair("unquote-splicing", p.cdr);
                     const ci = try self.addConst(Value{ .symbol = "unquote-splicing" });
                     _ = try self.emitBx(.load_const, ci);
-                    try self.compileQQ(p.cdr.pair.car, env, level - 1, fuel);
+                    try self.compileQQ(operand.car, env, level - 1, fuel);
                     _ = try self.emitA(.make_list, 1);
                     _ = try self.emitOp(.cons);
                     return;
                 }
                 // (quasiquote x) — increase level
-                if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "quasiquote")) {
+                if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "quasiquote") and p.cdr == .pair) {
                     // Wrap in (quasiquote ...)
                     const ci = try self.addConst(Value{ .symbol = "quasiquote" });
                     _ = try self.emitBx(.load_const, ci);
@@ -434,7 +489,10 @@ pub const Compiler = struct {
                 try self.compileQQList(expr, env, level, fuel);
             },
             .vector => |v| {
-                // Build vector elements
+                if (v.items.len > 255) {
+                    self.interp.last_error_message = "a quasiquoted vector may hold at most 255 elements";
+                    return ElzError.InvalidArgument;
+                }
                 var count: u8 = 0;
                 for (v.items) |item| {
                     try self.compileQQ(item, env, level, fuel);
@@ -464,7 +522,7 @@ pub const Compiler = struct {
         const car = p.car;
         // Check for (unquote-splicing x) at level 1 — splice (only when unquote-splicing is global)
         const splice_is_global = blk: {
-            if (car == .pair and car.pair.car == .symbol and
+            if (car == .pair and car.pair.cdr == .pair and car.pair.car == .symbol and
                 std.mem.eql(u8, car.pair.car.symbol, "unquote-splicing"))
             {
                 const loc = try self.resolveVar("unquote-splicing");
@@ -520,13 +578,14 @@ pub const Compiler = struct {
             return;
         }
         var cur = args;
-        while (cur != .nil) {
+        while (cur == .pair) {
             const p = cur.pair;
             const is_last = p.cdr == .nil;
             try self.compileExpr(p.car, env, tail and is_last, fuel);
             if (!is_last) _ = try self.emitOp(.pop);
             cur = p.cdr;
         }
+        if (cur != .nil) return self.badForm("begin");
     }
 
     // -----------------------------------------------------------------------
@@ -534,8 +593,9 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileDefine(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
-        const target = args.pair.car;
-        const rest = args.pair.cdr;
+        const ap = try self.requirePair("define", args);
+        const target = ap.car;
+        const rest = ap.cdr;
 
         if (target == .symbol) {
             // (define name expr)
@@ -545,9 +605,7 @@ pub const Compiler = struct {
             try self.emitDefineOrStore(name);
         } else if (target == .pair) {
             // (define (f params...) body...)
-            const name_sym = target.pair.car;
-            if (name_sym != .symbol) return ElzError.InvalidArgument;
-            const name = name_sym.symbol;
+            const name = try self.requireSymbol("define", target.pair.car);
             const params = target.pair.cdr;
             // Build a lambda form and compile it
             const lambda_args = try makePair(self.allocator, params, rest);
@@ -589,7 +647,7 @@ pub const Compiler = struct {
         var body_tail: Value = .nil;
         var catch_clause: ?Value = null;
         var cur = args;
-        while (cur != .nil) {
+        while (cur == .pair) {
             const form = cur.pair.car;
             if (form == .pair and form.pair.car == .symbol and
                 std.mem.eql(u8, form.pair.car.symbol, "catch"))
@@ -609,11 +667,11 @@ pub const Compiler = struct {
             }
             cur = cur.pair.cdr;
         }
-        if (catch_clause == null) return ElzError.InvalidArgument;
-        const catch_rest = catch_clause.?.pair.cdr; // (err handler...)
-        const err_sym = catch_rest.pair.car;
-        if (err_sym != .symbol) return ElzError.InvalidArgument;
-        const handler_body = catch_rest.pair.cdr;
+        if (catch_clause == null) return self.badForm("try");
+        const catch_rest = try self.requirePair("catch", catch_clause.?.pair.cdr); // (err handler...)
+        const err_sym = catch_rest.car;
+        if (err_sym != .symbol) return self.badForm("catch");
+        const handler_body = catch_rest.cdr;
 
         // Emit: (%%try%% body-thunk handler-thunk)
         // body-thunk  = (lambda () body...)
@@ -684,19 +742,20 @@ pub const Compiler = struct {
         const transformer: core.Value = blk: {
             if (first == .symbol) {
                 // Long form: evaluate the transformer expression.
-                const transformer_expr = args.pair.cdr.pair.car;
+                const rest = try self.requirePair("define-macro", args.pair.cdr);
+                const transformer_expr = rest.car;
                 break :blk try evalTransformer(self, transformer_expr, first.symbol, env);
             } else if (first == .pair) {
                 // Shorthand: (define-macro (name params...) body)
                 const sig = first.pair;
-                const macro_name = if (sig.car == .symbol) sig.car.symbol else return ElzError.InvalidArgument;
+                const macro_name = try self.requireSymbol("define-macro", sig.car);
                 // Validate the formals: symbols in a proper or dotted list, or a bare rest symbol.
                 var cur = sig.cdr;
                 while (cur == .pair) {
-                    if (cur.pair.car != .symbol) return ElzError.InvalidArgument;
+                    if (cur.pair.car != .symbol) return self.badForm("define-macro");
                     cur = cur.pair.cdr;
                 }
-                if (cur != .nil and cur != .symbol) return ElzError.InvalidArgument;
+                if (cur != .nil and cur != .symbol) return self.badForm("define-macro");
                 const body = args.pair.cdr;
                 const m = try self.allocator.create(core.Macro);
                 m.* = .{ .name = macro_name, .formals = try sig.cdr.deep_clone(self.allocator), .body = try body.deep_clone(self.allocator), .env = env };
@@ -715,9 +774,7 @@ pub const Compiler = struct {
 
     fn compileDefineSyntax(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
         _ = fuel;
-        const name_val = args.pair.car;
-        if (name_val != .symbol) return ElzError.InvalidArgument;
-        const name = name_val.symbol;
+        const name = try self.requireSymbol("define-syntax", args.pair.car);
         const sr_expr = args.pair.cdr.pair.car;
 
         const sr_val = try evalTransformer(self, sr_expr, name, env);
@@ -731,9 +788,7 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileSet(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
-        const name_val = args.pair.car;
-        if (name_val != .symbol) return ElzError.InvalidArgument;
-        const name = name_val.symbol;
+        const name = try self.requireSymbol("set!", args.pair.car);
         const val_expr = args.pair.cdr.pair.car;
 
         try self.compileExpr(val_expr, env, false, fuel);
@@ -755,8 +810,9 @@ pub const Compiler = struct {
     }
 
     fn compileLambdaWithName(self: *Compiler, args: Value, name: []const u8, env: *core.Environment, fuel: *u64) ElzError!void {
-        const params = args.pair.car;
-        const body = args.pair.cdr;
+        const ap = try self.requirePair("lambda", args);
+        const params = ap.car;
+        const body = ap.cdr;
 
         // Create a child compiler for the lambda body.
         var child = try Compiler.init(self.allocator, self.interp, name, self);
@@ -776,12 +832,13 @@ pub const Compiler = struct {
                     break;
                 },
                 .pair => |pp| {
-                    if (pp.car != .symbol) return ElzError.InvalidArgument;
+                    if (pp.car != .symbol) return self.badForm("lambda");
                     _ = try child.scope.addLocal(pp.car.symbol);
+                    if (child.proto.arity == std.math.maxInt(u8)) return ElzError.TooManyLocals;
                     child.proto.arity += 1;
                     cur_param = pp.cdr;
                 },
-                else => return ElzError.InvalidArgument,
+                else => return self.badForm("lambda"),
             }
         }
 
@@ -819,24 +876,30 @@ pub const Compiler = struct {
     fn compileBody(self: *Compiler, body: Value, env: *core.Environment, fuel: *u64) ElzError!void {
         // Scan for internal defines and hoist them as locals.
         var cur = body;
-        while (cur != .nil) {
+        while (cur == .pair) {
             const form = cur.pair.car;
             if (form == .pair and form.pair.car == .symbol and
                 std.mem.eql(u8, form.pair.car.symbol, "define"))
             {
-                const target = form.pair.cdr.pair.car;
-                const dname = if (target == .symbol) target.symbol else target.pair.car.symbol;
+                const spec = try self.requirePair("define", form.pair.cdr);
+                const target = spec.car;
+                const dname = switch (target) {
+                    .symbol => |sym| sym,
+                    .pair => |tp| try self.requireSymbol("define", tp.car),
+                    else => return self.badForm("define"),
+                };
                 _ = try self.scope.addLocal(dname);
                 _ = try self.emitOp(.load_false); // placeholder
             }
             cur = cur.pair.cdr;
         }
+        if (cur != .nil) return self.badForm("lambda");
 
         // Now compile body forms.
         cur = body;
         var idx: usize = 0;
         const body_len = listLen(body);
-        while (cur != .nil) {
+        while (cur == .pair) {
             const form = cur.pair.car;
             const is_last = idx == body_len - 1;
             try self.compileExpr(form, env, is_last, fuel);
@@ -853,15 +916,18 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileLet(self: *Compiler, args: Value, env: *core.Environment, tail: bool, is_star: bool, fuel: *u64) ElzError!void {
+        const form_name = if (is_star) "let*" else "let";
         const first = args.pair.car;
 
         // Named let: (let name ((var init) ...) body...)
         if (!is_star and first == .symbol) {
+            try self.requireOperands("let", args.pair.cdr, 1);
             return self.compileNamedLet(first.symbol, args.pair.cdr, env, tail, fuel);
         }
 
         const bindings = first;
         const body = args.pair.cdr;
+        try self.requireOperands(form_name, bindings, 0);
 
         if (is_star) {
             // let*: compile as nested immediately-invoked lambdas to ensure internal
@@ -883,10 +949,10 @@ pub const Compiler = struct {
             defer init_list.deinit(self.allocator);
 
             var cur = bindings;
-            while (cur != .nil) {
-                const binding = cur.pair.car;
-                try param_list.append(self.allocator, binding.pair.car); // name
-                try init_list.append(self.allocator, binding.pair.cdr.pair.car); // init
+            while (cur == .pair) {
+                const binding = try self.requireBinding("let", cur.pair.car);
+                try param_list.append(self.allocator, binding.name);
+                try init_list.append(self.allocator, binding.init);
                 cur = cur.pair.cdr;
             }
 
@@ -908,6 +974,7 @@ pub const Compiler = struct {
             }
 
             // Call the lambda.
+            if (init_list.items.len >= std.math.maxInt(u8)) return ElzError.TooManyLocals;
             const argc: u8 = @intCast(init_list.items.len);
             if (tail) {
                 _ = try self.emitA(.tail_call, argc);
@@ -925,6 +992,7 @@ pub const Compiler = struct {
     /// (let* ((x e1))        body) → ((lambda (x)   body) e1)
     /// (let* ((x e1)(y e2))  body) → ((lambda (x) ((lambda (y) body) e2)) e1)
     fn compileLetStar(self: *Compiler, bindings: Value, body: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        if (bindings != .nil and bindings != .pair) return self.badForm("let*");
         if (bindings == .nil) {
             // Base case: compile as ((lambda () body...)).
             const lambda_body = try makePair(self.allocator, Value.nil, body);
@@ -936,10 +1004,9 @@ pub const Compiler = struct {
             }
         } else {
             // Recursive case: ((lambda (var) inner-let*) init).
-            const binding = bindings.pair.car;
-            const var_name_val = binding.pair.car;
-            if (var_name_val != .symbol) return ElzError.InvalidArgument;
-            const init_expr = binding.pair.cdr.pair.car;
+            const binding = try self.requireBinding("let*", bindings.pair.car);
+            const var_name_val = binding.name;
+            const init_expr = binding.init;
             const rest_bindings = bindings.pair.cdr;
 
             // Build the inner body: it recursively compiles (let* rest body).
@@ -1000,6 +1067,7 @@ pub const Compiler = struct {
         // stack, ensuring no extra locals pollute the outer frame.
         const bindings = rest.pair.car;
         const body = rest.pair.cdr;
+        try self.requireOperands("let", bindings, 0);
 
         // Build params list and inits list.
         var cur = bindings;
@@ -1007,10 +1075,10 @@ pub const Compiler = struct {
         defer param_list.deinit(self.allocator);
         var init_list: std.ArrayList(Value) = .empty;
         defer init_list.deinit(self.allocator);
-        while (cur != .nil) {
-            const binding = cur.pair.car;
-            try param_list.append(self.allocator, binding.pair.car);
-            try init_list.append(self.allocator, binding.pair.cdr.pair.car);
+        while (cur == .pair) {
+            const binding = try self.requireBinding("let", cur.pair.car);
+            try param_list.append(self.allocator, binding.name);
+            try init_list.append(self.allocator, binding.init);
             cur = cur.pair.cdr;
         }
 
@@ -1045,6 +1113,7 @@ pub const Compiler = struct {
         for (init_list.items) |init_expr| {
             try wrapper.compileExpr(init_expr, env, false, fuel);
         }
+        if (init_list.items.len >= std.math.maxInt(u8)) return ElzError.TooManyLocals;
         const argc: u8 = @intCast(init_list.items.len);
         _ = try wrapper.emitA(.call, argc);
         _ = try wrapper.emitOp(.return_val);
@@ -1085,6 +1154,7 @@ pub const Compiler = struct {
     fn compileLetrec(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
         const bindings = args.pair.car;
         const body = args.pair.cdr;
+        try self.requireOperands("letrec", bindings, 0);
 
         // Rewrite (letrec ((v e) ...) body) as (let ((v #f) ...) (set! v e) ... body)
         // so the let's immediately-invoked lambda provides a fresh frame; allocating
@@ -1096,10 +1166,10 @@ pub const Compiler = struct {
         defer inits.deinit(self.allocator);
 
         var cur = bindings;
-        while (cur != .nil) {
-            const binding = cur.pair.car;
-            try names.append(self.allocator, binding.pair.car);
-            try inits.append(self.allocator, binding.pair.cdr.pair.car);
+        while (cur == .pair) {
+            const binding = try self.requireBinding("letrec", cur.pair.car);
+            try names.append(self.allocator, binding.name);
+            try inits.append(self.allocator, binding.init);
             cur = cur.pair.cdr;
         }
 
@@ -1140,7 +1210,7 @@ pub const Compiler = struct {
         defer jumps.deinit(self.allocator);
 
         var cur = args;
-        while (cur != .nil) {
+        while (cur == .pair) {
             const expr = cur.pair.car;
             const is_last = cur.pair.cdr == .nil;
             try self.compileExpr(expr, env, tail and is_last, fuel);
@@ -1168,7 +1238,7 @@ pub const Compiler = struct {
         defer jumps_to_end.deinit(self.allocator);
 
         var cur = args;
-        while (cur != .nil) {
+        while (cur == .pair) {
             const expr = cur.pair.car;
             const is_last = cur.pair.cdr == .nil;
             try self.compileExpr(expr, env, tail and is_last, fuel);
@@ -1198,13 +1268,13 @@ pub const Compiler = struct {
 
         var cur = args;
         var found_else = false;
-        while (cur != .nil) {
-            const clause = cur.pair.car;
+        while (cur == .pair) {
+            const clause = try self.requirePair("cond", cur.pair.car);
             cur = cur.pair.cdr;
             const is_last = cur == .nil;
 
-            const test_expr = clause.pair.car;
-            const clause_body = clause.pair.cdr;
+            const test_expr = clause.car;
+            const clause_body = clause.cdr;
 
             // else clause — compile body, break.
             if (test_expr == .symbol and std.mem.eql(u8, test_expr.symbol, "else")) {
@@ -1228,7 +1298,8 @@ pub const Compiler = struct {
                 break :brk false;
             };
             if (arrow_not_bound) {
-                const proc_expr = clause_body.pair.cdr.pair.car;
+                const arrow_rest = try self.requirePair("cond", clause_body.pair.cdr);
+                const proc_expr = arrow_rest.car;
                 // Keep the test value on the stack (no temp local: a local slot
                 // allocated here is wrong when cond appears in argument position).
                 try self.compileExpr(test_expr, env, false, fuel);
@@ -1265,8 +1336,9 @@ pub const Compiler = struct {
             }
         }
 
-        // No clause matched (and no else): return nil per R5RS.
-        if (!found_else) _ = try self.emitOp(.load_nil);
+        // No clause matched and there is no else clause: the value is
+        // unspecified (R7RS 4.2.1), matching `case` with no matching clause.
+        if (!found_else) _ = try self.emitOp(.load_unspecified);
 
         for (jumps_to_end.items) |j| {
             self.patchJump(j);
@@ -1294,14 +1366,15 @@ pub const Compiler = struct {
         var jumps_to_end: std.ArrayList(usize) = .empty;
         defer jumps_to_end.deinit(self.allocator);
 
+        try self.requireOperands("case", clauses, 0);
         var cur = clauses;
-        while (cur != .nil) {
-            const clause = cur.pair.car;
+        while (cur == .pair) {
+            const clause = try self.requirePair("case", cur.pair.car);
             cur = cur.pair.cdr;
             const is_last = cur == .nil;
 
-            const datums = clause.pair.car;
-            const body = clause.pair.cdr;
+            const datums = clause.car;
+            const body = clause.cdr;
 
             if (datums == .symbol and std.mem.eql(u8, datums.symbol, "else")) {
                 // Run else body (key on stack, consumed by the body helper), jump to end.
@@ -1321,11 +1394,12 @@ pub const Compiler = struct {
             // When a datum matches: jump to body_label, stack = [..., key].
             //   body_label: pop key, run body, jump to end.
 
+            try self.requireOperands("case", datums, 0);
             var datum_cur = datums;
             var jumps_to_body: std.ArrayList(usize) = .empty;
             defer jumps_to_body.deinit(self.allocator);
 
-            while (datum_cur != .nil) {
+            while (datum_cur == .pair) {
                 const datum = datum_cur.pair.car;
                 // Stack: [..., key]
                 // Build [eqv?, key_copy, datum] on top for call 2.
@@ -1413,6 +1487,10 @@ pub const Compiler = struct {
     /// Compiles (include "file" ...) by splicing the files' forms in place at
     /// compile time. include-ci case-folds symbols first.
     fn compileInclude(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fold_case: bool, fuel: *u64) ElzError!void {
+        if (!self.interp.enable_filesystem) {
+            self.interp.last_error_message = "include: filesystem access is disabled";
+            return ElzError.PermissionDenied;
+        }
         var emitted = false;
         var cur = args;
         while (cur == .pair) : (cur = cur.pair.cdr) {
@@ -1485,6 +1563,8 @@ pub const Compiler = struct {
 
     fn compileDo(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
         // (do ((var init step?) ...) (test result...) body...)
+        // The operand count is checked at dispatch; the two operand lists are
+        // checked here.
         //
         // Expand to a named-let so that loop variables live in their own frame
         // (avoiding slot conflicts when `do` appears in expression position):
@@ -1499,8 +1579,10 @@ pub const Compiler = struct {
         const var_specs = args.pair.car;
         const test_and_result = args.pair.cdr.pair.car;
         const body_forms = args.pair.cdr.pair.cdr;
-        const test_expr = test_and_result.pair.car;
-        const result_exprs = test_and_result.pair.cdr;
+        try self.requireOperands("do", var_specs, 0);
+        const test_pair = try self.requirePair("do", test_and_result);
+        const test_expr = test_pair.car;
+        const result_exprs = test_pair.cdr;
 
         // Collect (var init step?) triples.
         const VarSpec = struct { name: Value, init: Value, step: Value };
@@ -1508,16 +1590,19 @@ pub const Compiler = struct {
         defer var_list.deinit(self.allocator);
 
         var cur = var_specs;
-        while (cur != .nil) {
-            const spec = cur.pair.car;
-            const var_name = spec.pair.car;
-            const init_e = spec.pair.cdr.pair.car;
+        while (cur == .pair) {
+            const spec = try self.requirePair("do", cur.pair.car);
+            if (spec.car != .symbol) return self.badForm("do");
+            const spec_rest = try self.requirePair("do", spec.cdr);
+            const init_e = spec_rest.car;
             // step defaults to the variable itself if omitted.
-            const step_e: Value = if (spec.pair.cdr.pair.cdr != .nil)
-                spec.pair.cdr.pair.cdr.pair.car
+            const step_e: Value = if (spec_rest.cdr == .pair)
+                spec_rest.cdr.pair.car
+            else if (spec_rest.cdr == .nil)
+                spec.car
             else
-                var_name;
-            try var_list.append(self.allocator, .{ .name = var_name, .init = init_e, .step = step_e });
+                return self.badForm("do");
+            try var_list.append(self.allocator, .{ .name = spec.car, .init = init_e, .step = step_e });
             cur = cur.pair.cdr;
         }
 
@@ -1541,7 +1626,7 @@ pub const Compiler = struct {
             var forms: std.ArrayList(Value) = .empty;
             defer forms.deinit(self.allocator);
             var bc = body_forms;
-            while (bc != .nil) {
+            while (bc == .pair) {
                 try forms.append(self.allocator, bc.pair.car);
                 bc = bc.pair.cdr;
             }
@@ -1597,9 +1682,9 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileDelay(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
-        // (delay expr) compiles to (make-promise (lambda () expr)).
-        // Push make-promise first so the stack is [make-promise, thunk] before call 1.
-        const ci = try self.addConst(Value{ .symbol = "make-promise" });
+        // (delay expr) compiles to (%%make-delayed%% (lambda () expr)).
+        // Push the constructor first so the stack is [ctor, thunk] before call 1.
+        const ci = try self.addConst(Value{ .symbol = "%%make-delayed%%" });
         _ = try self.emitBx(.load_global, ci);
         const nil_params: Value = .nil;
         const lambda_body = try makePair(self.allocator, nil_params, args);
@@ -1612,18 +1697,38 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileLetSyntax(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
-        // Evaluate transformer bindings into env at compile time.
+        // Transformers are bound in the compile-time environment for the extent
+        // of the body only: any prior binding of the same name is restored
+        // afterwards, and a name that was unbound before becomes unbound again.
         const bindings = args.pair.car;
         const body = args.pair.cdr;
 
+        try self.requireOperands("let-syntax", bindings, 0);
+
+        const Saved = struct { name: []const u8, previous: ?Value };
+        var saved: std.ArrayListUnmanaged(Saved) = .empty;
+        defer saved.deinit(self.allocator);
+
         var cur = bindings;
-        while (cur != .nil) {
-            const binding = cur.pair.car;
-            const name = binding.pair.car.symbol;
-            const transformer_expr = binding.pair.cdr.pair.car;
-            const transformer = try evalTransformer(self, transformer_expr, name, env);
+        while (cur == .pair) {
+            const binding = try self.requireBinding("let-syntax", cur.pair.car);
+            const name = binding.name.symbol;
+            const transformer = try evalTransformer(self, binding.init, name, env);
+            try saved.append(self.allocator, .{ .name = name, .previous = env.lookup(name) });
             try env.set(self.interp, name, transformer);
             cur = cur.pair.cdr;
+        }
+        defer {
+            var i = saved.items.len;
+            while (i > 0) {
+                i -= 1;
+                const entry = saved.items[i];
+                if (entry.previous) |prev| {
+                    env.set(self.interp, entry.name, prev) catch {};
+                } else {
+                    _ = env.remove(entry.name);
+                }
+            }
         }
 
         try self.compileBegin(body, env, tail, fuel);
@@ -1751,6 +1856,10 @@ pub const Compiler = struct {
                 }
             } else if (std.mem.eql(u8, kind, "include") or std.mem.eql(u8, kind, "include-ci")) {
                 const fold = std.mem.eql(u8, kind, "include-ci");
+                if (!self.interp.enable_filesystem) {
+                    self.interp.last_error_message = "define-library: filesystem access is disabled";
+                    return ElzError.PermissionDenied;
+                }
                 var f = clause.pair.cdr;
                 while (f == .pair) : (f = f.pair.cdr) {
                     if (f.pair.car != .string) return ElzError.InvalidArgument;
@@ -1798,10 +1907,18 @@ pub const Compiler = struct {
         try self.compileExpr(callee_expr, env, false, fuel);
         var argc: u8 = 0;
         var cur = arg_list;
-        while (cur != .nil) {
+        while (cur == .pair) {
             try self.compileExpr(cur.pair.car, env, false, fuel);
+            if (argc == 255) {
+                self.interp.last_error_message = "a call may pass at most 255 arguments";
+                return ElzError.InvalidArgument;
+            }
             argc += 1;
             cur = cur.pair.cdr;
+        }
+        if (cur != .nil) {
+            self.interp.last_error_message = "an argument list must be a proper list";
+            return ElzError.InvalidArgument;
         }
         if (tail) {
             _ = try self.emitA(.tail_call, argc);
@@ -1826,6 +1943,18 @@ pub const Compiler = struct {
         var c = try Compiler.init(allocator, interp, "<top>", null);
         defer c.deinit();
 
+        // Record the names this unit defines before compiling it, so that a
+        // macro template referring to one is not treated as an introduced
+        // identifier and renamed (see macros.zig hygiene renaming).
+        var added: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer added.deinit(allocator);
+        defer {
+            for (added.items) |name| {
+                _ = interp.pending_globals.remove(name);
+            }
+        }
+        for (forms) |form| try collectTopLevelDefines(allocator, interp, form, &added);
+
         for (forms, 0..) |form, i| {
             const is_last = i == forms.len - 1;
             try c.compileExpr(form, env, false, fuel);
@@ -1842,6 +1971,80 @@ pub const Compiler = struct {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Records the names a top-level form defines into `interp.pending_globals`,
+/// descending into `begin` so spliced definitions are seen too.
+fn collectTopLevelDefines(
+    allocator: std.mem.Allocator,
+    interp: *@import("interpreter.zig").Interpreter,
+    form: Value,
+    added: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    if (form != .pair or form.pair.car != .symbol) return;
+    const head = form.pair.car.symbol;
+    if (std.mem.eql(u8, head, "begin")) {
+        var cur = form.pair.cdr;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            try collectTopLevelDefines(allocator, interp, cur.pair.car, added);
+        }
+        return;
+    }
+    if (!std.mem.eql(u8, head, "define")) return;
+    if (form.pair.cdr != .pair) return;
+    const target = form.pair.cdr.pair.car;
+    const name: []const u8 = switch (target) {
+        .symbol => |sym| sym,
+        .pair => |p| if (p.car == .symbol) p.car.symbol else return,
+        else => return,
+    };
+    if (!interp.pending_globals.contains(name)) {
+        interp.pending_globals.put(allocator, name, {}) catch return ElzError.OutOfMemory;
+        added.append(allocator, name) catch return ElzError.OutOfMemory;
+    }
+}
+
+/// Minimum number of operands each special form needs. Forms absent from the
+/// table place no minimum on their operand count, but still require a proper
+/// operand list.
+const special_form_operands = [_]struct { name: []const u8, min: usize }{
+    .{ .name = "quote", .min = 1 },
+    .{ .name = "quasiquote", .min = 1 },
+    .{ .name = "if", .min = 2 },
+    .{ .name = "begin", .min = 0 },
+    .{ .name = "define", .min = 1 },
+    .{ .name = "define-macro", .min = 1 },
+    .{ .name = "define-syntax", .min = 2 },
+    .{ .name = "set!", .min = 2 },
+    .{ .name = "lambda", .min = 1 },
+    .{ .name = "let", .min = 1 },
+    .{ .name = "let*", .min = 1 },
+    .{ .name = "letrec", .min = 1 },
+    .{ .name = "letrec*", .min = 1 },
+    .{ .name = "and", .min = 0 },
+    .{ .name = "or", .min = 0 },
+    .{ .name = "cond", .min = 0 },
+    .{ .name = "case", .min = 1 },
+    .{ .name = "when", .min = 1 },
+    .{ .name = "unless", .min = 1 },
+    .{ .name = "do", .min = 2 },
+    .{ .name = "delay", .min = 1 },
+    .{ .name = "let-syntax", .min = 1 },
+    .{ .name = "letrec-syntax", .min = 1 },
+    .{ .name = "reset", .min = 1 },
+    .{ .name = "shift", .min = 2 },
+    .{ .name = "include", .min = 0 },
+    .{ .name = "include-ci", .min = 0 },
+    .{ .name = "import", .min = 1 },
+    .{ .name = "define-library", .min = 1 },
+    .{ .name = "try", .min = 1 },
+};
+
+fn minOperands(sym: []const u8) ?usize {
+    for (special_form_operands) |entry| {
+        if (std.mem.eql(u8, entry.name, sym)) return entry.min;
+    }
+    return null;
+}
 
 fn listLen(list: Value) usize {
     var n: usize = 0;
@@ -1881,4 +2084,19 @@ test "compile simple literal" {
     try testing.expectEqual(@as(usize, 2), proto.instructions.items.len);
     try testing.expectEqual(OpCode.load_const, proto.instructions.items[0].op);
     try testing.expectEqual(OpCode.return_val, proto.instructions.items[1].op);
+}
+
+test "compileTopLevel cleans up pending_globals" {
+    const testing = std.testing;
+    const interp_mod = @import("interpreter.zig");
+    var interp = try interp_mod.Interpreter.init(.{});
+    defer interp.deinit();
+
+    const allocator = interp.allocator;
+    var fuel: u64 = 1_000_000;
+    const define_form = try makePair(allocator, Value{ .symbol = "define" }, try makePair(allocator, Value{ .symbol = "my-pending-var" }, try makePair(allocator, Value{ .exact_integer = 1 }, Value.nil)));
+    const forms = [_]Value{define_form};
+    _ = try Compiler.compileTopLevel(allocator, &interp, &forms, interp.root_env, &fuel);
+
+    try testing.expectEqual(@as(usize, 0), interp.pending_globals.count());
 }

@@ -19,16 +19,47 @@ fn isProperList(v: Value) bool {
     }
 }
 
+/// Identity of a compound value, for cycle detection.
+fn compoundPtr(v: Value) ?usize {
+    return switch (v) {
+        .pair => |p| @intFromPtr(p),
+        .vector => |vec| @intFromPtr(vec),
+        else => null,
+    };
+}
+
+/// After this many comparisons, `equal?` starts recording the node pairs it has
+/// visited so that circular structures terminate. The threshold keeps the common
+/// case (finite data) free of the bookkeeping cost.
+const cycle_check_after: usize = 10_000;
+
 /// An iterative implementation of `equal?` that is not vulnerable to stack
-/// overflow attacks.
+/// overflow attacks and terminates on circular structures.
 fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
     var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }).empty;
     defer stack.deinit(allocator);
     try stack.append(allocator, .{ .a = val1, .b = val2 });
 
+    const NodePair = struct { a: usize, b: usize };
+    var seen: std.AutoHashMapUnmanaged(NodePair, void) = .empty;
+    defer seen.deinit(allocator);
+    var steps: usize = 0;
+
     while (stack.pop()) |pair| {
         const a = pair.a;
         const b = pair.b;
+
+        steps += 1;
+        if (steps > cycle_check_after) {
+            if (compoundPtr(a)) |pa| {
+                if (compoundPtr(b)) |pb| {
+                    // A node pair seen before is either equal or part of a cycle
+                    // already being compared; either way, stop descending it.
+                    const entry = try seen.getOrPut(allocator, .{ .a = pa, .b = pb });
+                    if (entry.found_existing) continue;
+                }
+            }
+        }
 
         // If two values are pointer-equivalent or identical immediate values,
         // they are equal. This is a fast path.
@@ -184,6 +215,10 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .continuation => |bv| av == bv,
             else => false,
         },
+        .escape => |av| switch (b) {
+            .escape => |bv| av == bv,
+            else => false,
+        },
         .record_type => |av| switch (b) {
             .record_type => |bv| av == bv,
             else => false,
@@ -306,7 +341,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .vm_closure, .foreign_procedure, .continuation => true,
+        .procedure, .vm_closure, .foreign_procedure, .continuation, .escape => true,
         else => false,
     } };
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 const core = @import("core.zig");
 const Value = core.Value;
 
@@ -152,6 +153,8 @@ pub const FuncProto = struct {
             if (c == .string and val == .string and
                 std.mem.eql(u8, c.string, val.string)) return @intCast(i);
         }
+        // Constant indices are two bytes wide.
+        if (self.constants.items.len >= std.math.maxInt(u16)) return errors.ElzError.TooManyLocals;
         const idx: u16 = @intCast(self.constants.items.len);
         try self.constants.append(self.allocator, val);
         return idx;

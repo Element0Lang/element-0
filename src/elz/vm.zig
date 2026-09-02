@@ -36,6 +36,9 @@ pub const VM = struct {
     open_upvalues: ?*Upvalue,
     /// Optional fuel counter: decremented each instruction; returns ExecutionBudgetExceeded when 0.
     fuel: ?*u64 = null,
+    /// Highest stack height reached, so a pooled VM only has to clear the part
+    /// of the stack it actually used.
+    high_water: usize = 0,
     /// Active reset prompts, innermost last. Per-VM, so a shift cannot see a
     /// prompt across a native (nested VM) boundary.
     prompts: std.ArrayListUnmanaged(Prompt) = .empty,
@@ -61,6 +64,23 @@ pub const VM = struct {
         };
     }
 
+    /// Clears the execution state so the instance can be reused. The used part
+    /// of the value stack is cleared as well, so stale values do not keep
+    /// objects reachable for the collector.
+    pub fn reset(self: *VM) void {
+        // An error may have unwound the run with upvalues still open on this
+        // stack; closing them first copies the values into their cells so the
+        // closure keeps working after the stack is cleared and reused.
+        self.closeUpvaluesAbove(0);
+        @memset(self.stack[0..@max(self.high_water, self.stack_top)], Value.unspecified);
+        self.high_water = 0;
+        self.stack_top = 0;
+        self.frame_count = 0;
+        self.open_upvalues = null;
+        self.fuel = null;
+        self.prompts.clearRetainingCapacity();
+    }
+
     pub fn deinit(self: *VM) void {
         self.interp.allocator.free(self.stack);
         self.interp.allocator.free(self.frames);
@@ -75,6 +95,7 @@ pub const VM = struct {
         if (self.stack_top >= STACK_SIZE) return ElzError.StackOverflow;
         self.stack[self.stack_top] = val;
         self.stack_top += 1;
+        if (self.stack_top > self.high_water) self.high_water = self.stack_top;
     }
 
     fn pop(self: *VM) Value {
@@ -205,6 +226,18 @@ pub const VM = struct {
                 // The resume value becomes the value of the original shift.
                 try self.push(v);
             },
+            .escape => |esc| {
+                if (argc != 1) return ElzError.WrongArgumentCount;
+                const v = self.pop();
+                _ = self.pop(); // the escape procedure itself
+                if (!esc.active) {
+                    self.interp.last_error_message = "escape continuation invoked outside its dynamic extent";
+                    return ElzError.InvalidArgument;
+                }
+                self.interp.cps.escape_value = v;
+                self.interp.cps.escape_id = esc.id;
+                return ElzError.EscapeContinuationInvoked;
+            },
             .syntax_rules, .macro => {
                 // Macros should have been expanded at compile time.
                 return ElzError.NotAFunction;
@@ -288,6 +321,7 @@ pub const VM = struct {
             rest = Value{ .pair = pair };
         }
         self.stack_top = base + arity + 1;
+        if (self.stack_top > self.high_water) self.high_water = self.stack_top;
         self.stack[base + arity] = rest;
     }
 
@@ -363,7 +397,9 @@ pub const VM = struct {
                 .store_global => {
                     const name_val = proto.constants.items[instr.bx];
                     if (name_val != .symbol) return ElzError.InvalidArgument;
-                    try self.interp.root_env.set(self.interp, name_val.symbol, self.peek(0));
+                    // `set!` requires an existing binding: `update` reports
+                    // SymbolNotFound rather than quietly creating a global.
+                    try self.interp.root_env.update(self.interp, name_val.symbol, self.peek(0));
                 },
                 .define_global => {
                     const name_val = proto.constants.items[instr.bx];
@@ -593,6 +629,42 @@ pub const VM = struct {
 };
 
 // ---------------------------------------------------------------------------
+// VM pool
+//
+// A primitive that calls back into Elz (`map`, `apply`, `dynamic-wind`, ...)
+// runs the callee on a nested VM. Allocating one per call would hand the
+// collector a fresh multi-megabyte stack for every list element, so idle
+// instances are kept on the interpreter and reused.
+// ---------------------------------------------------------------------------
+
+/// Maximum number of idle VMs retained. Deeper nesting still works; the extra
+/// instances are simply not pooled.
+const VM_POOL_LIMIT = 8;
+
+fn acquireVm(interp: *@import("interpreter.zig").Interpreter) ElzError!*VM {
+    if (interp.vm_pool.pop()) |machine| {
+        machine.reset();
+        return machine;
+    }
+    const machine = interp.allocator.create(VM) catch return ElzError.OutOfMemory;
+    machine.* = VM.init(interp) catch return ElzError.OutOfMemory;
+    return machine;
+}
+
+fn releaseVm(interp: *@import("interpreter.zig").Interpreter, machine: *VM) void {
+    machine.reset();
+    if (interp.vm_pool.items.len >= VM_POOL_LIMIT) {
+        machine.deinit();
+        interp.allocator.destroy(machine);
+        return;
+    }
+    interp.vm_pool.append(interp.allocator, machine) catch {
+        machine.deinit();
+        interp.allocator.destroy(machine);
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -616,13 +688,13 @@ fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) !Value 
 
 /// Entry point that can be used to run a vm_closure with a given argument list.
 pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosure, args: core.ValueList) core.ElzError!Value {
-    var vm_inst = VM.init(interp) catch return core.ElzError.OutOfMemory;
-    defer vm_inst.deinit();
+    const vm_inst = try acquireVm(interp);
+    defer releaseVm(interp, vm_inst);
     try vm_inst.push(Value{ .vm_closure = cl });
     for (args.items) |arg| try vm_inst.push(arg);
     try vm_inst.callVmClosure(cl, @intCast(args.items.len), false);
     const result = vm_inst.run();
-    // Close all open upvalues before the stack is freed by deinit().
+    // Close all open upvalues before the stack is reused.
     vm_inst.closeUpvaluesAbove(0);
     return result;
 }
@@ -637,15 +709,16 @@ pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosu
 /// VM's frame eventually exits, `closeUpvaluesAbove` will overwrite the open state
 /// with a closed copy — leaving the pointer dangling but the cell valid.
 pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, args: core.ValueList, fuel: ?*u64) ElzError!Value {
-    var machine = try VM.init(interp);
-    defer machine.deinit();
+    if (args.items.len > std.math.maxInt(u8)) return ElzError.TooManyLocals;
+    const machine = try acquireVm(interp);
+    defer releaseVm(interp, machine);
     machine.fuel = fuel;
     try machine.push(proc);
     for (args.items) |arg| try machine.push(arg);
     const argc: u8 = @intCast(args.items.len);
     try machine.callValue(machine.peek(argc), argc, false);
     const result = machine.run();
-    // Close all open upvalues before the stack is freed by deinit().
+    // Close all open upvalues before the stack is reused.
     machine.closeUpvaluesAbove(0);
     return result;
 }

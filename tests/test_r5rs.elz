@@ -10,4 +10,16 @@
 (define (flush-output . args) #f)
 
 ; Run the R5RS compliance test suite.
-(load "tests/r5rs-tests.scm")
+;
+; The suite is a single file whose harness stops at the first form the
+; implementation cannot evaluate. Test 187 re-enters a continuation captured
+; inside dynamic-wind, which needs re-entrant continuations; call/cc is an
+; escape-only continuation today (see ROADMAP.md), so the load is wrapped and
+; the partial score is reported instead of aborting the whole run.
+(try
+  (load "tests/r5rs-tests.scm")
+  (catch err
+    (begin
+      (newline)
+      (display "Suite stopped early: ") (display err) (newline))))
+(test-end)

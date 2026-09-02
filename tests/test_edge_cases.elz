@@ -250,8 +250,10 @@
   (= (if #t (if #t (if #t 42 0) 0) 0) 42))
 
 ;; cond edge cases
+;; With no matching clause and no else, the value is unspecified, the same
+;; value (if #f #f) produces.
 (test-case "cond all false no else"
-  (null? (cond (#f 1) (#f 2))))
+  (eq? (cond (#f 1) (#f 2)) (if #f #f)))
 
 (test-case "cond first true"
   (= (cond (#t 1) (#t 2) (else 3)) 1))
@@ -388,9 +390,10 @@
      2))
 
 ;; Stale escape continuation: invoking k after call/ec has returned must be caught.
+;; test-case takes exactly one test expression, so the whole scenario is one let.
 (test-case "stale escape continuation is caught by try"
-  (define stale-k #f)
-  (call/ec (lambda (k) (set! stale-k k) 42))
-  (= (try (stale-k 99) (catch e 'caught)) 'caught))
+  (let ((stale-k #f))
+    (call/ec (lambda (k) (set! stale-k k) 42))
+    (eq? (try (stale-k 99) (catch e 'caught)) 'caught)))
 
 (report-summary)

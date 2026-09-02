@@ -35,13 +35,16 @@ fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     }
 }
 
-fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const u8) !void {
+/// Runs `source` and reports the first runtime error. Returns false when a form
+/// failed, so `--file` can exit with a non-zero status instead of hiding the
+/// failure from callers such as `zig build test-elz`.
+fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const u8) !bool {
     var forms = elz.parser.readAllTracked(source, interpreter.allocator, source_name, &interpreter.source_locations) catch |err| {
         std.debug.print("Parse Error: {s}\n", .{@errorName(err)});
         return err;
     };
     defer forms.deinit(interpreter.allocator);
-    if (forms.items.len == 0) return;
+    if (forms.items.len == 0) return true;
 
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
@@ -67,7 +70,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
             try elz.write(form, stdout);
             try stdout.writeAll("\n");
             try stdout.flush();
-            return;
+            return false;
         };
     }
 
@@ -79,6 +82,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
         try displayValue(interpreter, last_result, stdout);
         try stdout.flush();
     }
+    return true;
 }
 
 fn repl(interpreter: *elz.Interpreter) !void {
@@ -191,7 +195,9 @@ fn rootExec(ctx: chilli.CommandContext) !void {
                 std.debug.print("[VERBOSE] Executing {d} bytes of source code...\n", .{source.len});
             }
 
-            try exec(interpreter, source, filename);
+            if (!try exec(interpreter, source, filename)) {
+                std.process.exit(1);
+            }
             return;
         }
     }

@@ -361,7 +361,7 @@ fn isqrt(n: u64) u64 {
     return x;
 }
 
-pub fn sqrt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn sqrt(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     if (!v.isNumeric()) return ElzError.InvalidArgument;
@@ -370,7 +370,22 @@ pub fn sqrt(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueL
         const r = isqrt(n);
         if (r * r == n) return Value{ .exact_integer = @intCast(r) };
     }
+    if (v == .complex) {
+        // Principal square root of a complex number.
+        const c = v.complex;
+        const m = std.math.sqrt(std.math.hypot(c.real, c.imag));
+        const a = std.math.atan2(c.imag, c.real) / 2;
+        const out = env.allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+        out.* = .{ .real = m * std.math.cos(a), .imag = m * std.math.sin(a) };
+        return Value{ .complex = out };
+    }
     const f = v.asFloat() orelse return ElzError.InvalidArgument;
+    if (f < 0) {
+        // The square root of a negative real is imaginary.
+        const out = env.allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+        out.* = .{ .real = 0, .imag = std.math.sqrt(-f) };
+        return Value{ .complex = out };
+    }
     return Value{ .number = std.math.sqrt(f) };
 }
 
@@ -421,28 +436,39 @@ pub fn log(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
     return Value{ .number = std.math.log(f64, std.math.e, f) };
 }
 
+/// R7RS requires the result of `max` and `min` to be inexact when any argument
+/// is inexact, even if the extremum itself is exact.
+fn contaminate(best: Value, saw_inexact: bool) ElzError!Value {
+    if (!saw_inexact or best == .number) return best;
+    return Value{ .number = best.asFloat() orelse return ElzError.InvalidArgument };
+}
+
 pub fn max(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return ElzError.WrongArgumentCount;
     var best = args.items[0];
     if (!best.isNumeric()) return ElzError.InvalidArgument;
+    var saw_inexact = best == .number;
     for (args.items[1..]) |arg| {
         if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (arg == .number) saw_inexact = true;
         const o = try cmp2(arg, best);
         if (o == .gt) best = arg;
     }
-    return best;
+    return contaminate(best, saw_inexact);
 }
 
 pub fn min(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return ElzError.WrongArgumentCount;
     var best = args.items[0];
     if (!best.isNumeric()) return ElzError.InvalidArgument;
+    var saw_inexact = best == .number;
     for (args.items[1..]) |arg| {
         if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (arg == .number) saw_inexact = true;
         const o = try cmp2(arg, best);
         if (o == .lt) best = arg;
     }
-    return best;
+    return contaminate(best, saw_inexact);
 }
 
 pub fn mod(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -460,18 +486,45 @@ pub fn mod(_: *interpreter.Interpreter, env: *core.Environment, args: core.Value
     return Value{ .number = @mod(af, bf) };
 }
 
+/// Rounds to the nearest integer, resolving a tie to the even neighbour, as
+/// R7RS `round` requires (`@round` breaks ties away from zero instead).
+fn roundHalfEven(x: f64) f64 {
+    const nearest = @round(x);
+    if (@abs(x - @trunc(x)) == 0.5 and @rem(nearest, 2) != 0) {
+        return nearest - std.math.sign(x);
+    }
+    return nearest;
+}
+
+/// Rounds the exact rational n/d with the given mode. All four operations keep
+/// exactness, so the result is always an exact integer here.
+fn roundRational(n: i64, d: i64, comptime mode: enum { floor, ceiling, truncate, round }) ElzError!Value {
+    const q = @divFloor(n, d); // d > 0 in canonical form
+    const rem: i128 = @as(i128, n) - @as(i128, q) * @as(i128, d);
+    const result: i128 = switch (mode) {
+        .floor => q,
+        .ceiling => if (rem != 0) @as(i128, q) + 1 else q,
+        .truncate => @divTrunc(n, d),
+        .round => blk: {
+            const twice = rem * 2;
+            if (twice > d) break :blk @as(i128, q) + 1;
+            if (twice < d) break :blk q;
+            // Exactly halfway: pick the even neighbour.
+            break :blk if (@rem(q, 2) == 0) @as(i128, q) else @as(i128, q) + 1;
+        },
+    };
+    if (result > std.math.maxInt(i64) or result < std.math.minInt(i64)) return ElzError.Overflow;
+    return Value{ .exact_integer = @intCast(result) };
+}
+
 pub fn floor_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     switch (v) {
         .exact_integer => return v,
-        .rational => |r| {
-            const q = @divTrunc(r.numerator, r.denominator);
-            const rem = @mod(r.numerator, r.denominator); // r.denominator > 0
-            const adj: i64 = if (rem < 0) -1 else 0;
-            return Value{ .exact_integer = q + adj };
-        },
-        .number => |n| return Value{ .exact_integer = @intFromFloat(@floor(n)) },
+        .rational => |r| return roundRational(r.numerator, r.denominator, .floor),
+        // An inexact argument yields an inexact integer (R7RS 6.2.6).
+        .number => |n| return Value{ .number = @floor(n) },
         else => return ElzError.InvalidArgument,
     }
 }
@@ -481,13 +534,8 @@ pub fn ceiling(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     const v = args.items[0];
     switch (v) {
         .exact_integer => return v,
-        .rational => |r| {
-            const q = @divTrunc(r.numerator, r.denominator);
-            const rem = @mod(r.numerator, r.denominator);
-            const adj: i64 = if (rem > 0) 1 else 0;
-            return Value{ .exact_integer = q + adj };
-        },
-        .number => |n| return Value{ .exact_integer = @intFromFloat(@ceil(n)) },
+        .rational => |r| return roundRational(r.numerator, r.denominator, .ceiling),
+        .number => |n| return Value{ .number = @ceil(n) },
         else => return ElzError.InvalidArgument,
     }
 }
@@ -497,12 +545,8 @@ pub fn round_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
     const v = args.items[0];
     switch (v) {
         .exact_integer => return v,
-        .rational => |r| {
-            // round half-to-even toward nearest integer
-            const f = @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator));
-            return Value{ .exact_integer = @intFromFloat(@round(f)) };
-        },
-        .number => |n| return Value{ .exact_integer = @intFromFloat(@round(n)) },
+        .rational => |r| return roundRational(r.numerator, r.denominator, .round),
+        .number => |n| return Value{ .number = roundHalfEven(n) },
         else => return ElzError.InvalidArgument,
     }
 }
@@ -512,8 +556,8 @@ pub fn truncate(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
     const v = args.items[0];
     switch (v) {
         .exact_integer => return v,
-        .rational => |r| return Value{ .exact_integer = @divTrunc(r.numerator, r.denominator) },
-        .number => |n| return Value{ .exact_integer = @intFromFloat(@trunc(n)) },
+        .rational => |r| return roundRational(r.numerator, r.denominator, .truncate),
+        .number => |n| return Value{ .number = @trunc(n) },
         else => return ElzError.InvalidArgument,
     }
 }
@@ -524,19 +568,33 @@ pub fn expt(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
     const b = args.items[1];
     if (!a.isNumeric() or !b.isNumeric()) return ElzError.InvalidArgument;
     // Exact integer base, non-negative exact integer exponent: exact result
-    if (a == .exact_integer and b == .exact_integer and b.exact_integer >= 0) {
-        var result: i64 = 1;
-        var base = a.exact_integer;
-        var exp: u64 = @intCast(b.exact_integer);
+    if (isExactKind(a) and b == .exact_integer) {
+        const p = ratParts(a);
+        const negative = b.exact_integer < 0;
+        if (negative and p.n == 0) return ElzError.DivisionByZero;
+        // Magnitude of the exponent, computed without overflowing on minInt.
+        const exp_abs: u64 = if (negative) absU64(b.exact_integer) else @intCast(b.exact_integer);
+        var num: i64 = 1;
+        var den: i64 = 1;
+        var base_n = p.n;
+        var base_d = p.d;
+        var exp = exp_abs;
         while (exp > 0) : (exp >>= 1) {
             if ((exp & 1) == 1) {
-                result = try mulOv(result, base);
+                num = try mulOv(num, base_n);
+                den = try mulOv(den, base_d);
             }
-            if (exp > 1) base = try mulOv(base, base);
+            if (exp > 1) {
+                base_n = try mulOv(base_n, base_n);
+                base_d = try mulOv(base_d, base_d);
+            }
         }
-        return Value{ .exact_integer = result };
+        // A negative exponent inverts the result.
+        return if (negative)
+            normalizeRational(den, num, env.allocator)
+        else
+            normalizeRational(num, den, env.allocator);
     }
-    _ = env;
     const af = a.asFloat() orelse return ElzError.InvalidArgument;
     const bf = b.asFloat() orelse return ElzError.InvalidArgument;
     return Value{ .number = std.math.pow(f64, af, bf) };

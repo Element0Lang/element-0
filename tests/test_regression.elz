@@ -203,8 +203,8 @@
   (equal? (try (/ 1 0) (catch err 42)) 42))
 
 ;; Edge case: Cond with no matching clause
-(test-case "cond with no match returns nil"
-  (equal? (cond (#f 1) (#f 2)) '()))
+(test-case "cond with no match returns the unspecified value"
+  (eq? (cond (#f 1) (#f 2)) (if #f #f)))
 
 ;; Edge case: Cond with else
 (test-case "cond with else clause"
@@ -321,5 +321,58 @@
   (let* ((inner (list 1)) (v (vector inner)))
     (set-car! (car (vector->list v)) 'x)
     (equal? (vector-ref v 0) '(x))))
+
+;; --- Malformed special forms report errors instead of aborting ---
+;; The forms go through eval so the compile-time error is catchable.
+(test-case "malformed define is an error"
+  (eq? 'caught (try (eval '(define)) (catch e 'caught))))
+(test-case "malformed quote is an error"
+  (eq? 'caught (try (eval '(quote)) (catch e 'caught))))
+(test-case "malformed set! is an error"
+  (eq? 'caught (try (eval '(set! x)) (catch e 'caught))))
+(test-case "malformed lambda is an error"
+  (eq? 'caught (try (eval '(lambda)) (catch e 'caught))))
+(test-case "let binding without a value is an error"
+  (eq? 'caught (try (eval '(let ((x)) x)) (catch e 'caught))))
+(test-case "non-symbol let binding name is an error"
+  (eq? 'caught (try (eval '(let* ((1 2)) 3)) (catch e 'caught))))
+(test-case "improper body is an error"
+  (eq? 'caught (try (eval '(begin 1 . 2)) (catch e 'caught))))
+(test-case "non-list cond clause is an error"
+  (eq? 'caught (try (eval '(cond 1)) (catch e 'caught))))
+(test-case "improper argument list is an error"
+  (eq? 'caught (try (eval '(car 1 . 2)) (catch e 'caught))))
+(test-case "malformed do binding is an error"
+  (eq? 'caught (try (eval '(do ((i)) (#t))) (catch e 'caught))))
+
+;; --- set! requires an existing binding ---
+(test-case "set! on an unbound variable is an error"
+  (eq? 'caught (try (eval '(set! definitely-not-bound 1)) (catch e 'caught))))
+
+;; --- Escape continuations ---
+(test-case "an inner call/ec does not swallow an outer jump"
+  (= 11 (+ 10 (call/ec (lambda (out) (+ 1 (call/ec (lambda (in) (out 1)))))))))
+(test-case "try does not swallow a live escape jump"
+  (= 7 (call/ec (lambda (out) (try (out 7) (catch e 0))))))
+(test-case "an escape jumps out of map"
+  (eq? 'found (call/ec (lambda (out) (map (lambda (x) (if (= x 3) (out 'found) x)) '(1 2 3 4))))))
+(test-case "an escape continuation is a procedure"
+  (procedure? (call/ec (lambda (k) k))))
+
+;; --- equal? terminates on circular structure ---
+(test-case "equal? on two equal cyclic lists"
+  (let ((a (list 1 2)) (b (list 1 2)))
+    (set-cdr! (cdr a) a)
+    (set-cdr! (cdr b) b)
+    (equal? a b)))
+(test-case "equal? on two different cyclic lists"
+  (let ((a (list 1 2)) (b (list 1 3)))
+    (set-cdr! (cdr a) a)
+    (set-cdr! (cdr b) b)
+    (not (equal? a b))))
+
+;; --- Limits are reported, not wrapped around ---
+(test-case "a call with more than 255 arguments is an error"
+  (eq? 'caught (try (eval (cons '+ (make-list 300 1))) (catch e 'caught))))
 
 (report-summary)

@@ -170,10 +170,17 @@
 (test-case "pair?" (and (pair? '(1 . 2)) (not (pair? '()))))
 
 ;; --- Math Function Tests ---
-(test-case "floor" (equal? (floor 3.7) 3))
-(test-case "ceiling" (equal? (ceiling 3.2) 4))
-(test-case "round" (equal? (round 3.5) 4))
-(test-case "truncate" (equal? (truncate 3.7) 3))
+;; floor, ceiling, round, and truncate keep the exactness of the argument, so
+;; an inexact argument yields an inexact integer.
+(test-case "floor" (equal? (floor 3.7) 3.0))
+(test-case "ceiling" (equal? (ceiling 3.2) 4.0))
+(test-case "round" (equal? (round 3.5) 4.0))
+(test-case "round ties to even" (equal? (round 2.5) 2.0))
+(test-case "truncate" (equal? (truncate 3.7) 3.0))
+(test-case "floor of exact rational is exact" (eqv? (floor 7/2) 3))
+(test-case "round of exact rational ties to even" (eqv? (round 5/2) 2))
+(test-case "floor of a huge flonum does not overflow" (= (floor 1e300) 1e300))
+(test-case "round of infinity is infinity" (= (round +inf.0) +inf.0))
 (test-case "expt" (equal? (expt 2 10) 1024))
 (test-case "even?" (and (even? 4) (not (even? 3))))
 (test-case "odd?" (and (odd? 3) (not (odd? 4))))
@@ -1157,4 +1164,86 @@
     (and (eq? (read p) #t) (= (read p) 6))))
 
 ;; --- Run Summary ---
+;; --- display and write at every nesting level ---
+(test-case "display leaves nested strings unquoted"
+  (string=? (call-with-output-string (lambda (port) (display '("a" #\b) port))) "(a b)"))
+(test-case "write quotes nested strings"
+  (string=? (call-with-output-string (lambda (port) (write '("a" #\b) port))) "(\"a\" #\\b)"))
+(test-case "display leaves strings in a vector unquoted"
+  (string=? (call-with-output-string (lambda (port) (display (vector "a" 1) port))) "#(a 1)"))
+
+;; --- Inexact numbers are written so they read back as inexact ---
+(test-case "an inexact integer keeps its decimal point"
+  (string=? (number->string 1.0) "1.0"))
+(test-case "an exact integer has no decimal point"
+  (string=? (number->string 1) "1"))
+(test-case "number->string round-trips an inexact value"
+  (eqv? (string->number (number->string 0.5)) 0.5))
+(test-case "infinity has its standard spelling"
+  (string=? (number->string +inf.0) "+inf.0"))
+
+;; --- read-line distinguishes a blank line from end of input ---
+(test-case "read-line returns an empty string for a blank line"
+  (let ((port (open-input-string "\n\nx")))
+    (and (string=? (read-line port) "")
+         (string=? (read-line port) "")
+         (string=? (read-line port) "x")
+         (eof-object? (read-line port)))))
+(test-case "read-line handles CRLF line endings without trailing CR"
+  (let ((port (open-input-string "line1\r\nline2\r\n")))
+    (and (string=? (read-line port) "line1")
+         (string=? (read-line port) "line2")
+         (eof-object? (read-line port)))))
+(test-case "read-line handles lone CR line endings"
+  (let ((port (open-input-string "lineA\rlineB\r")))
+    (and (string=? (read-line port) "lineA")
+         (string=? (read-line port) "lineB")
+         (eof-object? (read-line port)))))
+(test-case "read-line returns a line longer than the old 4096-byte buffer"
+  (let* ((long (make-string 5000 #\a))
+         (port (open-input-string long)))
+    (= (string-length (read-line port)) 5000)))
+
+;; --- string-fill! keeps the character count ---
+(test-case "string-fill! refuses a fill of a different byte width"
+  (let ((s (string-copy "a\xe9;b")))
+    (eq? 'caught (try (begin (string-fill! s #\x) 'filled) (catch e 'caught)))))
+(test-case "string-fill! works on same-width characters"
+  (let ((s (string-copy "abc")))
+    (string-fill! s #\z)
+    (string=? s "zzz")))
+
+;; --- max and min are inexact when any argument is inexact ---
+(test-case "max with an inexact argument is inexact"
+  (eqv? (max 3.0 4) 4.0))
+(test-case "min with an inexact argument is inexact"
+  (eqv? (min 3 4.0) 3.0))
+(test-case "max of exact arguments stays exact"
+  (eqv? (max 3 4) 4))
+
+;; --- sqrt and expt on exact arguments ---
+(test-case "sqrt of a negative number is imaginary"
+  (= (sqrt -4) (make-rectangular 0 2)))
+(test-case "expt with a negative exponent is exact"
+  (eqv? (expt 2 -1) 1/2))
+(test-case "expt of a rational base is exact"
+  (eqv? (expt 2/3 2) 4/9))
+
+;; --- The innermost handler runs first ---
+(test-case "guard inside with-exception-handler handles the raise itself"
+  (eq? 'guarded
+       (with-exception-handler
+         (lambda (e) 'outer)
+         (lambda ()
+           (guard (c ((symbol? c) 'guarded))
+             (raise 'boom))))))
+(test-case "guard reraises to the outer handler when no clause matches"
+  (eq? 'outer
+       (call/ec (lambda (k)
+         (with-exception-handler
+           (lambda (e) (k 'outer))
+           (lambda ()
+             (guard (c ((string? c) 'guarded))
+               (raise 'boom))))))))
+
 (report-summary)

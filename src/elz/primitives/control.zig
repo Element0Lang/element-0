@@ -73,8 +73,19 @@ pub fn raise_continuable_fn(interp: *interpreter.Interpreter, env: *core.Environ
     return raise_common(interp, env, args.items[0], fuel, true);
 }
 
+/// Pushed onto `interp.exception_handlers` for the extent of a `try` body. It
+/// marks a handler boundary that is nearer than any installed
+/// `with-exception-handler` handler, so a `raise` inside the body reaches the
+/// `try` (and therefore `guard`) instead of jumping to an outer handler.
+const try_boundary: core.Value = .unspecified;
+
+fn isTryBoundary(v: core.Value) bool {
+    return v == .unspecified;
+}
+
 fn raise_common(interp: *interpreter.Interpreter, env: *core.Environment, obj: core.Value, fuel: *u64, continuable: bool) ElzError!core.Value {
-    if (interp.exception_handlers.items.len > 0) {
+    const handlers = interp.exception_handlers.items;
+    if (handlers.len > 0 and !isTryBoundary(handlers[handlers.len - 1])) {
         // Call the innermost handler with it uninstalled, per R7RS.
         const handler = interp.exception_handlers.pop().?;
         var handler_args = core.ValueList.init(env.allocator);
@@ -247,6 +258,22 @@ pub fn make_promise(interp: *interpreter.Interpreter, env: *core.Environment, ar
     return core.Value{ .promise = pr };
 }
 
+/// Internal primitive backing `delay`: wraps a zero-argument thunk in an
+/// unforced promise. `make-promise` cannot serve this role, because R7RS
+/// requires it to treat its argument as an already-computed value.
+/// Called by the compiler as: (%%make-delayed%% (lambda () expr))
+pub fn make_delayed(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    const thunk = args.items[0];
+    switch (thunk) {
+        .vm_closure, .procedure, .foreign_procedure => {},
+        else => return ElzError.InvalidArgument,
+    }
+    const pr = try env.allocator.create(core.Promise);
+    pr.* = .{ .expr = thunk, .env = interp.root_env, .forced = false, .result = .unspecified };
+    return core.Value{ .promise = pr };
+}
+
 pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const arg = args.items[0];
@@ -255,9 +282,9 @@ pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     const pr = arg.promise;
     if (pr.forced) return pr.result;
 
-    // The expr field holds either a thunk (vm_closure) from `delay`
+    // The expr field holds either a thunk (a procedure) from `delay`
     // or a raw AST value for promises created directly.
-    const result = if (pr.expr == .vm_closure) blk: {
+    const result = if (pr.expr == .vm_closure or pr.expr == .procedure or pr.expr == .foreign_procedure) blk: {
         var no_args = core.ValueList.init(env.allocator);
         defer no_args.deinit();
         break :blk try vm_mod.callProc(interp, pr.expr, no_args, fuel);
@@ -312,30 +339,28 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
         else => return ElzError.InvalidArgument,
     }
 
-    // The escape function: when called, stores its argument on the interpreter
-    // and signals EscapeContinuationInvoked. Since there's only one interpreter,
-    // and escape continuations unwind the stack, this is safe.
-    const escape_fn = struct {
-        pub fn invoke(i: *interpreter.Interpreter, _: *core.Environment, a: core.ValueList, _: *u64) ElzError!core.Value {
-            if (a.items.len != 1) return ElzError.WrongArgumentCount;
-            i.cps.escape_value = a.items[0];
-            return ElzError.EscapeContinuationInvoked;
-        }
-    }.invoke;
+    // Each escape continuation carries its own identity, so a jump aimed at an
+    // outer call/ec passes through the inner ones instead of being consumed by
+    // the first frame that sees it.
+    interp.cps.escape_counter += 1;
+    const escape = env.allocator.create(core.Escape) catch return ElzError.OutOfMemory;
+    escape.* = .{ .id = interp.cps.escape_counter };
+    // Invoking it after this frame returns is an error, not a jump.
+    defer escape.active = false;
 
-    // Build args for the procedure: pass the escape function
     var call_args = core.ValueList.init(env.allocator);
-    try call_args.append(core.Value{ .procedure = escape_fn });
+    defer call_args.deinit();
+    try call_args.append(core.Value{ .escape = escape });
 
-    // Call the procedure with the escape continuation
     const result = vm_mod.callProc(interp, proc, call_args, fuel);
 
     if (result) |val| {
         return val;
     } else |err| {
-        if (err == ElzError.EscapeContinuationInvoked) {
+        if (err == ElzError.EscapeContinuationInvoked and interp.cps.escape_id == escape.id) {
             const escaped_val = interp.cps.escape_value orelse core.Value.unspecified;
             interp.cps.escape_value = null;
+            interp.cps.escape_id = 0;
             return escaped_val;
         }
         return err;
@@ -354,11 +379,17 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
     var no_args = core.ValueList.init(env.allocator);
     defer no_args.deinit();
 
+    // Mark this `try` as the innermost handler for the body's extent.
+    interp.exception_handlers.append(interp.allocator, try_boundary) catch return ElzError.OutOfMemory;
     const body_result = vm_mod.callProc(interp, body_thunk, no_args, fuel);
+    _ = interp.exception_handlers.pop();
 
     if (body_result) |val| {
         return val;
     } else |err| {
+        // An escape continuation jumping past this `try` is not an error the
+        // handler should see: let it reach its own call/ec frame.
+        if (err == ElzError.EscapeContinuationInvoked) return err;
         // A raised value takes precedence; otherwise fall back to the message.
         const err_val: core.Value = if (interp.current_exception) |exc| blk: {
             interp.current_exception = null;

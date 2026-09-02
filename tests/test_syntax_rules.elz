@@ -158,4 +158,59 @@
 (test-case "case with arrow" (= (case 5 ((5) => (lambda (x) (* x 10))) (else 0)) 50))
 (test-case "case else arrow" (= (case 9 ((5) 1) (else => (lambda (x) x))) 9))
 
+;; --- Datum patterns ---
+(define-syntax classify
+  (syntax-rules ()
+    ((_ 0) 'zero)
+    ((_ 1) 'one)
+    ((_ x) (list 'other x))))
+(test-case "an exact integer datum pattern matches"
+  (and (eq? (classify 0) 'zero)
+       (eq? (classify 1) 'one)
+       (equal? (classify 9) '(other 9))))
+
+;; --- Vectors in patterns and templates ---
+(define-syntax vec-of
+  (syntax-rules ()
+    ((_ a b) #(a b))))
+(test-case "a vector template substitutes pattern variables"
+  (equal? (vec-of 1 2) #(1 2)))
+
+(define-syntax split-vec
+  (syntax-rules ()
+    ((_ #(a b ...)) (list a (list b ...)))))
+(test-case "a vector pattern matches with an ellipsis"
+  (equal? (split-vec #(1 2 3)) '(1 (2 3))))
+
+;; --- Hygiene ---
+(define-syntax use-later-helper
+  (syntax-rules ()
+    ((_ x) (%macro-test-helper x))))
+(define (%macro-test-helper y) (* y 10))
+(test-case "a template may reference a global defined later"
+  (= (use-later-helper 4) 40))
+
+(define-syntax swap-pair!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(define %swap-left 1)
+(define tmp 2)
+(test-case "a template temporary does not capture a user binding"
+  (begin (swap-pair! %swap-left tmp)
+         (and (= %swap-left 2) (= tmp 1))))
+
+;; --- let-syntax scoping ---
+(define-syntax outer-marker
+  (syntax-rules ()
+    ((_ x) (list 'outer x))))
+(test-case "let-syntax shadows a transformer only in its body"
+  (and (equal? (let-syntax ((outer-marker (syntax-rules () ((_ x) (list 'inner x)))))
+                 (outer-marker 1))
+               '(inner 1))
+       (equal? (outer-marker 2) '(outer 2))))
+(test-case "a let-syntax transformer does not leak out of its body"
+  (begin
+    (let-syntax ((%only-here (syntax-rules () ((_) 'gone)))) (%only-here))
+    (eq? 'caught (try (eval '(%only-here)) (catch e 'caught)))))
+
 (report-summary)

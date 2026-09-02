@@ -59,6 +59,31 @@ pub fn expandMacro(interp: *interpreter.Interpreter, m: *core.Macro, rest: Value
 // syntax-rules expansion
 // ---------------------------------------------------------------------------
 
+/// Builds a proper list holding `items`, so vector patterns and templates can
+/// reuse the list matcher and expander (including their ellipsis handling).
+fn listFromItems(allocator: std.mem.Allocator, items: []const Value) ElzError!Value {
+    var result: Value = .nil;
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        result = try cons(allocator, items[i], result);
+    }
+    return result;
+}
+
+/// Collects a proper list back into a vector value.
+fn vectorFromList(allocator: std.mem.Allocator, list: Value) ElzError!Value {
+    var items: std.ArrayListUnmanaged(Value) = .empty;
+    defer items.deinit(allocator);
+    var cur = list;
+    while (cur == .pair) : (cur = cur.pair.cdr) {
+        items.append(allocator, cur.pair.car) catch return ElzError.OutOfMemory;
+    }
+    const vec = allocator.create(core.Vector) catch return ElzError.OutOfMemory;
+    vec.* = .{ .items = items.toOwnedSlice(allocator) catch return ElzError.OutOfMemory };
+    return Value{ .vector = vec };
+}
+
 fn is_literal_identifier(name: []const u8, literals: [][]const u8) bool {
     for (literals) |lit| {
         if (std.mem.eql(u8, lit, name)) return true;
@@ -103,12 +128,16 @@ fn collect_pattern_vars(
             try collect_pattern_vars(allocator, p.car, literals, ellipsis, out);
             try collect_pattern_vars(allocator, p.cdr, literals, ellipsis, out);
         },
+        .vector => |v| {
+            for (v.items) |item| {
+                try collect_pattern_vars(allocator, item, literals, ellipsis, out);
+            }
+        },
         else => {},
     }
 }
 
-const MatchError = error{
-    OutOfMemory,
+const MatchError = ElzError || error{
     MissingPatternVar,
 };
 
@@ -143,6 +172,22 @@ fn match_pattern(
         .number => |n| {
             if (input != .number) return false;
             return n == input.number;
+        },
+        .exact_integer => |i| {
+            if (input != .exact_integer) return false;
+            return i == input.exact_integer;
+        },
+        .rational => |r| {
+            if (input != .rational) return false;
+            return r.numerator == input.rational.numerator and r.denominator == input.rational.denominator;
+        },
+        .vector => |pv| {
+            // Match element-wise through the list matcher so an ellipsis inside
+            // a vector pattern behaves as it does in a list pattern.
+            if (input != .vector) return false;
+            const pat_list = try listFromItems(allocator, pv.items);
+            const in_list = try listFromItems(allocator, input.vector.items);
+            return match_pattern(allocator, pat_list, in_list, literals, ellipsis, bindings);
         },
         .boolean => |b| {
             if (input != .boolean) return false;
@@ -246,6 +291,11 @@ fn collect_ellipsis_vars(
             try collect_ellipsis_vars(allocator, p.car, bindings, out);
             try collect_ellipsis_vars(allocator, p.cdr, bindings, out);
         },
+        .vector => |v| {
+            for (v.items) |item| {
+                try collect_ellipsis_vars(allocator, item, bindings, out);
+            }
+        },
         else => {},
     }
 }
@@ -302,6 +352,13 @@ fn expand_template(
                 .cdr = try expand_template(allocator, p.cdr, ellipsis, bindings),
             };
             return Value{ .pair = new_pair };
+        },
+        .vector => |v| {
+            // Expand as a list, then collect back into a vector, so pattern
+            // variables and ellipses inside vector templates are substituted.
+            const as_list = try listFromItems(allocator, v.items);
+            const expanded = try expand_template(allocator, as_list, ellipsis, bindings);
+            return vectorFromList(allocator, expanded);
         },
         else => return template.deep_clone(allocator),
     }
@@ -398,6 +455,9 @@ fn collect_introduced_identifiers(
                 if (std.mem.eql(u8, pv, s)) return;
             }
             if (def_env.contains(s)) return;
+            // A name this compilation unit defines later is a free reference,
+            // not an identifier the template introduces.
+            if (interp.pending_globals.contains(s)) return;
             for (out.items) |existing| {
                 if (std.mem.eql(u8, existing, s)) return;
             }
@@ -408,8 +468,104 @@ fn collect_introduced_identifiers(
             try collect_introduced_identifiers(interp, allocator, p.car, pattern_var_names, def_env, ellipsis, out);
             try collect_introduced_identifiers(interp, allocator, p.cdr, pattern_var_names, def_env, ellipsis, out);
         },
+        .vector => |v| {
+            for (v.items) |item| {
+                try collect_introduced_identifiers(interp, allocator, item, pattern_var_names, def_env, ellipsis, out);
+            }
+        },
         else => {},
     }
+}
+
+/// Appends `name` to `out` unless it is already there, is a pattern variable,
+/// or is a marker such as the ellipsis or a special-form keyword.
+fn add_identifier(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    pattern_var_names: []const []const u8,
+    ellipsis: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    if (is_special_form_name(name)) return;
+    if (ellipsis.len > 0 and std.mem.eql(u8, name, ellipsis)) return;
+    for (pattern_var_names) |pv| {
+        if (std.mem.eql(u8, pv, name)) return;
+    }
+    for (out.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    out.append(allocator, name) catch return ElzError.OutOfMemory;
+}
+
+/// Collects the formals of a `lambda` template: a proper list, a dotted list,
+/// or a single rest symbol.
+fn collect_formals(
+    allocator: std.mem.Allocator,
+    formals: Value,
+    pattern_var_names: []const []const u8,
+    ellipsis: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    var cur = formals;
+    while (cur == .pair) : (cur = cur.pair.cdr) {
+        if (cur.pair.car == .symbol) {
+            try add_identifier(allocator, cur.pair.car.symbol, pattern_var_names, ellipsis, out);
+        }
+    }
+    if (cur == .symbol) try add_identifier(allocator, cur.symbol, pattern_var_names, ellipsis, out);
+}
+
+/// Collects the names of the `(name init)` bindings in a let-family template.
+fn collect_binding_names(
+    allocator: std.mem.Allocator,
+    bindings: Value,
+    pattern_var_names: []const []const u8,
+    ellipsis: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    var cur = bindings;
+    while (cur == .pair) : (cur = cur.pair.cdr) {
+        const binding = cur.pair.car;
+        if (binding == .pair and binding.pair.car == .symbol) {
+            try add_identifier(allocator, binding.pair.car.symbol, pattern_var_names, ellipsis, out);
+        }
+    }
+}
+
+/// Collects the identifiers a template binds itself: lambda formals, let-family
+/// binding names, named-let loop names, and `do` variables. These are renamed
+/// even when the use site has a binding of the same name, so that a template
+/// temporary cannot capture the user's variable.
+fn collect_template_bound(
+    allocator: std.mem.Allocator,
+    template: Value,
+    pattern_var_names: []const []const u8,
+    ellipsis: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) ElzError!void {
+    if (template != .pair) return;
+    const p = template.pair;
+    if (p.car == .symbol and p.cdr == .pair) {
+        const head = p.car.symbol;
+        const second = p.cdr.pair.car;
+        if (std.mem.eql(u8, head, "lambda")) {
+            try collect_formals(allocator, second, pattern_var_names, ellipsis, out);
+        } else if (std.mem.eql(u8, head, "let") or std.mem.eql(u8, head, "let*") or
+            std.mem.eql(u8, head, "letrec") or std.mem.eql(u8, head, "letrec*"))
+        {
+            if (second == .symbol and p.cdr.pair.cdr == .pair) {
+                // Named let: the loop name plus the bindings that follow it.
+                try add_identifier(allocator, second.symbol, pattern_var_names, ellipsis, out);
+                try collect_binding_names(allocator, p.cdr.pair.cdr.pair.car, pattern_var_names, ellipsis, out);
+            } else {
+                try collect_binding_names(allocator, second, pattern_var_names, ellipsis, out);
+            }
+        } else if (std.mem.eql(u8, head, "do")) {
+            try collect_binding_names(allocator, second, pattern_var_names, ellipsis, out);
+        }
+    }
+    try collect_template_bound(allocator, p.car, pattern_var_names, ellipsis, out);
+    try collect_template_bound(allocator, p.cdr, pattern_var_names, ellipsis, out);
 }
 
 fn fresh_hygiene_name(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
@@ -439,6 +595,15 @@ fn rename_template(
                 .cdr = try rename_template(allocator, p.cdr, rename_map),
             };
             return Value{ .pair = new_pair };
+        },
+        .vector => |v| {
+            const items = allocator.alloc(Value, v.items.len) catch return ElzError.OutOfMemory;
+            for (v.items, items) |item, *slot| {
+                slot.* = try rename_template(allocator, item, rename_map);
+            }
+            const vec = allocator.create(core.Vector) catch return ElzError.OutOfMemory;
+            vec.* = .{ .items = items };
+            return Value{ .vector = vec };
         },
         else => return template.deep_clone(allocator),
     }
@@ -552,6 +717,7 @@ pub fn expandSyntaxRules(
             var introduced: std.ArrayListUnmanaged([]const u8) = .empty;
             defer introduced.deinit(allocator);
             try collect_introduced_identifiers(interp, allocator, rule.template, pattern_var_names.items, sr.env, sr.ellipsis, &introduced);
+            try collect_template_bound(allocator, rule.template, pattern_var_names.items, sr.ellipsis, &introduced);
 
             var rename_map: std.StringHashMapUnmanaged([]const u8) = .empty;
             defer rename_map.deinit(allocator);

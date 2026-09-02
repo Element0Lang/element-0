@@ -1012,12 +1012,12 @@
 ;;; (get-environment-variable name)
 ;;;
 ;;; Returns the value of the environment variable name, or #f.
-(define get-environment-variable getenv)
+(define (get-environment-variable name) (getenv name))
 
 ;;; (emergency-exit [status])
 ;;;
 ;;; Exits the process immediately.
-(define emergency-exit exit)
+(define (emergency-exit status) (exit status))
 
 ;;; (current-second)
 ;;;

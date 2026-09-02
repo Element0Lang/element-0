@@ -41,6 +41,11 @@ pub const SandboxFlags = struct {
     enable_strings: bool = true,
     /// Enables or disables I/O functions (e.g., `display`, `load`).
     enable_io: bool = true,
+    /// Enables or disables filesystem access: file ports, `load`, `include`,
+    /// module imports, and the file operations in `os`.
+    enable_filesystem: bool = true,
+    /// Enables or disables process access: `exit` and environment variables.
+    enable_process: bool = true,
     /// Maximum wall-clock execution time in milliseconds. Null means no limit.
     time_limit_ms: ?u64 = null,
 };
@@ -50,6 +55,11 @@ pub const SandboxFlags = struct {
 pub const CpsState = struct {
     /// Value carried by the most recently invoked escape continuation.
     escape_value: ?core.Value = null,
+    /// Identity of the escape continuation that carried `escape_value`, so the
+    /// `call/ec` frame that created it can tell whether the jump is its own.
+    escape_id: u64 = 0,
+    /// Counter handing out escape continuation identities.
+    escape_counter: u64 = 0,
     /// Innermost active dynamic-wind frame, null when none is in effect.
     winders: ?*core.Winder = null,
 };
@@ -71,6 +81,9 @@ pub const Interpreter = struct {
     gensym_counter: u64 = 0,
     /// Maximum wall-clock execution time in milliseconds (null = no limit).
     time_limit_ms: ?u64 = null,
+    /// Whether filesystem access is permitted. Checked by the compiler for
+    /// `include` and by `importModule`, which read files at compile time.
+    enable_filesystem: bool = true,
     /// Timestamp (ms) when the current evaluation started.
     eval_start_ms: ?i64 = null,
     /// Step counter for throttling time checks (check every N steps).
@@ -97,6 +110,14 @@ pub const Interpreter = struct {
     library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
     /// Source locations of parsed forms, keyed by pair pointer.
     source_locations: parser.FormLocations = .empty,
+    /// Idle VM instances kept for primitive callbacks. Creating a VM allocates
+    /// a large value stack and frame array, so `vm.callProc` borrows from here
+    /// instead of allocating one per call (`map` calls it once per element).
+    vm_pool: std.ArrayListUnmanaged(*vm.VM) = .empty,
+    /// Top-level names the current compilation unit will define. A macro
+    /// template may reference one before its `define` has run, so hygiene
+    /// renaming must leave these alone.
+    pending_globals: std.StringHashMapUnmanaged(void) = .empty,
     /// Location of the most recent uncaught runtime error, when known.
     last_error_file: ?[]const u8 = null,
     last_error_line: ?u32 = null,
@@ -121,6 +142,7 @@ pub const Interpreter = struct {
             .last_error_message = null,
             .module_cache = std.StringHashMap(*core.Module).init(allocator),
             .time_limit_ms = flags.time_limit_ms,
+            .enable_filesystem = flags.enable_filesystem,
         };
 
         const root_env = try allocator.create(core.Environment);
@@ -148,15 +170,15 @@ pub const Interpreter = struct {
             try env_setup.populate_strings(&self);
         }
         if (flags.enable_io) {
-            try env_setup.populate_io(&self);
+            try env_setup.populate_io(&self, flags);
         }
-        try env_setup.populate_control(&self);
+        try env_setup.populate_control(&self, flags);
         try env_setup.populate_modules(&self);
-        try env_setup.populate_process(&self);
+        try env_setup.populate_process(&self, flags);
         try env_setup.populate_vectors(&self);
         try env_setup.populate_hashmaps(&self);
-        try env_setup.populate_ports(&self);
-        try env_setup.populate_os(&self);
+        try env_setup.populate_ports(&self, flags);
+        try env_setup.populate_os(&self, flags);
         try env_setup.populate_datetime(&self);
         try env_setup.populate_format(&self);
         try env_setup.populate_json(&self);
@@ -218,6 +240,10 @@ pub const Interpreter = struct {
     /// Returns the cached `core.Value.module` if the path was already loaded.
     pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
         if (path_val != .string) return core.ElzError.InvalidArgument;
+        if (!self.enable_filesystem) {
+            self.last_error_message = "import: filesystem access is disabled";
+            return core.ElzError.PermissionDenied;
+        }
         const path_str = path_val.string;
 
         if (self.module_cache.get(path_str)) |cached_mod_ptr| {
@@ -334,6 +360,12 @@ pub const Interpreter = struct {
     /// Most memory is GC-managed; this cleans up the module cache.
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
+        for (self.vm_pool.items) |machine| {
+            machine.deinit();
+            self.allocator.destroy(machine);
+        }
+        self.vm_pool.deinit(self.allocator);
+        self.pending_globals.deinit(self.allocator);
     }
 
     /// Returns the lazily initialized port that wraps the host's standard input stream.

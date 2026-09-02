@@ -7,9 +7,27 @@ const interpreter = @import("../interpreter.zig");
 /// Converts a numeric `Value` to a non-negative `usize` index.
 fn toIndex(v: Value) ElzError!usize {
     return switch (v) {
-        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .exact_integer => |i| std.math.cast(usize, i) orelse ElzError.InvalidArgument,
         .number => |n| blk: {
-            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            // Reject non-finite and out-of-range values: `@intFromFloat` is
+            // illegal behavior unless the value fits the destination type.
+            if (!std.math.isFinite(n) or n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) break :blk ElzError.InvalidArgument;
+            break :blk @intFromFloat(n);
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+/// Converts a numeric `Value` to an `i64`, rejecting non-finite values and
+/// values outside the `i64` range (`@intFromFloat` would be illegal behavior).
+fn toI64(v: Value) ElzError!i64 {
+    return switch (v) {
+        .exact_integer => |i| i,
+        .number => |n| blk: {
+            if (!std.math.isFinite(n) or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= @as(f64, @floatFromInt(std.math.maxInt(i64))) or
+                n < @as(f64, @floatFromInt(std.math.minInt(i64)))) break :blk ElzError.InvalidArgument;
             break :blk @intFromFloat(n);
         },
         else => ElzError.InvalidArgument,
@@ -395,40 +413,21 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
     // With an explicit radix, convert integers to that base.
     if (args.items.len == 2) {
         const radix_val = args.items[1];
-        const radix: u8 = switch (radix_val) {
-            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
-            .number => |f| blk: {
-                const n = @as(i64, @intFromFloat(f));
-                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
-            },
-            else => return ElzError.InvalidArgument,
-        };
-        const n: i64 = switch (num_val) {
-            .exact_integer => |i| i,
-            .number => |f| @intFromFloat(f),
-            else => return ElzError.InvalidArgument,
-        };
+        const radix_num = try toI64(radix_val);
+        if (radix_num < 2 or radix_num > 36) return ElzError.InvalidArgument;
+        const radix: u8 = @intCast(radix_num);
+        const n = try toI64(num_val);
         var buf: [128]u8 = undefined;
         const len = std.fmt.printInt(&buf, n, radix, .lower, .{});
         return Value{ .string = try env.allocator.dupe(u8, buf[0..len]) };
     }
 
-    var buf: [128]u8 = undefined;
-    const formatted = switch (num_val) {
-        .number => |n| std.fmt.bufPrint(&buf, "{d}", .{n}) catch return ElzError.OutOfMemory,
-        .exact_integer => |i| std.fmt.bufPrint(&buf, "{d}", .{i}) catch return ElzError.OutOfMemory,
-        .rational => |r| std.fmt.bufPrint(&buf, "{d}/{d}", .{ r.numerator, r.denominator }) catch return ElzError.OutOfMemory,
-        .complex => |c| blk: {
-            const sep: u8 = if (c.imag >= 0 or std.math.isNan(c.imag)) '+' else 0;
-            if (sep == '+') {
-                break :blk std.fmt.bufPrint(&buf, "{d}+{d}i", .{ c.real, c.imag }) catch return ElzError.OutOfMemory;
-            } else {
-                break :blk std.fmt.bufPrint(&buf, "{d}{d}i", .{ c.real, c.imag }) catch return ElzError.OutOfMemory;
-            }
-        },
-        else => return ElzError.InvalidArgument,
-    };
-    return Value{ .string = try env.allocator.dupe(u8, formatted) };
+    // Share the writer's number formatting so `number->string` and `write`
+    // agree, in particular on inexact values (`1.0`, `+inf.0`).
+    var aw: std.Io.Writer.Allocating = .init(env.allocator);
+    defer aw.deinit();
+    @import("../writer.zig").write(num_val, &aw.writer) catch return ElzError.OutOfMemory;
+    return Value{ .string = try env.allocator.dupe(u8, aw.written()) };
 }
 
 /// `string_to_number` converts a string to a number.
@@ -444,14 +443,9 @@ pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, arg
     // With an explicit radix, parse as integer only.
     if (args.items.len == 2) {
         const radix_val = args.items[1];
-        const radix: u8 = switch (radix_val) {
-            .exact_integer => |n| if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument,
-            .number => |f| blk: {
-                const n = @as(i64, @intFromFloat(f));
-                break :blk if (n >= 2 and n <= 36) @intCast(n) else return ElzError.InvalidArgument;
-            },
-            else => return ElzError.InvalidArgument,
-        };
+        const radix_num = try toI64(radix_val);
+        if (radix_num < 2 or radix_num > 36) return ElzError.InvalidArgument;
+        const radix: u8 = @intCast(radix_num);
         if (std.fmt.parseInt(i64, str, radix) catch null) |n| {
             return Value{ .exact_integer = n };
         }
@@ -560,8 +554,9 @@ pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
         var char_buf: [4]u8 = undefined;
         const char_len = std.unicode.utf8Encode(cp, &char_buf) catch return ElzError.InvalidArgument;
 
-        // Allocate result string (length * char_len bytes)
-        const result = try env.allocator.alloc(u8, length * char_len);
+        // Allocate result string (length * char_len bytes).
+        const total = std.math.mul(usize, length, char_len) catch return ElzError.OutOfMemory;
+        const result = try env.allocator.alloc(u8, total);
         var i: usize = 0;
         while (i < length) : (i += 1) {
             @memcpy(result[i * char_len .. (i + 1) * char_len], char_buf[0..char_len]);
@@ -728,9 +723,16 @@ pub fn string_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args:
     var buf: [4]u8 = undefined;
     const char_len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
     const slice = try sliceByChars(s, args.items, 2);
-    // In-place fill: the fill character must have the same byte length as the
-    // characters it replaces, since strings cannot be resized in place.
-    if (slice.len % char_len != 0) return ElzError.InvalidArgument;
+    // In-place fill: every character being replaced must have the same byte
+    // length as the fill character, since a string cannot be resized in place.
+    // Checking the total length alone would let a 2-character region of mixed
+    // widths turn into a region with a different character count.
+    var scan: usize = 0;
+    while (scan < slice.len) {
+        const width = std.unicode.utf8ByteSequenceLength(slice[scan]) catch return ElzError.InvalidArgument;
+        if (width != char_len) return ElzError.InvalidArgument;
+        scan += width;
+    }
     const mutable: []u8 = @constCast(slice);
     var i: usize = 0;
     while (i + char_len <= mutable.len) : (i += char_len) {
@@ -785,4 +787,13 @@ test "string primitives" {
     try args.append(Value{ .character = 'a' });
     result = try char_eq(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == .boolean and result.boolean == true);
+}
+
+test "toI64 and toIndex reject values outside range without panicking" {
+    const testing = std.testing;
+    const huge_f = 9223372036854775808.0; // 2^63
+    const out_of_usize = 18446744073709551616.0; // 2^64
+    try testing.expectError(ElzError.InvalidArgument, toI64(Value{ .number = huge_f }));
+    try testing.expectError(ElzError.InvalidArgument, toIndex(Value{ .number = out_of_usize }));
+    try testing.expectError(ElzError.InvalidArgument, toI64(Value{ .number = 1.5 }));
 }

@@ -5,20 +5,10 @@ const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
-/// Writes a value in display mode (strings without quotes, chars as raw characters).
+/// Writes a value in display mode (strings without quotes, chars as raw
+/// characters), at every nesting level.
 fn writeDisplay(value: Value, w: anytype) !void {
-    switch (value) {
-        .string => |s| try w.writeAll(s),
-        .character => |c| {
-            if (c > 0x10FFFF) return;
-            const codepoint: u21 = @intCast(c);
-            if (!std.unicode.utf8ValidCodepoint(codepoint)) return;
-            var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(codepoint, &buf) catch return;
-            try w.writeAll(buf[0..@as(usize, @intCast(len))]);
-        },
-        else => try writer_mod.write(value, w),
-    }
+    try writer_mod.display(value, w);
 }
 
 /// `format` implements the `format` primitive function.

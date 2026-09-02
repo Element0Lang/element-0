@@ -51,3 +51,35 @@ test "no time limit by default" {
     try testing.expect(result == .exact_integer);
     try testing.expectEqual(@as(i64, 42), result.exact_integer);
 }
+
+test "filesystem access is disabled by flag" {
+    var interp = try elz.Interpreter.init(.{ .enable_filesystem = false });
+    defer interp.deinit();
+
+    var fuel: u64 = 100_000;
+    // The file operations are not bound at all.
+    try testing.expectError(elz.ElzError.SymbolNotFound, interp.evalString("(delete-file \"x\")", &fuel));
+    try testing.expectError(elz.ElzError.SymbolNotFound, interp.evalString("(open-output-file \"x\")", &fuel));
+    try testing.expectError(elz.ElzError.SymbolNotFound, interp.evalString("(load \"x\")", &fuel));
+    // `include` reads files at compile time, so it is refused there.
+    try testing.expectError(elz.ElzError.PermissionDenied, interp.evalString("(include \"tests/fixtures/include-me.elz\")", &fuel));
+    try testing.expectError(elz.ElzError.PermissionDenied, interp.evalString("(import \"tests/test_module_lib.elz\")", &fuel));
+}
+
+test "process access is disabled by flag" {
+    var interp = try elz.Interpreter.init(.{ .enable_process = false });
+    defer interp.deinit();
+
+    var fuel: u64 = 100_000;
+    try testing.expectError(elz.ElzError.SymbolNotFound, interp.evalString("(exit 0)", &fuel));
+    try testing.expectError(elz.ElzError.SymbolNotFound, interp.evalString("(getenv \"PATH\")", &fuel));
+}
+
+test "filesystem and process access stay available by default" {
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+
+    var fuel: u64 = 100_000;
+    const result = try interp.evalString("(file-exists? \"build.zig\")", &fuel);
+    try testing.expect(result == .boolean and result.boolean);
+}

@@ -6,18 +6,63 @@ const Value = core.Value;
 /// This protects against circular references and extremely deep nesting.
 const MAX_PRINT_DEPTH: usize = 1000;
 
-/// `write` prints a `Value` to the given writer in a human-readable format.
-/// This function is used by the `display` and `write` primitive functions, as well as the REPL.
+/// Writes a character as itself (display mode). Invalid code points are
+/// rendered as a placeholder rather than raising an error.
+fn writeCharRaw(c: u32, writer: anytype) !void {
+    if (c > 0x10FFFF) return writer.writeAll("invalid-char");
+    const codepoint: u21 = @intCast(c);
+    if (!std.unicode.utf8ValidCodepoint(codepoint)) return writer.writeAll("invalid-char");
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &buf) catch return writer.writeAll("invalid-char");
+    try writer.writeAll(buf[0..len]);
+}
+
+/// Writes an inexact real in its R7RS external representation. An inexact
+/// value always carries a decimal point or an exponent, so `1.0` never prints
+/// as `1` (which would read back as an exact integer), and the infinities and
+/// NaN use their standard spellings.
+pub fn writeFloat(n: f64, writer: anytype) !void {
+    if (std.math.isNan(n)) return writer.writeAll("+nan.0");
+    if (std.math.isInf(n)) return writer.writeAll(if (n > 0) "+inf.0" else "-inf.0");
+
+    var buf: [128]u8 = undefined;
+    const magnitude = @abs(n);
+    // Very large and very small magnitudes use exponent notation: the plain
+    // decimal expansion of, say, 1e300 would be 300 digits long.
+    if (magnitude != 0 and (magnitude >= 1e21 or magnitude < 1e-10)) {
+        const text = std.fmt.bufPrint(&buf, "{e}", .{n}) catch return error.WriteFailed;
+        return writer.writeAll(text);
+    }
+    const text = std.fmt.bufPrint(&buf, "{d}", .{n}) catch return error.WriteFailed;
+    try writer.writeAll(text);
+    // Shortest-round-trip formatting drops a trailing ".0"; put it back.
+    if (std.mem.indexOfAny(u8, text, ".e") == null) try writer.writeAll(".0");
+}
+
+/// How strings and characters are rendered. `write` produces machine-readable
+/// output (quoted strings, `#\a` characters); `display` produces human-readable
+/// output (raw string bytes and characters). The distinction applies at every
+/// nesting level, so `(display '("a" #\b))` prints `(a b)`.
+pub const Mode = enum { write, display };
+
+/// `write` prints a `Value` to the given writer in a machine-readable format.
+/// This function is used by the `write` primitive function, as well as the REPL.
 ///
 /// Parameters:
 /// - `value`: The `Value` to be written.
 /// - `writer`: The writer to print to. This can be any `std.io.Writer`.
 pub fn write(value: Value, writer: anytype) !void {
-    try writeWithDepth(value, writer, 0);
+    try writeWithDepth(value, writer, 0, .write);
+}
+
+/// `display` prints a `Value` in human-readable form: strings appear without
+/// quotes and characters as themselves, at every nesting level.
+pub fn display(value: Value, writer: anytype) !void {
+    try writeWithDepth(value, writer, 0, .display);
 }
 
 /// Internal function that tracks recursion depth to prevent stack overflow.
-fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
+fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void {
     if (depth > MAX_PRINT_DEPTH) {
         try writer.writeAll("...");
         return;
@@ -25,16 +70,20 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
 
     switch (value) {
         .symbol => |s| try writer.print("{s}", .{s}),
-        .number => |n| try writer.print("{d}", .{n}),
+        .number => |n| try writeFloat(n, writer),
         .exact_integer => |n| try writer.print("{d}", .{n}),
         .rational => |r| try writer.print("{d}/{d}", .{ r.numerator, r.denominator }),
-        .complex => |c| if (c.imag >= 0)
-            try writer.print("{d}+{d}i", .{ c.real, c.imag })
-        else
-            try writer.print("{d}{d}i", .{ c.real, c.imag }),
+        .complex => |c| {
+            try writeFloat(c.real, writer);
+            // The imaginary part always carries an explicit sign.
+            if (!std.math.signbit(c.imag) and std.math.isFinite(c.imag)) try writer.writeAll("+");
+            try writeFloat(c.imag, writer);
+            try writer.writeAll("i");
+        },
         .boolean => |b| try writer.writeAll(if (b) "#t" else "#f"),
         .nil => try writer.writeAll("()"),
         .character => |c| {
+            if (mode == .display) return writeCharRaw(c, writer);
             try writer.writeAll("#\\");
             switch (c) {
                 ' ' => try writer.writeAll("space"),
@@ -63,6 +112,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             }
         },
         .string => |s| {
+            if (mode == .display) return writer.writeAll(s);
             try writer.writeAll("\"");
             for (s) |c| {
                 switch (c) {
@@ -85,7 +135,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
                     try writer.writeAll("...");
                     break;
                 }
-                try writeWithDepth(current.car, writer, depth + 1);
+                try writeWithDepth(current.car, writer, depth + 1, mode);
                 switch (current.cdr) {
                     .pair => |next_p| {
                         try writer.writeAll(" ");
@@ -97,7 +147,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
                     },
                     else => {
                         try writer.writeAll(" . ");
-                        try writeWithDepth(current.cdr, writer, depth + 1);
+                        try writeWithDepth(current.cdr, writer, depth + 1, mode);
                         break;
                     },
                 }
@@ -119,7 +169,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             try writer.writeAll("#(");
             for (v.items, 0..) |item, i| {
                 if (i > 0) try writer.writeAll(" ");
-                try writeWithDepth(item, writer, depth + 1);
+                try writeWithDepth(item, writer, depth + 1, mode);
             }
             try writer.writeAll(")");
         },
@@ -167,6 +217,7 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize) !void {
             try writer.writeAll(")");
         },
         .continuation => try writer.writeAll("#<continuation>"),
+        .escape => try writer.writeAll("#<escape-continuation>"),
         .record_type => |rtd| {
             try writer.writeAll("#<record-type:");
             try writer.writeAll(rtd.name);
@@ -188,7 +239,21 @@ test "write simple values" {
 
     // Test number
     try write(Value{ .number = 42 }, &w);
+    try testing.expectEqualStrings("42.0", w.buffered());
+
+    // An inexact value is never written like an exact one.
+    w = .fixed(&buf);
+    try write(Value{ .number = 0.5 }, &w);
+    try testing.expectEqualStrings("0.5", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .exact_integer = 42 }, &w);
     try testing.expectEqualStrings("42", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .number = 1e300 }, &w);
+    try testing.expectEqualStrings("1e300", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .number = std.math.inf(f64) }, &w);
+    try testing.expectEqualStrings("+inf.0", w.buffered());
 
     // Test boolean
     w = .fixed(&buf);
@@ -209,6 +274,37 @@ test "write simple values" {
     w = .fixed(&buf);
     try write(Value{ .string = "hello" }, &w);
     try testing.expectEqualStrings("\"hello\"", w.buffered());
+
+    // Test complex numbers
+    var c1: core.Complex = .{ .real = 1.0, .imag = 2.0 };
+    var c2: core.Complex = .{ .real = 1.0, .imag = -2.0 };
+    var c3: core.Complex = .{ .real = 1.0, .imag = -0.0 };
+    var c4: core.Complex = .{ .real = 1.0, .imag = 0.0 };
+    var c5: core.Complex = .{ .real = 1.0, .imag = std.math.inf(f64) };
+    var c6: core.Complex = .{ .real = 1.0, .imag = -std.math.inf(f64) };
+    var c7: core.Complex = .{ .real = 1.0, .imag = std.math.nan(f64) };
+
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c1 }, &w);
+    try testing.expectEqualStrings("1.0+2.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c2 }, &w);
+    try testing.expectEqualStrings("1.0-2.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c3 }, &w);
+    try testing.expectEqualStrings("1.0-0.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c4 }, &w);
+    try testing.expectEqualStrings("1.0+0.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c5 }, &w);
+    try testing.expectEqualStrings("1.0+inf.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c6 }, &w);
+    try testing.expectEqualStrings("1.0-inf.0i", w.buffered());
+    w = .fixed(&buf);
+    try write(Value{ .complex = &c7 }, &w);
+    try testing.expectEqualStrings("1.0+nan.0i", w.buffered());
 }
 
 test "write deeply nested list - regression for stack overflow" {
@@ -225,7 +321,7 @@ test "write deeply nested list - regression for stack overflow" {
 
     const innermost = try allocator.create(core.Pair);
     try allocated_pairs.append(allocator, innermost);
-    innermost.* = .{ .car = Value{ .number = 500 }, .cdr = Value.nil };
+    innermost.* = .{ .car = Value{ .exact_integer = 500 }, .cdr = Value.nil };
     var current: Value = Value{ .pair = innermost };
 
     var depth: usize = 1;
@@ -237,7 +333,7 @@ test "write deeply nested list - regression for stack overflow" {
         const outer = try allocator.create(core.Pair);
         try allocated_pairs.append(allocator, outer);
         outer.* = .{
-            .car = Value{ .number = @floatFromInt(500 - depth) },
+            .car = Value{ .exact_integer = @intCast(500 - depth) },
             .cdr = Value{ .pair = wrapper },
         };
         current = Value{ .pair = outer };
@@ -266,7 +362,7 @@ test "write extremely deeply nested list - triggers depth limit" {
     while (depth < 1100) : (depth += 1) {
         const p = try allocator.create(core.Pair);
         p.* = .{
-            .car = Value{ .number = @floatFromInt(1100 - depth) },
+            .car = Value{ .exact_integer = @intCast(1100 - depth) },
             .cdr = current,
         };
         current = Value{ .pair = p };
@@ -301,7 +397,7 @@ test "write long flat list - regression for list depth limit" {
     while (i > 0) : (i -= 1) {
         const p = try allocator.create(core.Pair);
         p.* = .{
-            .car = Value{ .number = @floatFromInt(i) },
+            .car = Value{ .exact_integer = @intCast(i) },
             .cdr = current,
         };
         current = Value{ .pair = p };
@@ -333,8 +429,8 @@ test "write dotted pair" {
     const p = try allocator.create(core.Pair);
     defer allocator.destroy(p);
     p.* = .{
-        .car = Value{ .number = 1 },
-        .cdr = Value{ .number = 2 },
+        .car = Value{ .exact_integer = 1 },
+        .cdr = Value{ .exact_integer = 2 },
     };
 
     try write(Value{ .pair = p }, &w);
@@ -466,7 +562,7 @@ const LabelWriter = struct {
         return false;
     }
 
-    fn writeValue(self: *LabelWriter, value: Value, writer: anytype, depth: usize) !void {
+    fn writeValue(self: *LabelWriter, value: Value, writer: anytype, depth: usize, mode: Mode) !void {
         if (depth > MAX_PRINT_DEPTH) {
             try writer.writeAll("...");
             return;
@@ -481,13 +577,13 @@ const LabelWriter = struct {
                 try writer.writeAll("(");
                 var cur = value.pair;
                 while (true) {
-                    try self.writeValue(cur.car, writer, depth + 1);
+                    try self.writeValue(cur.car, writer, depth + 1, mode);
                     switch (cur.cdr) {
                         .pair => |next| {
                             // A labeled tail must print in dotted position.
                             if (self.labels.contains(@intFromPtr(next))) {
                                 try writer.writeAll(" . ");
-                                try self.writeValue(cur.cdr, writer, depth + 1);
+                                try self.writeValue(cur.cdr, writer, depth + 1, mode);
                                 break;
                             }
                             try writer.writeAll(" ");
@@ -496,7 +592,7 @@ const LabelWriter = struct {
                         .nil => break,
                         else => {
                             try writer.writeAll(" . ");
-                            try self.writeValue(cur.cdr, writer, depth + 1);
+                            try self.writeValue(cur.cdr, writer, depth + 1, mode);
                             break;
                         },
                     }
@@ -510,18 +606,18 @@ const LabelWriter = struct {
                 try writer.writeAll("#(");
                 for (v.items, 0..) |item, i| {
                     if (i > 0) try writer.writeAll(" ");
-                    try self.writeValue(item, writer, depth + 1);
+                    try self.writeValue(item, writer, depth + 1, mode);
                 }
                 try writer.writeAll(")");
             },
-            else => try write(value, writer),
+            else => try writeWithDepth(value, writer, depth, mode),
         }
     }
 };
 
 /// Writes `value` with datum labels: for cycles only (`write`), or for all
 /// shared structure (`write-shared`).
-pub fn writeLabeled(allocator: std.mem.Allocator, value: Value, writer: anytype, mode: LabelMode) !void {
+pub fn writeLabeled(allocator: std.mem.Allocator, value: Value, writer: anytype, label_mode: LabelMode, mode: Mode) !void {
     var analysis = AnalyzeState{ .allocator = allocator };
     defer analysis.deinit();
     try analysis.analyze(value);
@@ -532,14 +628,14 @@ pub fn writeLabeled(allocator: std.mem.Allocator, value: Value, writer: anytype,
     while (it.next()) |ptr| {
         try lw.labels.put(allocator, ptr.*, null);
     }
-    if (mode == .shared) {
+    if (label_mode == .shared) {
         var sit = analysis.shared.keyIterator();
         while (sit.next()) |ptr| {
             try lw.labels.put(allocator, ptr.*, null);
         }
     }
     if (lw.labels.count() == 0) {
-        return write(value, writer);
+        return writeWithDepth(value, writer, 0, mode);
     }
-    try lw.writeValue(value, writer, 0);
+    try lw.writeValue(value, writer, 0, mode);
 }
