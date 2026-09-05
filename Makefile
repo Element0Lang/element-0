@@ -128,7 +128,7 @@ release: ## Build in Release mode
 
 clean: ## Remove docs, build artifacts, and cache directories
 	@echo "Removing build artifacts, cache, generated docs, and junk files..."
-	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/api public
+	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/api site public
 
 lint: ## Check code style and formatting of Zig files
 	@echo "Running code style checks..."
@@ -138,13 +138,18 @@ format: ## Format Zig files
 	@echo "Formatting Zig files..."
 	@$(ZIG) fmt .
 
-docs: ## Generate API documentation
+docs: ## Build the documentation site (MkDocs plus the generated Zig API docs) into site/
 	@echo "Generating API documentation..."
 	@$(ZIG) build docs
+	@echo "Building the documentation site..."
+	@uv sync --extra docs
+	@uv run mkdocs build
 
-serve-docs: ## Serve the generated documentation on a local server
-	@echo "Serving API documentation locally..."
-	@cd docs/api && python3 -m http.server 8000
+serve-docs: ## Serve the documentation site locally with live reload
+	@echo "Serving the documentation site locally..."
+	@$(ZIG) build docs
+	@uv sync --extra docs
+	@uv run mkdocs serve
 
 install-deps: ## Install system dependencies (for Debian-based systems)
 	@echo "Installing system dependencies..."

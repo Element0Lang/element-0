@@ -283,7 +283,9 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
     return switch (@typeInfo(T)) {
         .void => core.Value.nil,
         .float, .comptime_float => core.Value{ .number = @floatCast(value) },
-        .int, .comptime_int => core.Value{ .number = @floatFromInt(value) },
+        // Integers stay exact; only a value outside the i64 range falls back to an inexact number.
+        .comptime_int => core.Value{ .exact_integer = value },
+        .int => if (std.math.cast(i64, value)) |i| core.Value{ .exact_integer = i } else core.Value{ .number = @floatFromInt(value) },
         .bool => core.Value{ .boolean = value },
         .pointer => |ptr_info| {
             if (ptr_info.size == .slice and ptr_info.child == u8) {

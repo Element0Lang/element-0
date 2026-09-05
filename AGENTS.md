@@ -91,8 +91,9 @@ The `Interpreter` struct in `interpreter.zig` ties these together and manages th
 Zig functions can be registered with the interpreter via `env_setup.define_foreign_func()`.
 This is the primary extension mechanism for embedding use cases.
 
-`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus two variadic forms:
-`(std.mem.Allocator, []const core.Value)` and `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)`.
+`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus one variadic form, `(std.mem.Allocator, []const core.Value)`.
+A function needing the primitive signature `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)` is bound
+directly as a `core.Value.procedure`, as `env_setup.zig` does for the built-ins.
 Parameter types supported by `Caster`: `f64`, integers, `bool`, `[]const u8`, `?T`, `core.Value`, Zig structs
 (mapped to/from Elz hash-maps by field name), and `ElzCallback` (an Elz closure or procedure wrapped for
 invocation from Zig). `valueFromNative` converts Zig scalars, strings, optionals, and structs back to `core.Value`.

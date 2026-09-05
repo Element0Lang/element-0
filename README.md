@@ -213,7 +213,9 @@ primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at m
 
 ### Documentation
 
-You can find the full API documentation for the latest release of Elz [here](https://element0lang.github.io/element-0/).
+The documentation site at [element0lang.github.io/element-0](https://element0lang.github.io/element-0/) has a getting
+started guide, the language reference, the list of built-in procedures, the embedding guide, and the generated Zig API
+reference. Its sources live in [docs](docs); build it locally with `make serve-docs`.
 
 #### Standard Library
 

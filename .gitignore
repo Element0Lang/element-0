@@ -97,6 +97,7 @@ uv.lock
 *_output.txt
 public/
 docs/api/
+site/
 *.o
 *.a
 *.so

@@ -1,0 +1,63 @@
+site_name: Element 0 Documentation
+site_description: A small embeddable Lisp for the Zig ecosystem
+repo_url: https://github.com/Element0Lang/element-0
+repo_name: Element0Lang/element-0
+site_url: https://element0lang.github.io/element-0/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - content.code.copy
+    - content.code.select
+    - navigation.tabs
+    - navigation.top
+    - navigation.tracking
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Element0Lang/element-0
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Language Reference: language-reference.md
+  - Procedures: procedures.md
+  - Embedding Guide: embedding.md
+  - Examples: examples.md
+  - Zig API Reference: api/index.html
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
