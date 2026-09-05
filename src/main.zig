@@ -22,7 +22,8 @@ fn currentTimeMs() i64 {
 
 fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     switch (value) {
-        .string => |s| {
+        .string => |ms| {
+            const s = ms.bytes;
             try writer.writeAll(s);
             if (s.len == 0 or s[s.len - 1] != '\n') {
                 try writer.writeAll("\n");
@@ -35,17 +36,21 @@ fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     }
 }
 
-fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
-    var forms = elz.parser.readAll(source, interpreter.allocator) catch |err| {
+/// Runs `source` and reports the first runtime error. Returns false when a form
+/// failed, so `--file` can exit with a non-zero status instead of hiding the
+/// failure from callers such as `zig build test-elz`.
+fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const u8) !bool {
+    var forms = elz.parser.readAllTracked(source, interpreter.allocator, source_name, &interpreter.source_locations) catch |err| {
         std.debug.print("Parse Error: {s}\n", .{@errorName(err)});
         return err;
     };
     defer forms.deinit(interpreter.allocator);
-    if (forms.items.len == 0) return;
+    if (forms.items.len == 0) return true;
 
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
         var fuel: u64 = std.math.maxInt(u64);
+        interpreter.last_error_message = null;
         last_result = interpreter.evalForm(&form, &fuel) catch |err| {
             var buffer: [4096]u8 = undefined;
             const stdout_file = std.Io.File.stdout();
@@ -56,11 +61,17 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
             if (interpreter.last_error_message) |msg| {
                 try stdout.print("Message: {s}\n", .{msg});
             }
+            if (interpreter.last_error_line) |line| {
+                const file = interpreter.last_error_file orelse "?";
+                try stdout.print("At: {s}:{d}\n", .{ file, line });
+                interpreter.last_error_line = null;
+                interpreter.last_error_file = null;
+            }
             try stdout.writeAll("In form: ");
             try elz.write(form, stdout);
             try stdout.writeAll("\n");
             try stdout.flush();
-            return;
+            return false;
         };
     }
 
@@ -72,6 +83,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8) !void {
         try displayValue(interpreter, last_result, stdout);
         try stdout.flush();
     }
+    return true;
 }
 
 fn repl(interpreter: *elz.Interpreter) !void {
@@ -101,6 +113,7 @@ fn repl(interpreter: *elz.Interpreter) !void {
             var last_result: elz.Value = .nil;
             for (forms.items) |form| {
                 var fuel: u64 = std.math.maxInt(u64);
+                interpreter.last_error_message = null;
                 last_result = interpreter.evalForm(&form, &fuel) catch |err| {
                     var buffer: [4096]u8 = undefined;
                     const stdout_file = std.Io.File.stdout();
@@ -183,7 +196,9 @@ fn rootExec(ctx: chilli.CommandContext) !void {
                 std.debug.print("[VERBOSE] Executing {d} bytes of source code...\n", .{source.len});
             }
 
-            try exec(interpreter, source);
+            if (!try exec(interpreter, source, filename)) {
+                std.process.exit(1);
+            }
             return;
         }
     }
@@ -202,6 +217,27 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     const interpreter_ptr = try elz.gc_allocator.create(elz.Interpreter);
     interpreter_ptr.* = try elz.Interpreter.init(.{});
     elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
+
+    // Capture argv for (command-line), in order.
+    {
+        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);
+        defer arg_it.deinit();
+        var argv_list = std.ArrayListUnmanaged(elz.core.Value).empty;
+        defer argv_list.deinit(elz.gc_allocator);
+        while (arg_it.next()) |arg| {
+            const copy = try elz.gc_allocator.dupe(u8, arg);
+            try argv_list.append(elz.gc_allocator, try elz.core.makeString(elz.gc_allocator, copy));
+        }
+        var argv: elz.core.Value = .nil;
+        var i = argv_list.items.len;
+        while (i > 0) {
+            i -= 1;
+            const link = try elz.gc_allocator.create(elz.core.Pair);
+            link.* = .{ .car = argv_list.items[i], .cdr = argv };
+            argv = elz.core.Value{ .pair = link };
+        }
+        interpreter_ptr.command_line = argv;
+    }
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();

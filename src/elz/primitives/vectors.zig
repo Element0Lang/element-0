@@ -9,9 +9,12 @@ const interpreter = @import("../interpreter.zig");
 /// Accepts `.exact_integer` (>= 0) and `.number` (non-negative integer-valued).
 fn toIndex(v: Value) ElzError!usize {
     return switch (v) {
-        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .exact_integer => |i| std.math.cast(usize, i) orelse ElzError.InvalidArgument,
         .number => |n| blk: {
-            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            // Reject non-finite and out-of-range values: `@intFromFloat` is
+            // illegal behavior unless the value fits the destination type.
+            if (!std.math.isFinite(n) or n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) break :blk ElzError.InvalidArgument;
             break :blk @intFromFloat(n);
         },
         else => ElzError.InvalidArgument,
@@ -30,7 +33,7 @@ pub fn make_vector(_: *interpreter.Interpreter, env: *core.Environment, args: co
     const items = try env.allocator.alloc(Value, length);
 
     for (items) |*item| {
-        item.* = try fill.deep_clone(env.allocator);
+        item.* = fill;
     }
 
     vec.* = .{ .items = items };
@@ -44,7 +47,7 @@ pub fn vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
     const items = try env.allocator.alloc(Value, args.items.len);
 
     for (args.items, 0..) |arg, i| {
-        items[i] = try arg.deep_clone(env.allocator);
+        items[i] = arg;
     }
 
     vec.* = .{ .items = items };
@@ -121,7 +124,7 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
     current = list;
     var i: usize = 0;
     while (current != .nil) {
-        items[i] = try current.pair.car.deep_clone(env.allocator);
+        items[i] = current.pair.car;
         current = current.pair.cdr;
         i += 1;
     }
@@ -132,14 +135,33 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
 
 /// `vector_fill_bang` fills every slot of a vector with a given value.
 /// Syntax: (vector-fill! vec fill)
-pub fn vector_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+/// Resolves optional [start [end]] arguments (from args index `from`) against
+/// an element count.
+fn rangeArgs(args: []const Value, from: usize, len: usize) ElzError!struct { start: usize, end: usize } {
+    if (args.len > from + 2) return ElzError.WrongArgumentCount;
+    var start: usize = 0;
+    var end: usize = len;
+    if (args.len > from) {
+        if (args[from] != .exact_integer or args[from].exact_integer < 0) return ElzError.InvalidArgument;
+        start = @intCast(args[from].exact_integer);
+    }
+    if (args.len > from + 1) {
+        if (args[from + 1] != .exact_integer or args[from + 1].exact_integer < 0) return ElzError.InvalidArgument;
+        end = @intCast(args[from + 1].exact_integer);
+    }
+    if (start > end or end > len) return ElzError.InvalidArgument;
+    return .{ .start = start, .end = end };
+}
+
+pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 2) return ElzError.WrongArgumentCount;
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
     const fill = args.items[1];
     const vec = vec_val.vector;
-    for (vec.items) |*slot| {
-        slot.* = try fill.deep_clone(env.allocator);
+    const r = try rangeArgs(args.items, 2, vec.items.len);
+    for (vec.items[r.start..r.end]) |*slot| {
+        slot.* = fill;
     }
     return Value.unspecified;
 }
@@ -147,20 +169,21 @@ pub fn vector_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, arg
 /// `vector_to_list` converts a vector to a list.
 /// Syntax: (vector->list vec)
 pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items.len < 1) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
     if (vec_val != .vector) return ElzError.InvalidArgument;
 
     const vec = vec_val.vector;
+    const r = try rangeArgs(args.items, 1, vec.items.len);
 
     var result: Value = Value.nil;
-    var i = vec.items.len;
-    while (i > 0) {
+    var i = r.end;
+    while (i > r.start) {
         i -= 1;
         const pair = try env.allocator.create(core.Pair);
         pair.* = .{
-            .car = try vec.items[i].deep_clone(env.allocator),
+            .car = vec.items[i],
             .cdr = result,
         };
         result = Value{ .pair = pair };

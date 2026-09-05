@@ -203,8 +203,8 @@
   (equal? (try (/ 1 0) (catch err 42)) 42))
 
 ;; Edge case: Cond with no matching clause
-(test-case "cond with no match returns nil"
-  (equal? (cond (#f 1) (#f 2)) '()))
+(test-case "cond with no match returns the unspecified value"
+  (eq? (cond (#f 1) (#f 2)) (if #f #f)))
 
 ;; Edge case: Cond with else
 (test-case "cond with else clause"
@@ -237,5 +237,424 @@
 ;; Edge case: Map over single element
 (test-case "map over single element"
   (equal? (map (lambda (x) (* x 2)) '(5)) '(10)))
+
+;; Regression: letrec broke outside a plain function-body position because it
+;; allocated locals in the current stack context (top level, argument position).
+(test-case "letrec value binding in argument position"
+  (= (letrec ((x 5)) x) 5))
+(test-case "letrec backward reference"
+  (= (letrec ((g (lambda () 42)) (f (lambda () (g)))) (f)) 42))
+(test-case "letrec mutual recursion"
+  (letrec ((even2? (lambda (n) (if (= n 0) #t (odd2? (- n 1)))))
+           (odd2? (lambda (n) (if (= n 0) #f (even2? (- n 1))))))
+    (and (even2? 10) (odd2? 9))))
+(test-case "letrec inside let body"
+  (= (let ((base 1))
+       (letrec ((f (lambda (n) (if (= n 0) base (f (- n 1))))))
+         (f 3)))
+     1))
+
+;; Regression: when and unless emitted a spurious pop after jump_if_false
+;; (which already pops the condition), corrupting the stack in value position.
+(test-case "when in argument position, true" (= (when #t 42) 42))
+(test-case "when in argument position, false" (equal? (when #f 42) (if #f #f)))
+(test-case "unless in argument position, false" (= (unless #f 42) 42))
+(test-case "when as statement"
+  (let ((acc 0))
+    (when #t (set! acc 1))
+    (unless #t (set! acc 2))
+    (= acc 1)))
+
+;; Regression: the arrow clause of cond allocated a temp local in the current
+;; stack context, corrupting the stack in argument position.
+(test-case "cond arrow in argument position"
+  (= 25 (cond ((+ 2 3) => (lambda (x) (* x x))) (else 0))))
+(test-case "cond arrow false clause in argument position"
+  (= 7 (cond (#f => (lambda (x) x)) (else 7))))
+
+;; R7RS lexical syntax added for the conformance suite.
+(test-case "block comment" (= (+ 1 #| ignored |# 2) 3))
+(test-case "nested block comment" (= (+ 1 #| a #| b |# c |# 2) 3))
+(test-case "datum comment mid-list" (equal? (list 1 #;2 3) '(1 3)))
+(test-case "datum comment at list end" (equal? (list 1 #;2) '(1)))
+(test-case "hex character literal" (char=? #\x41 #\A))
+(test-case "named character literals"
+  (and (char=? #\alarm (integer->char 7))
+       (char=? #\null (integer->char 0))
+       (char=? #\delete (integer->char 127))
+       (char=? #\escape (integer->char 27))))
+(test-case "delimiter character literal" (char=? #\; (string-ref ";" 0)))
+(test-case "hex string escape" (string=? "\x41;B" "AB"))
+(test-case "carriage return string escape" (char=? (string-ref "\r" 0) #\return))
+(test-case "hex integer literal" (= #x10 16))
+(test-case "octal integer literal" (= #o17 15))
+(test-case "binary integer literal" (= #b101 5))
+
+;; Regression: list and vector primitives deep-cloned their arguments and
+;; results, so mutation never propagated through shared structure and every
+;; car/cdr was O(n). They now share structure per R7RS.
+(test-case "set-car! through a cdr chain"
+  (let ((l (list 1 2 3)))
+    (set-car! (cdr l) 'x)
+    (equal? l '(1 x 3))))
+(test-case "cons shares its arguments"
+  (let* ((tail (list 2 3)) (l (cons 1 tail)))
+    (set-car! tail 'x)
+    (equal? l '(1 x 3))))
+(test-case "append shares the last list"
+  (let* ((tail (list 3 4)) (l (append (list 1 2) tail)))
+    (set-car! tail 'x)
+    (equal? l '(1 2 x 4))))
+(test-case "list-tail shares structure"
+  (let ((l (list 1 2 3)))
+    (set-car! (list-tail l 1) 'x)
+    (equal? l '(1 x 3))))
+(test-case "list elements keep identity"
+  (let* ((inner (list 1)) (l (list inner)))
+    (set-car! inner 'x)
+    (equal? l '((x)))))
+(test-case "make-vector shares the fill object"
+  (let* ((inner (list 1)) (v (make-vector 2 inner)))
+    (set-car! (vector-ref v 0) 'x)
+    (equal? (vector-ref v 1) '(x))))
+(test-case "vector->list shares elements"
+  (let* ((inner (list 1)) (v (vector inner)))
+    (set-car! (car (vector->list v)) 'x)
+    (equal? (vector-ref v 0) '(x))))
+
+;; --- Malformed special forms report errors instead of aborting ---
+;; The forms go through eval so the compile-time error is catchable.
+(test-case "malformed define is an error"
+  (eq? 'caught (try (eval '(define)) (catch e 'caught))))
+(test-case "malformed quote is an error"
+  (eq? 'caught (try (eval '(quote)) (catch e 'caught))))
+(test-case "malformed set! is an error"
+  (eq? 'caught (try (eval '(set! x)) (catch e 'caught))))
+(test-case "malformed lambda is an error"
+  (eq? 'caught (try (eval '(lambda)) (catch e 'caught))))
+(test-case "let binding without a value is an error"
+  (eq? 'caught (try (eval '(let ((x)) x)) (catch e 'caught))))
+(test-case "non-symbol let binding name is an error"
+  (eq? 'caught (try (eval '(let* ((1 2)) 3)) (catch e 'caught))))
+(test-case "improper body is an error"
+  (eq? 'caught (try (eval '(begin 1 . 2)) (catch e 'caught))))
+(test-case "non-list cond clause is an error"
+  (eq? 'caught (try (eval '(cond 1)) (catch e 'caught))))
+(test-case "improper argument list is an error"
+  (eq? 'caught (try (eval '(car 1 . 2)) (catch e 'caught))))
+(test-case "malformed do binding is an error"
+  (eq? 'caught (try (eval '(do ((i)) (#t))) (catch e 'caught))))
+
+;; --- set! requires an existing binding ---
+(test-case "set! on an unbound variable is an error"
+  (eq? 'caught (try (eval '(set! definitely-not-bound 1)) (catch e 'caught))))
+
+;; --- Escape continuations ---
+(test-case "an inner call/ec does not swallow an outer jump"
+  (= 11 (+ 10 (call/ec (lambda (out) (+ 1 (call/ec (lambda (in) (out 1)))))))))
+(test-case "try does not swallow a live escape jump"
+  (= 7 (call/ec (lambda (out) (try (out 7) (catch e 0))))))
+(test-case "an escape jumps out of map"
+  (eq? 'found (call/ec (lambda (out) (map (lambda (x) (if (= x 3) (out 'found) x)) '(1 2 3 4))))))
+(test-case "an escape continuation is a procedure"
+  (procedure? (call/ec (lambda (k) k))))
+
+;; --- equal? terminates on circular structure ---
+(test-case "equal? on two equal cyclic lists"
+  (let ((a (list 1 2)) (b (list 1 2)))
+    (set-cdr! (cdr a) a)
+    (set-cdr! (cdr b) b)
+    (equal? a b)))
+(test-case "equal? on two different cyclic lists"
+  (let ((a (list 1 2)) (b (list 1 3)))
+    (set-cdr! (cdr a) a)
+    (set-cdr! (cdr b) b)
+    (not (equal? a b))))
+
+;; --- Limits are reported, not wrapped around ---
+(test-case "a call with more than 255 arguments is an error"
+  (eq? 'caught (try (eval (cons '+ (make-list 300 1))) (catch e 'caught))))
+
+;; --- Arithmetic edge cases no longer abort the process ---
+(test-case "quotient at the i64 minimum promotes to a big integer"
+  (= 9223372036854775808 (quotient -9223372036854775808 -1)))
+(test-case "remainder at the i64 minimum is zero"
+  (= 0 (remainder -9223372036854775808 -1)))
+(test-case "even? rejects a float just past the i64 range"
+  (eq? 'caught (try (even? 9223372036854775808.0) (catch e 'caught))))
+(test-case "division by inexact zero yields an infinity"
+  (and (= (/ 1.0 0.0) +inf.0) (nan? (/ 0.0 0.0)) (= (/ -1 0.0) -inf.0)))
+(test-case "division by exact zero is still an error"
+  (eq? 'caught (try (/ 1.0 0) (catch e 'caught))))
+(test-case "mixed exact and inexact comparison is exact"
+  (and (not (= 9007199254740993 9007199254740992.0))
+       (< 9007199254740992.0 9007199254740993)
+       (= 1/2 0.5)))
+(test-case "integer division accepts inexact integers"
+  (and (= 3.0 (quotient 7.0 2)) (equal? (call-with-values (lambda () (floor/ 7.0 -2)) list) '(-4.0 -1.0))))
+(test-case "two-argument log"
+  (and (= 3.0 (log 8 2)) (= 2.0 (log 100 10))))
+(test-case "complex exp and expt do not drop the imaginary part"
+  (and (> (imag-part (expt 1+i 2)) 1.9) (> (imag-part (exp +i)) 0.8)))
+(test-case "max with a NaN argument is NaN regardless of order"
+  (and (nan? (max 1 +nan.0)) (nan? (max +nan.0 1))))
+(test-case "eqv? distinguishes 0.0 from -0.0"
+  (and (not (eqv? 0.0 -0.0)) (= 0.0 -0.0)))
+
+;; --- Reader and string->number ---
+(test-case "inf and nan read as symbols"
+  (and (symbol? 'inf) (symbol? 'nan) (symbol? 'infinity)))
+(test-case "string->number rejects digit separators and hex floats"
+  (and (not (string->number "1_000")) (not (string->number "0x10")) (not (string->number "inf"))))
+(test-case "string->number understands radix and exactness prefixes"
+  (and (= 255 (string->number "#xff")) (= 3/2 (string->number "#e1.5")) (= 5.0 (string->number "5." 10))))
+(test-case "exactness prefix on a decimal literal"
+  (and (= 3/2 #e1.5) (= 1000 #e1e3) (= 16.0 #i#x10)))
+(test-case "string line continuation"
+  (string=? "linecontinued" (read (open-input-string "\"line\\\n   continued\""))))
+
+;; --- Quasiquote ---
+(test-case "unquote in a dotted tail"
+  (equal? `(a . ,(+ 1 2)) '(a . 3)))
+(test-case "unquote in both halves of a pair"
+  (equal? `((,1 . ,2)) '((1 . 2))))
+(test-case "unquote-splicing inside a vector"
+  (equal? `#(1 ,@(list 2 3) 4) #(1 2 3 4)))
+(test-case "splicing a long list does not overflow the native stack"
+  (= 100000 (length `(,@(make-list 100000 0)))))
+
+;; --- Bodies and definitions ---
+(test-case "begin with definitions is spliced into a body"
+  (= 3 ((lambda () (begin (define a 1) (define b 2)) (+ a b)))))
+(test-case "define-values inside a body"
+  (equal? '(1 2) ((lambda () (define-values (a b) (values 1 2)) (list a b)))))
+(test-case "define-record-type inside a body"
+  (= 5 ((lambda () (define-record-type pt (mk x) pt? (x px)) (px (mk 5))))))
+(test-case "a define in expression context is a syntax error, not stack corruption"
+  (eq? 'caught (try (eval '(define (f) (when #t (define y 5)) (list 1 2 y))) (catch e 'caught))))
+
+;; --- Tail calls through derived forms ---
+(test-case "let* in tail position does not leak frames"
+  (letrec ((c (lambda (n) (let* ((m (- n 1))) (if (< m 0) 'ok (c m))))))
+    (eq? 'ok (c 200000))))
+(test-case "do in tail position does not leak frames"
+  (letrec ((c (lambda (n) (do ((i 0 (+ i 1))) ((= i 1) (if (= n 0) 'ok (c (- n 1))))))))
+    (eq? 'ok (c 200000))))
+(test-case "named let in tail position does not leak frames"
+  (letrec ((c (lambda (n) (let loop ((i 0)) (if (= i 1) (if (= n 0) 'ok (c (- n 1))) (loop (+ i 1)))))))
+    (eq? 'ok (c 200000))))
+
+;; --- guard and try keep same-frame mutations ---
+(test-case "set! inside a guard body is visible afterwards"
+  (= 1 (let ((n 0)) (guard (e (#t #f)) (set! n 1)) n)))
+(test-case "set! inside a guard handler is visible afterwards"
+  (equal? '(err boom)
+          ((lambda () (define result 'none) (guard (e (#t (set! result (list 'err e)))) (raise 'boom)) result))))
+(test-case "dynamic-wind after thunk runs when a guard catches"
+  (equal? '(in out caught)
+          (let ((log '()))
+            (guard (e (#t (set! log (cons 'caught log))))
+              (dynamic-wind (lambda () (set! log (cons 'in log)))
+                            (lambda () (raise 'x))
+                            (lambda () (set! log (cons 'out log)))))
+            (reverse log))))
+
+;; --- Delimited continuations share locals with closures ---
+(test-case "a closure sees a local mutated after the segment is resumed"
+  (= 5 (reset (let ((x 1)) (define (g) x) (shift k (k 0)) (set! x 5) (g)))))
+(test-case "a closure mutation after resumption is visible to the frame"
+  (= 7 (reset (let ((x 1)) (define (g) (set! x 7)) (shift k (k 0)) (g) x))))
+(test-case "a captured local persists across invocations of the continuation"
+  (equal? '(6 7)
+          (let ((r (reset (let ((x 5)) (define (g) x) (shift k k) (set! x (+ x 1)) (g)))))
+            (list (r 0) (r 0)))))
+
+;; --- Strings, ports, and the EOF object ---
+(test-case "global definitions alias the same string"
+  (equal? "zzz" (begin (define %s (make-string 3 #\a)) (define %t %s) (string-fill! %s #\z) %t)))
+(test-case "read-char returns whole characters"
+  (equal? '(#\h #\é #\é #\l) (let ((p (open-input-string "héllo"))) (list (read-char p) (peek-char p) (read-char p) (read-char p)))))
+(test-case "read-string reads k characters"
+  (string=? "hél" (read-string 3 (open-input-string "héllo"))))
+(test-case "the symbol eof is not the eof object"
+  (and (not (eof-object? 'eof)) (eq? 'eof (read (open-input-string "eof")))))
+(test-case "write escapes symbols that would not read back"
+  (string=? "|a b|" (let ((p (open-output-string))) (write '|a b| p) (get-output-string p))))
+(test-case "write-string accepts start and end"
+  (string=? "y" (let ((p (open-output-string))) (write-string "xyz" p 1 2) (get-output-string p))))
+(test-case "for-each takes several lists"
+  (equal? '(22 11) (let ((acc '())) (for-each (lambda (a b) (set! acc (cons (+ a b) acc))) '(1 2 3) '(10 20)) acc)))
+(test-case "memq finds a procedure by identity"
+  (pair? (memq car (list car))))
+
+;; --- Errors raised by primitives are error objects ---
+(test-case "a primitive type error is an error object"
+  (guard (e (#t (error-object? e))) (car 1)))
+(test-case "a failed file open is a file error"
+  (guard (e (#t (file-error? e))) (open-input-file "/nonexistent/definitely-missing")))
+(test-case "a parse failure is a read error"
+  (guard (e (#t (read-error? e))) (read (open-input-string "(1 2"))))
+(test-case "a raised non-error object is passed through unchanged"
+  (eq? 'x (guard (e (#t e)) (raise 'x))))
+
+;; --- Macro hygiene ---
+(test-case "a template may name a global defined later"
+  (begin
+    (define-syntax %call-helper (syntax-rules () ((_ x) (%helper x))))
+    (define (%use) (%call-helper 1))
+    (define (%helper x) (* x 10))
+    (= 10 (%use))))
+(test-case "a template may use when, unless, and =>"
+  (begin
+    (define-syntax %my-when (syntax-rules () ((_ c e ...) (when c e ...))))
+    (define-syntax %my-arrow (syntax-rules () ((_ v) (cond (v => (lambda (x) (list 'got x))) (else 'none)))))
+    (and (= 2 (%my-when #t 1 2)) (equal? '(got 5) (%my-arrow 5)))))
+(test-case "a definition introduced by a template stays hidden"
+  (begin
+    (define-syntax %my-def (syntax-rules () ((_) (define %hidden 42))))
+    (%my-def)
+    (eq? 'hidden (guard (e (#t 'hidden)) %hidden))))
+(test-case "a self-expanding macro is reported, not a crash"
+  (eq? 'caught (try (eval '(begin (define-syntax %loop (syntax-rules () ((_ n) (%loop n)))) (%loop 5))) (catch e 'caught))))
+
+;; --- Large and hostile inputs ---
+(test-case "apply passes more than 255 arguments to a primitive"
+  (= 49995000 (apply + (let loop ((i 9999) (acc '())) (if (< i 0) acc (loop (- i 1) (cons i acc)))))))
+(test-case "apply passes more than 255 arguments to a variadic closure"
+  (= 1000 (apply (lambda args (length args)) (make-list 1000 0))))
+(test-case "a call with exactly 255 arguments works"
+  (= 255 (length (eval (cons 'list (make-list 255 1))))))
+(test-case "length on a circular list is an error"
+  (let ((l (list 1 2))) (set-cdr! (cdr l) l) (eq? 'caught (try (length l) (catch e 'caught)))))
+(test-case "deep nesting through apply reports StackOverflow"
+  (letrec ((c (lambda (n) (apply (lambda (m) (if (= m 0) 'ok (c (- m 1)))) (list n)))))
+    (eq? 'caught (try (c 5000) (catch e 'caught)))))
+(test-case "delay-force chains force iteratively"
+  (letrec ((s (lambda (n) (if (= n 0) (delay 'done) (delay-force (s (- n 1)))))))
+    (eq? 'done (force (s 100000)))))
+(test-case "reading deeply nested data is an error, not a crash"
+  (eq? 'caught (try (read (open-input-string (string-append (make-string 5000 #\() (make-string 5000 #\))))) (catch e 'caught))))
+(test-case "writing deeply nested data terminates"
+  (string? (let loop ((i 0) (l 1))
+             (if (< i 5000)
+                 (loop (+ i 1) (list l))
+                 (let ((p (open-output-string))) (write l p) (get-output-string p))))))
+(test-case "json-deserialize decodes unicode escapes"
+  (string=? "é😀\n/" (json-deserialize "\"\\u00e9\\ud83d\\ude00\\n\\/\"")))
+(test-case "json-serialize reports a cyclic structure"
+  (let ((l (list 1))) (set-cdr! l l) (eq? 'caught (try (json-serialize l) (catch e 'caught)))))
+(test-case "json-deserialize rejects hostile nesting"
+  (eq? 'caught (try (json-deserialize (make-string 2000 #\[)) (catch e 'caught))))
+(test-case "time->components rejects out-of-range input"
+  (eq? 'caught (try (time->components 1e30) (catch e 'caught))))
+
+;; --- Strings are shared heap objects ---
+(test-case "string-set! may change the encoded width"
+  (equal? '("a🜀c" 3) (let ((s (string #\a #\b #\c))) (string-set! s 1 #\🜀) (list s (string-length s)))))
+(test-case "string-set! to a narrower character"
+  (string=? "abc" (let ((s (string-copy "aλc"))) (string-set! s 1 #\b) s)))
+(test-case "string-fill! with a wide character keeps the length"
+  (let ((s (string-copy "abcde"))) (string-fill! s #\λ 1 3) (and (string=? "aλλde" s) (= 5 (string-length s)))))
+(test-case "aliases observe a width-changing string-set!"
+  (let ((s (make-string 3 #\a))) (let ((t s)) (string-set! s 1 #\λ) (and (eq? s t) (string=? "aλa" t)))))
+(test-case "a string reached through a list is mutated in place"
+  (equal? '("λa") (let ((lst (list (make-string 2 #\a)))) (string-set! (car lst) 0 #\λ) lst)))
+(test-case "eqv? on strings is identity"
+  (let ((s (string-copy "abc"))) (and (eqv? s s) (not (eqv? s (string-copy "abc"))))))
+
+;; --- Reader: datum labels, fold-case, comments, escapes ---
+(test-case "datum label builds a cyclic list"
+  (let ((x (read (open-input-string "#0=(1 . #0#)")))) (and (= 1 (cadr x)) (eq? x (cdr x)))))
+(test-case "datum label shares structure"
+  (let ((x (read (open-input-string "(#0=(1 2 3) #0#)")))) (eq? (car x) (cadr x))))
+(test-case "datum label inside a vector"
+  (let ((v (read (open-input-string "#1=#(a #1#)")))) (eq? v (vector-ref v 1))))
+(test-case "fold-case directive lowercases symbols"
+  (and (eq? 'abc (read (open-input-string "#!fold-case ABC")))
+       (eq? 'ABC (read (open-input-string "#!fold-case #!no-fold-case ABC")))))
+(test-case "datum comment after a dotted tail"
+  (equal? '(a . b) (read (open-input-string "(a . b #;c)"))))
+(test-case "a commented-out dot is a read error"
+  (eq? 'err (guard (e (#t 'err)) (read (open-input-string "(a #;. b)")))))
+(test-case "backslash bar escapes a bar in a string"
+  (= 124 (char->integer (string-ref (read (open-input-string "\"\\|\"")) 0))))
+(test-case "reading from a closed port is an error"
+  (let ((in (open-input-string "abc"))) (close-input-port in) (eq? 'error (guard (e (#t 'error)) (read-char in)))))
+
+;; --- Unicode character data ---
+(test-case "character predicates cover non-ASCII letters and digits"
+  (and (char-alphabetic? #\Λ) (char-upper-case? #\Λ) (char-lower-case? #\λ) (char-numeric? #\๐) (char-whitespace? #\x3000)))
+(test-case "digit-value knows every decimal digit block"
+  (and (= 4 (digit-value #\٤)) (= 0 (digit-value #\૦)) (not (digit-value #\a))))
+(test-case "string case mappings may change length"
+  (and (string=? "SSA" (string-upcase "ßa")) (string=? "mass" (string-foldcase "Maß")) (string=? "s" (string-foldcase "ſ"))))
+(test-case "char-upcase uses the simple mapping"
+  (and (char=? #\ß (char-upcase #\ß)) (char=? #\Λ (char-upcase #\λ)) (char=? #\σ (char-foldcase #\ς))))
+(test-case "string-ci=? compares full case foldings"
+  (and (string-ci=? "Straße" "STRASSE") (string-ci=? "ΣΑΣ" "σας") (not (string-ci=? "a" "ab"))))
+
+;; --- Exact integers of any size ---
+(test-case "integer arithmetic promotes past the i64 range"
+  (and (= (expt 2 100) 1267650600228229401496703205376)
+       (= (* 4611686018427387904 2) 9223372036854775808)
+       (= (- -9223372036854775807 2) -9223372036854775809)))
+(test-case "results that fit an i64 come back as fixnums"
+  (and (exact-integer? (- (expt 2 64) (expt 2 64))) (= 4 (/ (expt 2 100) (expt 2 98))) (= 1024 (quotient (expt 2 100) (expt 2 90)))))
+(test-case "negating and abs of the i64 minimum"
+  (and (= (abs -9223372036854775808) 9223372036854775808) (= (- 0 -9223372036854775808) 9223372036854775808)))
+(test-case "big integer division family"
+  (and (= 2 (remainder (expt 2 100) 7)) (= 5 (modulo (- (expt 2 100)) 7))
+       (equal? '(1152921504606846976 0) (call-with-values (lambda () (exact-integer-sqrt (expt 2 120))) list))))
+(test-case "big integers compare exactly with each other and with floats"
+  (and (< (expt 2 100) (expt 2 101)) (> (expt 2 100) 1e29) (= (expt 2 100) 1.2676506002282294e30)
+       (eqv? (expt 2 100) (expt 2 100)) (not (eqv? (expt 2 100) (+ 1 (expt 2 100))))))
+(test-case "big integers read, print, and convert"
+  (and (= 123456789012345678901234567890 (string->number "123456789012345678901234567890"))
+       (string=? "1267650600228229401496703205376" (number->string (expt 2 100)))
+       (string=? "10000000000000000000000000" (number->string (expt 2 100) 16))
+       (= (exact 1e20) 100000000000000000000)
+       (= 1.2676506002282294e30 (inexact (expt 2 100)))))
+(test-case "gcd, lcm, and expt with big integers"
+  (and (= (gcd (expt 2 100) (expt 6 50)) (expt 2 50)) (= (lcm (expt 2 70) 3) (* 3 (expt 2 70)))
+       (= 1 (expt -1 (expt 2 100))) (eq? 'overflow (guard (e (#t 'overflow)) (expt 2 (expt 2 100))))))
+(test-case "factorial of 30"
+  (letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))))
+    (= (fact 30) 265252859812191058636308480000000)))
+
+;; --- Hygienic macro expansion ---
+(test-case "a template's free identifier means the definition-site binding"
+  (eq? 'outer (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))))
+(test-case "a template keyword survives use-site shadowing"
+  (eq? 'now (let-syntax ((my-when (syntax-rules () ((_ test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...))))))
+              (let ((if #t)) (my-when if (set! if 'now)) if))))
+(test-case "a use-site binding cannot capture a template's global reference"
+  (begin
+    (define-syntax %two (syntax-rules () ((_ x) (list x x))))
+    (equal? '(1 1) (let ((list vector)) (%two 1)))))
+(test-case "a template temporary cannot capture a user variable"
+  (begin
+    (define-syntax %my-or (syntax-rules () ((_ a b) (let ((t a)) (if t t b)))))
+    (= 5 (let ((if list) (t 5)) (%my-or #f t)))))
+(test-case "a template may mutate a definition-site local through shadowing"
+  (= 3 ((lambda () (let ((k 1)) (let-syntax ((bump (syntax-rules () ((_) (set! k (+ k 1)))))) (let ((k 50)) (bump) (bump)) k))))))
+(test-case "case datums in a template are data"
+  (begin
+    (define-syntax %my-case (syntax-rules () ((_ v) (case v ((foo) 'is-foo) ((1 2) 'small) (else => (lambda (x) x))))))
+    (equal? '(is-foo small 9) (list (%my-case 'foo) (%my-case 2) (%my-case 9)))))
+(test-case "quasiquoted data in a template is not renamed"
+  (begin
+    (define-syntax %my-qq (syntax-rules () ((_ x) `(a ,x ,@x))))
+    (equal? '(a (2 3) 2 3) (%my-qq (list 2 3)))))
+(test-case "a macro-defining macro resolves nested aliases"
+  (begin
+    (define-syntax %def-getter (syntax-rules () ((_ name val) (define-syntax name (syntax-rules () ((_) (list val val)))))))
+    (%def-getter %g 4)
+    (equal? '(4 4) (let ((list vector)) (%g)))))
+(test-case "an underscore among the literals matches itself"
+  (begin
+    (define-syntax %count (syntax-rules (_) ((_) 0) ((_ _) 1) ((_ _ _) 2) ((x . y) 'fail)))
+    (equal? '(2 0 fail) (list (%count _ _) (%count) (%count a b)))))
+(test-case "a let-syntax body is its own scope for definitions"
+  (= 1 (let () (define x 1) (let-syntax () (define x 2) #f) x)))
 
 (report-summary)

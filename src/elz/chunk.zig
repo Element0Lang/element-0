@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 const core = @import("core.zig");
 const Value = core.Value;
 
@@ -28,6 +29,10 @@ pub const OpCode = enum(u8) {
     tail_call, // a = argc; tail-call optimised
     return_val, // returns top of stack, pops call frame
 
+    // --- Delimited continuations ---
+    reset_prompt, // pops a thunk, pushes a prompt, calls the thunk
+    shift_capture, // pops a handler, captures up to the nearest prompt, calls handler(k)
+
     // --- Stack manipulation ---
     pop, // discard top of stack
     dup, // duplicate top of stack
@@ -47,6 +52,7 @@ pub const OpCode = enum(u8) {
     // --- Aggregate constructors ---
     make_list, // a = count; pops count items (first item pushed last), pushes list
     make_vector, // a = count; pops count items, pushes vector
+    list_to_vector, // replace the list on top with a vector of its elements
 
     // --- Quasiquote helpers ---
     append_lists, // pops two lists, pushes appended list (for splicing)
@@ -109,6 +115,10 @@ pub const FuncProto = struct {
     local_count: u8,
     /// Nested function prototypes compiled inside this one.
     sub_protos: std.ArrayList(*FuncProto),
+    /// Source line per instruction (parallel to `instructions`), 0 when unknown.
+    lines: std.ArrayList(u32),
+    /// Source file this function was compiled from, "" when unknown.
+    source_file: []const u8,
     /// Allocator used for all dynamic storage above.
     allocator: std.mem.Allocator,
 
@@ -122,6 +132,8 @@ pub const FuncProto = struct {
             .upval_descs = .empty,
             .local_count = 0,
             .sub_protos = .empty,
+            .lines = .empty,
+            .source_file = "",
             .allocator = allocator,
         };
     }
@@ -139,9 +151,9 @@ pub const FuncProto = struct {
         for (self.constants.items, 0..) |c, i| {
             if (c == .symbol and val == .symbol and
                 std.mem.eql(u8, c.symbol, val.symbol)) return @intCast(i);
-            if (c == .string and val == .string and
-                std.mem.eql(u8, c.string, val.string)) return @intCast(i);
         }
+        // Constant indices are two bytes wide.
+        if (self.constants.items.len >= std.math.maxInt(u16)) return errors.ElzError.TooManyLocals;
         const idx: u16 = @intCast(self.constants.items.len);
         try self.constants.append(self.allocator, val);
         return idx;

@@ -6,7 +6,7 @@ const interpreter = @import("../interpreter.zig");
 
 /// Checks if a value is a proper list (i.e., it ends with `nil`).
 /// Uses Floyd's tortoise-and-hare algorithm to detect cycles.
-fn isProperList(v: Value) bool {
+pub fn isProperList(v: Value) bool {
     var slow = v;
     var fast = v;
     while (true) {
@@ -19,16 +19,47 @@ fn isProperList(v: Value) bool {
     }
 }
 
+/// Identity of a compound value, for cycle detection.
+fn compoundPtr(v: Value) ?usize {
+    return switch (v) {
+        .pair => |p| @intFromPtr(p),
+        .vector => |vec| @intFromPtr(vec),
+        else => null,
+    };
+}
+
+/// After this many comparisons, `equal?` starts recording the node pairs it has
+/// visited so that circular structures terminate. The threshold keeps the common
+/// case (finite data) free of the bookkeeping cost.
+const cycle_check_after: usize = 10_000;
+
 /// An iterative implementation of `equal?` that is not vulnerable to stack
-/// overflow attacks.
+/// overflow attacks and terminates on circular structures.
 fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
     var stack = std.ArrayListUnmanaged(struct { a: Value, b: Value }).empty;
     defer stack.deinit(allocator);
     try stack.append(allocator, .{ .a = val1, .b = val2 });
 
+    const NodePair = struct { a: usize, b: usize };
+    var seen: std.AutoHashMapUnmanaged(NodePair, void) = .empty;
+    defer seen.deinit(allocator);
+    var steps: usize = 0;
+
     while (stack.pop()) |pair| {
         const a = pair.a;
         const b = pair.b;
+
+        steps += 1;
+        if (steps > cycle_check_after) {
+            if (compoundPtr(a)) |pa| {
+                if (compoundPtr(b)) |pb| {
+                    // A node pair seen before is either equal or part of a cycle
+                    // already being compared; either way, stop descending it.
+                    const entry = try seen.getOrPut(allocator, .{ .a = pa, .b = pb });
+                    if (entry.found_existing) continue;
+                }
+            }
+        }
 
         // If two values are pointer-equivalent or identical immediate values,
         // they are equal. This is a fast path.
@@ -44,7 +75,7 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
         // Perform structural comparison based on type.
         switch (a) {
             .string => |s1| {
-                if (!std.mem.eql(u8, s1, b.string)) return false;
+                if (!std.mem.eql(u8, s1.bytes, b.string.bytes)) return false;
             },
             .symbol => |s1| {
                 if (!std.mem.eql(u8, s1, b.symbol)) return false;
@@ -68,6 +99,9 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
                     try stack.append(allocator, .{ .a = v1.items[k], .b = v2.items[k] });
                 }
             },
+            .bytevector => |bv1| {
+                if (!std.mem.eql(u8, bv1.items, b.bytevector.items)) return false;
+            },
             else => {
                 // For all other types, if they have the same type but are not
                 // `eqv?`, they are not `equal?`. This handles numbers, booleans,
@@ -82,7 +116,7 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
 }
 
 /// Internal implementation of `eqv?`.
-fn is_eqv_internal(a: Value, b: Value) bool {
+pub fn is_eqv_internal(a: Value, b: Value) bool {
     return switch (a) {
         .nil => b == .nil,
         .boolean => |av| switch (b) {
@@ -90,11 +124,16 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .number => |av| switch (b) {
-            .number => |bv| av == bv,
+            // 0.0 and -0.0 are numerically equal but not eqv? (R7RS 6.1).
+            .number => |bv| av == bv and std.math.signbit(av) == std.math.signbit(bv),
             else => false,
         },
         .exact_integer => |av| switch (b) {
             .exact_integer => |bv| av == bv,
+            else => false,
+        },
+        .bigint => switch (b) {
+            .bigint => @import("../bigint.zig").order(a, b) == .eq,
             else => false,
         },
         .rational => |av| switch (b) {
@@ -110,7 +149,7 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .string => |av| switch (b) {
-            .string => |bv| av.ptr == bv.ptr,
+            .string => |bv| av == bv,
             else => false,
         },
         .pair => |av| switch (b) {
@@ -173,7 +212,28 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             .syntax_rules => |bv| av == bv,
             else => false,
         },
+        .bytevector => |av| switch (b) {
+            .bytevector => |bv| av == bv,
+            else => false,
+        },
+        .continuation => |av| switch (b) {
+            .continuation => |bv| av == bv,
+            else => false,
+        },
+        .escape => |av| switch (b) {
+            .escape => |bv| av == bv,
+            else => false,
+        },
+        .record_type => |av| switch (b) {
+            .record_type => |bv| av == bv,
+            else => false,
+        },
+        .record => |av| switch (b) {
+            .record => |bv| av == bv,
+            else => false,
+        },
         .unspecified => b == .unspecified,
+        .eof => b == .eof,
     };
 }
 
@@ -217,7 +277,7 @@ pub fn is_number(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 pub fn exact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = v == .exact_integer or v == .rational };
+    return Value{ .boolean = v == .exact_integer or v == .bigint or v == .rational };
 }
 
 /// `inexact_p` returns #t for inexact numeric types.
@@ -232,7 +292,7 @@ pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     return Value{ .boolean = switch (v) {
-        .exact_integer, .rational => true,
+        .exact_integer, .bigint, .rational => true,
         .number => |n| std.math.isFinite(n),
         else => false,
     } };
@@ -242,7 +302,7 @@ pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 pub fn real_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = v == .number or v == .exact_integer or v == .rational };
+    return Value{ .boolean = v == .number or v == .exact_integer or v == .bigint or v == .rational };
 }
 
 /// `complex_p` returns #t for any numeric type.
@@ -287,7 +347,7 @@ pub fn is_procedure(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     const v = args.items[0];
     // exhaustive switch to ensure we cover every Value variant
     return Value{ .boolean = switch (v) {
-        .procedure, .vm_closure, .foreign_procedure => true,
+        .procedure, .vm_closure, .foreign_procedure, .continuation, .escape => true,
         else => false,
     } };
 }
@@ -303,7 +363,7 @@ pub fn is_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     return Value{ .boolean = switch (v) {
-        .exact_integer => true,
+        .exact_integer, .bigint => true,
         .number => |n| std.math.isFinite(n) and @floor(n) == n,
         else => false,
     } };
@@ -403,4 +463,11 @@ test "predicate primitives" {
     try args.append(list2);
     result = try is_equal(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == .boolean and result.boolean == true);
+}
+
+/// `promise_p` checks if a value is a promise.
+/// Syntax: (promise? obj)
+pub fn promise_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    return Value{ .boolean = args.items[0] == .promise };
 }

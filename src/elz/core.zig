@@ -21,13 +21,13 @@ pub const Cell = struct {
     content: Value,
 };
 
-/// Returns a `Value` whose inline slices (symbol name, string bytes) are owned by
-/// `allocator`, while heap-allocated reference variants pass through unchanged so that
-/// aliased bindings observe each other's mutations.
+/// Returns a `Value` whose symbol name is owned by `allocator`. Strings and
+/// heap-allocated reference variants pass through unchanged, so aliased
+/// bindings observe each other's mutations (`string-set!` on a string reached
+/// through two global names must be visible through both).
 fn own_value_slices(value: Value, allocator: std.mem.Allocator) !Value {
     return switch (value) {
         .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-        .string => |s| Value{ .string = try allocator.dupe(u8, s) },
         else => value,
     };
 }
@@ -71,6 +71,16 @@ pub const Environment = struct {
     /// Returns:
     /// The `Value` bound to the symbol, or `ElzError.SymbolNotFound` if the symbol is not found.
     pub fn get(self: *const Environment, name: []const u8, interp: *interpreter.Interpreter) ElzError!Value {
+        if (self.lookup(name)) |value| return value;
+        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Symbol '{s}' not found.", .{name}) catch null;
+        return ElzError.SymbolNotFound;
+    }
+
+    /// Looks a symbol up without reporting an error. Callers that treat a miss
+    /// as an ordinary outcome (such as the compiler probing for a macro) must
+    /// use this, so a failed probe does not leave a misleading message behind
+    /// in `interp.last_error_message`.
+    pub fn lookup(self: *const Environment, name: []const u8) ?Value {
         var current_env: ?*const Environment = self;
         while (current_env) |env| {
             if (env.bindings.capacity() > 0) {
@@ -83,8 +93,7 @@ pub const Environment = struct {
             }
             current_env = env.outer;
         }
-        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Symbol '{s}' not found.", .{name}) catch null;
-        return ElzError.SymbolNotFound;
+        return null;
     }
 
     /// Checks if a symbol is bound in the current environment or any of its outer environments.
@@ -125,6 +134,13 @@ pub const Environment = struct {
         const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
         _ = interp;
+    }
+
+    /// Removes a binding from this environment only. Returns true when a
+    /// binding was present. Used to undo the compile-time transformer bindings
+    /// that `let-syntax` installs for the extent of its body.
+    pub fn remove(self: *Environment, name: []const u8) bool {
+        return self.bindings.remove(name);
     }
 
     /// Updates the value of an existing symbol in the current environment or any of its outer environments.
@@ -205,13 +221,43 @@ pub const CallFrame = struct {
     stack_base: usize,
 };
 
+/// An escape continuation created by `call/ec` (and by `call/cc`, which is
+/// escape-only). Invoking it unwinds to the `call/ec` frame that created it:
+/// the `id` lets that frame recognise its own jump, so an inner `call/ec` no
+/// longer swallows a jump aimed at an outer one. `active` becomes false once
+/// the creating frame has returned, which makes a stale invocation reportable.
+pub const Escape = struct {
+    id: u64,
+    active: bool = true,
+};
+
+/// A delimited continuation captured by `shift`: the value-stack and frame
+/// segment between the enclosing `reset` prompt and the shift call site.
+/// Frame stack_base values are stored relative to the prompt base, so the
+/// segment can be reinstated at any stack position (multi-shot).
+pub const Continuation = struct {
+    stack: []Value,
+    frames: []CallFrame,
+    /// Upvalues that were open into the captured segment when it was taken.
+    /// Reinstating the segment re-opens them onto the new copy, so closures
+    /// created inside the segment and the resumed frames share one location.
+    upvals: []CapturedUpvalue = &.{},
+
+    pub const CapturedUpvalue = struct {
+        upvalue: *Upvalue,
+        /// Stack slot relative to the prompt base.
+        offset: usize,
+    };
+};
+
 /// Represents a macro transformer in Element 0.
 /// Macros are procedures that transform code before evaluation.
 pub const Macro = struct {
     /// The name of the macro (for error messages).
     name: []const u8,
-    /// The parameter names of the macro transformer.
-    params: ValueList,
+    /// The transformer's formals, as written: a proper list, dotted list, or
+    /// single rest symbol. Arity is checked by the lambda built at expansion.
+    formals: Value,
     /// The body of the macro transformer.
     body: Value,
     /// The environment in which the macro was defined.
@@ -240,6 +286,9 @@ pub const SyntaxRulesMacro = struct {
     /// The ellipsis marker (default "..."). Set to "" when "..." is lexically rebound,
     /// or to a custom symbol for the R7RS `(syntax-rules <ellipsis> ...)` form.
     ellipsis: []const u8,
+    /// Identity of the compiler scope the transformer was defined in (0 for
+    /// none). Free identifiers a template introduces resolve from that scope.
+    def_scope_id: u64 = 0,
 };
 
 /// A pointer to a native Zig function that can be called from Elz.
@@ -281,10 +330,36 @@ pub fn normalizeRational(n: i64, d: i64, allocator: std.mem.Allocator) ElzError!
     return Value{ .rational = r };
 }
 
+/// An arbitrary-precision exact integer. Only values that do not fit in an
+/// i64 are represented this way; see bigint.zig for the arithmetic.
+pub const BigInt = struct {
+    /// Little-endian magnitude limbs, normalized (no leading zero limbs).
+    limbs: []const std.math.big.Limb,
+    positive: bool,
+};
+
 /// A complex number with inexact real and imaginary parts.
 pub const Complex = struct {
     real: f64,
     imag: f64,
+};
+
+/// A mutable fixed-size array of bytes.
+pub const Bytevector = struct {
+    items: []u8,
+};
+
+/// A record type descriptor created by define-record-type. Type identity is
+/// pointer identity: two definitions with the same name are distinct types.
+pub const RecordType = struct {
+    name: []const u8,
+    field_names: [][]const u8,
+};
+
+/// A record instance. `fields` is indexed in the order of the type's field_names.
+pub const Record = struct {
+    rtd: *RecordType,
+    fields: []Value,
 };
 
 /// A dynamic-wind frame: a (before, after) pair pushed onto the interpreter
@@ -369,8 +444,12 @@ pub const Port = struct {
     is_open: bool,
     /// Name used in error messages and `write` output.
     name: []const u8,
-    /// One-byte lookahead buffer used by `peekChar`.
-    peek_buffer: ?u8 = null,
+    /// Bytes read ahead by the peek operations and not yet consumed.
+    pushback: [4]u8 = undefined,
+    pushback_len: u8 = 0,
+    pushback_pos: u8 = 0,
+    /// Whether this is a binary port (bytevector or binary file backed).
+    binary: bool = false,
 
     pub const Kind = union(enum) {
         /// An OS file handle.
@@ -469,33 +548,55 @@ pub const Port = struct {
         self.is_open = false;
     }
 
+    /// Reads one line, without its terminating delimiter (LF, CRLF, or CR, per
+    /// R7RS). Returns null only at end of input: a blank line yields an empty
+    /// string, and a line of any length is returned whole.
     pub fn readLine(self: *Port, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.is_input or !self.is_open) return null;
-        var buf: [4096]u8 = undefined;
-        var len: usize = 0;
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        var saw_input = false;
 
-        while (len < buf.len - 1) {
+        while (true) {
             const c_opt = try self.readChar();
             if (c_opt == null) {
-                if (len == 0) return null;
+                if (!saw_input) return null; // end of input before any character
                 break;
             }
+            saw_input = true;
             const c = c_opt.?;
             if (c == '\n') break;
-            buf[len] = c;
-            len += 1;
+            if (c == '\r') {
+                if (try self.peekChar()) |next| {
+                    if (next == '\n') _ = try self.readChar();
+                }
+                break;
+            }
+            try out.append(allocator, c);
         }
 
-        if (len == 0) return null;
-        return try allocator.dupe(u8, buf[0..len]);
+        return try out.toOwnedSlice(allocator);
     }
 
-    pub fn readChar(self: *Port) !?u8 {
-        if (!self.is_input or !self.is_open) return null;
-        if (self.peek_buffer) |c| {
-            self.peek_buffer = null;
-            return c;
-        }
+    /// Number of bytes peeked but not yet consumed.
+    pub fn pendingBytes(self: *const Port) usize {
+        return self.pushback_len - self.pushback_pos;
+    }
+
+    /// Discards any peeked bytes.
+    pub fn clearPushback(self: *Port) void {
+        self.pushback_len = 0;
+        self.pushback_pos = 0;
+    }
+
+    fn unreadBytes(self: *Port, bytes: []const u8) void {
+        // Only called when the pushback buffer has been fully consumed.
+        @memcpy(self.pushback[0..bytes.len], bytes);
+        self.pushback_len = @intCast(bytes.len);
+        self.pushback_pos = 0;
+    }
+
+    fn readRawByte(self: *Port) !?u8 {
         switch (self.kind) {
             .file => |fk| {
                 var buf: [1]u8 = undefined;
@@ -513,15 +614,56 @@ pub const Port = struct {
         }
     }
 
-    pub fn peekChar(self: *Port) !?u8 {
+    pub fn readChar(self: *Port) !?u8 {
         if (!self.is_input or !self.is_open) return null;
-        if (self.peek_buffer) |c| return c;
-        const c_opt = try self.readChar();
-        if (c_opt) |c| {
-            self.peek_buffer = c;
+        if (self.pushback_pos < self.pushback_len) {
+            const c = self.pushback[self.pushback_pos];
+            self.pushback_pos += 1;
+            if (self.pushback_pos == self.pushback_len) self.clearPushback();
             return c;
         }
-        return null;
+        return self.readRawByte();
+    }
+
+    pub fn peekChar(self: *Port) !?u8 {
+        if (!self.is_input or !self.is_open) return null;
+        if (self.pushback_pos < self.pushback_len) return self.pushback[self.pushback_pos];
+        const c = (try self.readRawByte()) orelse return null;
+        self.unreadBytes(&.{c});
+        return c;
+    }
+
+    /// Reads one UTF-8 encoded character. Invalid sequences yield the
+    /// replacement character so a text port never returns half a character.
+    pub fn readCodepoint(self: *Port) !?u32 {
+        const first = (try self.readChar()) orelse return null;
+        const len = std.unicode.utf8ByteSequenceLength(first) catch return 0xFFFD;
+        if (len == 1) return first;
+        var buf: [4]u8 = undefined;
+        buf[0] = first;
+        var i: usize = 1;
+        while (i < len) : (i += 1) {
+            buf[i] = (try self.readChar()) orelse return 0xFFFD;
+        }
+        return std.unicode.utf8Decode(buf[0..len]) catch 0xFFFD;
+    }
+
+    /// Returns the next character without consuming it.
+    pub fn peekCodepoint(self: *Port) !?u32 {
+        if (!self.is_input or !self.is_open) return null;
+        var buf: [4]u8 = undefined;
+        var n: usize = 0;
+        const first = (try self.readChar()) orelse return null;
+        buf[0] = first;
+        n = 1;
+        const len = std.unicode.utf8ByteSequenceLength(first) catch 1;
+        while (n < len) : (n += 1) {
+            const c = (try self.readChar()) orelse break;
+            buf[n] = c;
+        }
+        self.unreadBytes(buf[0..n]);
+        if (n != len) return 0xFFFD;
+        return std.unicode.utf8Decode(buf[0..n]) catch 0xFFFD;
     }
 
     pub fn writeString(self: *Port, str: []const u8) !void {
@@ -533,6 +675,25 @@ pub const Port = struct {
         }
     }
 };
+
+/// A mutable string. `bytes` holds UTF-8 and is replaced wholesale when an
+/// in-place edit changes the encoded length.
+pub const MString = struct {
+    bytes: []u8,
+};
+
+/// Wraps `bytes` (already owned by `allocator`) as a string value.
+pub fn makeString(allocator: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const s = allocator.create(MString) catch return error.OutOfMemory;
+    s.* = .{ .bytes = @constCast(bytes) };
+    return Value{ .string = s };
+}
+
+/// Copies `bytes` into a fresh string value.
+pub fn copyString(allocator: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const owned = allocator.dupe(u8, bytes) catch return error.OutOfMemory;
+    return makeString(allocator, owned);
+}
 
 /// Represents zero or more return values produced by `values`. A continuation expecting
 /// a single value but receiving a `MultiValues` is an error in standard Scheme.
@@ -551,6 +712,12 @@ pub const Promise = struct {
     forced: bool,
     /// The cached result, valid only when `forced` is true.
     result: Value,
+    /// True for promises made by `delay-force`: a promise-valued result is
+    /// forced in turn rather than being the value.
+    is_delay_force: bool = false,
+    /// Set when another promise adopted this one's computation; forcing this
+    /// promise then forces that one.
+    forward: ?*Promise = null,
 };
 
 /// `Value` is the core data type in the Elz interpreter.
@@ -560,8 +727,10 @@ pub const Value = union(enum) {
     symbol: []const u8,
     /// A floating-point number (inexact real).
     number: f64,
-    /// An exact integer.
+    /// An exact integer that fits in 64 bits.
     exact_integer: i64,
+    /// An exact integer outside the i64 range (see bigint.zig).
+    bigint: *BigInt,
     /// An exact rational number (heap-allocated, GCD-reduced).
     rational: *Rational,
     /// A complex number with inexact real and imaginary parts.
@@ -570,8 +739,9 @@ pub const Value = union(enum) {
     pair: *Pair,
     /// A single character.
     character: u32,
-    /// A string of characters.
-    string: []const u8,
+    /// A string of characters. Strings are heap objects so that aliases share
+    /// one buffer and `string-set!` can change a character's byte width.
+    string: *MString,
     /// A boolean value (`#t` or `#f`).
     boolean: bool,
     /// A VM-compiled closure (bytecode + upvalues).
@@ -600,10 +770,22 @@ pub const Value = union(enum) {
     multi_values: *MultiValues,
     /// A `syntax-rules` based macro transformer.
     syntax_rules: *SyntaxRulesMacro,
+    /// A bytevector (mutable fixed-size byte array).
+    bytevector: *Bytevector,
+    /// A delimited continuation captured by shift.
+    continuation: *Continuation,
+    /// An escape continuation created by `call/ec` or `call/cc`.
+    escape: *Escape,
+    /// A record type descriptor created by define-record-type.
+    record_type: *RecordType,
+    /// A record instance.
+    record: *Record,
     /// The `nil` or empty list value.
     nil,
     /// An unspecified or void value.
     unspecified,
+    /// The end-of-file object returned by the read procedures.
+    eof,
 
     /// Checks if the `Value` is a specific symbol.
     ///
@@ -620,20 +802,22 @@ pub const Value = union(enum) {
         };
     }
 
-    /// Returns the numeric value as f64 if this is any numeric type, or null otherwise.
+    /// Returns the numeric value as f64 if this is a real numeric type, or null
+    /// otherwise. A complex number has no single real value, so callers that
+    /// only handle reals reject it instead of silently using the real part.
     pub fn asFloat(self: Value) ?f64 {
         return switch (self) {
             .number => |n| n,
             .exact_integer => |n| @floatFromInt(n),
+            .bigint => |b| @import("bigint.zig").toF64(b),
             .rational => |r| @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator)),
-            .complex => |c| c.real,
             else => null,
         };
     }
 
     /// Returns true if this value is any numeric type.
     pub fn isNumeric(self: Value) bool {
-        return self == .number or self == .exact_integer or self == .rational or self == .complex;
+        return self == .number or self == .exact_integer or self == .bigint or self == .rational or self == .complex;
     }
 
     /// Creates a deep copy of the `Value`.
@@ -649,7 +833,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .nil, .unspecified => self,
+            .number, .exact_integer, .bigint, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified, .eof => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;
@@ -660,7 +844,7 @@ pub const Value = union(enum) {
                 new_c.* = c.*;
                 break :blk Value{ .complex = new_c };
             },
-            .string => |s| Value{ .string = try allocator.dupe(u8, s) },
+            .string => |s| try copyString(allocator, s.bytes),
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
                 new_pair.* = .{
@@ -701,7 +885,7 @@ pub const Value = union(enum) {
             .pointer => |p| switch (p.size) {
                 .slice => blk: {
                     const s = try allocator.dupe(u8, v);
-                    break :blk Value{ .string = s };
+                    break :blk (try makeString(allocator, s));
                 },
                 else => @compileError("Unsupported pointer type"),
             },
@@ -737,15 +921,15 @@ test "core environment" {
 
     // Test get from outer environment
     var outer_env = try Environment.init(allocator, null);
-    try outer_env.set(&interp_stub, "y", Value{ .string = "hello" });
+    try outer_env.set(&interp_stub, "y", (try makeString(allocator, "hello")));
     var inner_env = try Environment.init(allocator, outer_env);
     value = try inner_env.get("y", &interp_stub);
-    try testing.expectEqualStrings("hello", value.string);
+    try testing.expectEqualStrings("hello", value.string.bytes);
 
     // Test update on outer environment
-    try inner_env.update(&interp_stub, "y", Value{ .string = "world" });
+    try inner_env.update(&interp_stub, "y", (try makeString(allocator, "world")));
     value = try outer_env.get("y", &interp_stub);
-    try testing.expectEqualStrings("world", value.string);
+    try testing.expectEqualStrings("world", value.string.bytes);
 
     // Test update on symbol not found
     const err = inner_env.update(&interp_stub, "z", Value{ .number = 0 });

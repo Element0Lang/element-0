@@ -31,7 +31,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz bench test test-elz test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -106,6 +106,10 @@ test-elz: ## Run Element 0 standard library tests
 	@echo "Running Element 0 standard library tests..."
 	@$(ZIG) build test-elz $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
 
+test-conformance: build ## Run the vendored R7RS conformance suite and report a score
+	@echo "Running the R7RS conformance suite..."
+	@./zig-out/bin/elz-repl --file tests/r7rs_conformance.elz | tail -6
+
 test-prop: ## Run property-based tests
 	@echo "Running property-based tests..."
 	@$(ZIG) build test-prop $(BUILD_OPTS) -j$(JOBS) $(TEST_FLAGS)
@@ -124,7 +128,7 @@ release: ## Build in Release mode
 
 clean: ## Remove docs, build artifacts, and cache directories
 	@echo "Removing build artifacts, cache, generated docs, and junk files..."
-	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/api public
+	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/zig-api site public
 
 lint: ## Check code style and formatting of Zig files
 	@echo "Running code style checks..."
@@ -134,13 +138,18 @@ format: ## Format Zig files
 	@echo "Formatting Zig files..."
 	@$(ZIG) fmt .
 
-docs: ## Generate API documentation
+docs: ## Build the documentation site (MkDocs plus the generated Zig API docs) into site/
 	@echo "Generating API documentation..."
 	@$(ZIG) build docs
+	@echo "Building the documentation site..."
+	@uv sync --extra docs
+	@uv run mkdocs build
 
-serve-docs: ## Serve the generated documentation on a local server
-	@echo "Serving API documentation locally..."
-	@cd docs/api && python3 -m http.server 8000
+serve-docs: ## Serve the documentation site locally with live reload
+	@echo "Serving the documentation site locally..."
+	@$(ZIG) build docs
+	@uv sync --extra docs
+	@uv run mkdocs serve
 
 install-deps: ## Install system dependencies (for Debian-based systems)
 	@echo "Installing system dependencies..."

@@ -75,6 +75,84 @@
 (test-case "abs -3 = 3" (= (abs -3) 3))
 (test-case "abs -3/4 = 3/4" (= (abs -3/4) 3/4))
 
+;; --- Rational accessors ---
+(test-case "numerator 3/4" (= (numerator 3/4) 3))
+(test-case "denominator 3/4" (= (denominator 3/4) 4))
+(test-case "numerator of integer" (= (numerator 5) 5))
+(test-case "denominator of integer" (= (denominator 5) 1))
+(test-case "denominator of zero" (= (denominator 0) 1))
+(test-case "numerator is exact" (exact? (numerator 3/4)))
+(test-case "numerator of negative rational" (= (numerator -3/4) -3))
+(test-case "denominator of inexact" (= (denominator 0.5) 2.0))
+(test-case "denominator of inexact is inexact" (inexact? (denominator 0.5)))
+
+;; --- rationalize ---
+(test-case "rationalize 3/10 by 1/10" (= (rationalize 3/10 1/10) 1/3))
+(test-case "rationalize exact is exact" (exact? (rationalize 3/10 1/10)))
+(test-case "rationalize inexact is inexact" (inexact? (rationalize .3 1/10)))
+(test-case "rationalize inexact value" (= (rationalize .3 1/10) (exact->inexact 1/3)))
+(test-case "rationalize integer zero tolerance" (= (rationalize 5 0) 5))
+
+;; --- Complex accessors ---
+(test-case "make-rectangular is not real" (not (real? (make-rectangular 3 4))))
+(test-case "make-rectangular is complex" (complex? (make-rectangular 3 4)))
+(test-case "real-part of 3+4i" (= (real-part (make-rectangular 3 4)) 3.0))
+(test-case "imag-part of 3+4i" (= (imag-part (make-rectangular 3 4)) 4.0))
+(test-case "magnitude of 3+4i" (= (magnitude (make-rectangular 3 4)) 5.0))
+(test-case "make-polar on real axis" (< (abs (- (real-part (make-polar 2 0)) 2.0)) 1e-9))
+(test-case "angle of i" (< (abs (- (angle (make-rectangular 0 1)) 1.5707963267948966)) 1e-9))
+(test-case "real-part of real" (= (real-part 5) 5))
+(test-case "imag-part of real is zero" (= (imag-part 5) 0))
+(test-case "imag-part of inexact real is exact" (exact? (imag-part 5.0)))
+(test-case "magnitude of negative real" (= (magnitude -3) 3))
+(test-case "magnitude of rational stays exact" (= (magnitude -3/4) 3/4))
+(test-case "angle of negative real" (< (abs (- (angle -1) 3.141592653589793)) 1e-9))
+(test-case "angle of positive real is zero" (= (angle 2) 0))
+
+;; --- R7RS numeric names ---
+(test-case "exact of 3.0" (and (exact? (exact 3.0)) (= (exact 3.0) 3)))
+(test-case "exact of 0.5 is 1/2" (= (exact 0.5) 1/2))
+(test-case "inexact->exact 0.5 is 1/2" (= (inexact->exact 0.5) 1/2))
+(test-case "inexact of 1/2" (and (inexact? (inexact 1/2)) (= (inexact 1/2) 0.5)))
+(test-case "exact-integer? on int" (exact-integer? 3))
+(test-case "exact-integer? on rational" (not (exact-integer? 1/2)))
+(test-case "exact-integer? on float" (not (exact-integer? 3.0)))
+(test-case "square of exact" (= (square 7) 49))
+(test-case "square of rational" (= (square 2/3) 4/9))
+(test-case "square of inexact" (= (square 1.5) 2.25))
+(test-case "finite? on float" (finite? 3.0))
+(test-case "finite? on exact" (finite? 3))
+(test-case "infinite? on inf" (infinite? (exp 1000)))
+(test-case "not infinite? on 1.0" (not (infinite? 1.0)))
+(test-case "nan? on nan" (nan? (- (exp 1000) (exp 1000))))
+(test-case "not nan? on 1.0" (not (nan? 1.0)))
+
+;; --- exact-integer-sqrt ---
+(test-case "exact-integer-sqrt 17"
+  (call-with-values (lambda () (exact-integer-sqrt 17))
+                    (lambda (s r) (and (= s 4) (= r 1)))))
+(test-case "exact-integer-sqrt 16"
+  (call-with-values (lambda () (exact-integer-sqrt 16))
+                    (lambda (s r) (and (= s 4) (= r 0)))))
+(test-case "exact-integer-sqrt 0"
+  (call-with-values (lambda () (exact-integer-sqrt 0))
+                    (lambda (s r) (and (= s 0) (= r 0)))))
+
+;; --- floor/ and truncate/ families ---
+(test-case "floor/ 7 2"
+  (call-with-values (lambda () (floor/ 7 2))
+                    (lambda (q r) (and (= q 3) (= r 1)))))
+(test-case "floor/ -7 2"
+  (call-with-values (lambda () (floor/ -7 2))
+                    (lambda (q r) (and (= q -4) (= r 1)))))
+(test-case "floor-quotient -7 2" (= (floor-quotient -7 2) -4))
+(test-case "floor-remainder -7 2" (= (floor-remainder -7 2) 1))
+(test-case "truncate/ -7 2"
+  (call-with-values (lambda () (truncate/ -7 2))
+                    (lambda (q r) (and (= q -3) (= r -1)))))
+(test-case "truncate-quotient -7 2" (= (truncate-quotient -7 2) -3))
+(test-case "truncate-remainder -7 2" (= (truncate-remainder -7 2) -1))
+
 ;; --- Summary ---
 (newline)
 (display "--------------------") (newline)

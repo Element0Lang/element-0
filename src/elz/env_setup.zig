@@ -9,6 +9,8 @@ const io = @import("./primitives/io.zig");
 const modules = @import("./primitives/modules.zig");
 const process = @import("./primitives/process.zig");
 const vectors = @import("./primitives/vectors.zig");
+const records = @import("./primitives/records.zig");
+const bytevectors = @import("./primitives/bytevectors.zig");
 const hashmaps = @import("./primitives/hashmaps.zig");
 const ports = @import("./primitives/ports.zig");
 const os = @import("./primitives/os.zig");
@@ -43,6 +45,29 @@ pub fn populate_math(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "max", core.Value{ .procedure = math.max });
     try interp.root_env.set(interp, "min", core.Value{ .procedure = math.min });
     try interp.root_env.set(interp, "%", core.Value{ .procedure = math.mod });
+    try interp.root_env.set(interp, "exact", core.Value{ .procedure = math.inexact_to_exact });
+    try interp.root_env.set(interp, "inexact", core.Value{ .procedure = math.exact_to_inexact });
+    try interp.root_env.set(interp, "exact-integer?", core.Value{ .procedure = math.exact_integer_p });
+    try interp.root_env.set(interp, "exact-integer-sqrt", core.Value{ .procedure = math.exact_integer_sqrt });
+    try interp.root_env.set(interp, "square", core.Value{ .procedure = math.square_fn });
+    try interp.root_env.set(interp, "finite?", core.Value{ .procedure = math.finite_p });
+    try interp.root_env.set(interp, "infinite?", core.Value{ .procedure = math.infinite_p });
+    try interp.root_env.set(interp, "nan?", core.Value{ .procedure = math.nan_p });
+    try interp.root_env.set(interp, "floor/", core.Value{ .procedure = math.floor_div });
+    try interp.root_env.set(interp, "floor-quotient", core.Value{ .procedure = math.floor_quotient });
+    try interp.root_env.set(interp, "floor-remainder", core.Value{ .procedure = math.floor_remainder });
+    try interp.root_env.set(interp, "truncate/", core.Value{ .procedure = math.truncate_div });
+    try interp.root_env.set(interp, "truncate-quotient", core.Value{ .procedure = math.truncate_quotient });
+    try interp.root_env.set(interp, "truncate-remainder", core.Value{ .procedure = math.truncate_remainder });
+    try interp.root_env.set(interp, "numerator", core.Value{ .procedure = math.numerator_fn });
+    try interp.root_env.set(interp, "denominator", core.Value{ .procedure = math.denominator_fn });
+    try interp.root_env.set(interp, "rationalize", core.Value{ .procedure = math.rationalize_fn });
+    try interp.root_env.set(interp, "make-rectangular", core.Value{ .procedure = math.make_rectangular });
+    try interp.root_env.set(interp, "make-polar", core.Value{ .procedure = math.make_polar });
+    try interp.root_env.set(interp, "real-part", core.Value{ .procedure = math.real_part });
+    try interp.root_env.set(interp, "imag-part", core.Value{ .procedure = math.imag_part });
+    try interp.root_env.set(interp, "magnitude", core.Value{ .procedure = math.magnitude });
+    try interp.root_env.set(interp, "angle", core.Value{ .procedure = math.angle });
     try interp.root_env.set(interp, "floor", core.Value{ .procedure = math.floor_fn });
     try interp.root_env.set(interp, "ceiling", core.Value{ .procedure = math.ceiling });
     try interp.root_env.set(interp, "round", core.Value{ .procedure = math.round_fn });
@@ -79,6 +104,7 @@ pub fn populate_lists(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "map", core.Value{ .procedure = lists.map });
     try interp.root_env.set(interp, "list-ref", core.Value{ .procedure = lists.list_ref });
     try interp.root_env.set(interp, "list-tail", core.Value{ .procedure = lists.list_tail });
+    try interp.root_env.set(interp, "list-set!", core.Value{ .procedure = lists.list_set_bang });
     try interp.root_env.set(interp, "memq", core.Value{ .procedure = lists.memq });
     try interp.root_env.set(interp, "assq", core.Value{ .procedure = lists.assq });
     try interp.root_env.set(interp, "pair?", core.Value{ .procedure = lists.is_pair });
@@ -137,6 +163,11 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "char-upper-case?", core.Value{ .procedure = strings.char_upper_case_p });
     try interp.root_env.set(interp, "char-lower-case?", core.Value{ .procedure = strings.char_lower_case_p });
     try interp.root_env.set(interp, "char-upcase", core.Value{ .procedure = strings.char_upcase });
+    try interp.root_env.set(interp, "char-foldcase", core.Value{ .procedure = strings.char_foldcase });
+    try interp.root_env.set(interp, "digit-value", core.Value{ .procedure = strings.digit_value });
+    try interp.root_env.set(interp, "string-upcase", core.Value{ .procedure = strings.string_upcase });
+    try interp.root_env.set(interp, "string-downcase", core.Value{ .procedure = strings.string_downcase });
+    try interp.root_env.set(interp, "string-foldcase", core.Value{ .procedure = strings.string_foldcase });
     try interp.root_env.set(interp, "char-downcase", core.Value{ .procedure = strings.char_downcase });
     try interp.root_env.set(interp, "char->integer", core.Value{ .procedure = strings.char_to_integer });
     try interp.root_env.set(interp, "integer->char", core.Value{ .procedure = strings.integer_to_char });
@@ -169,7 +200,7 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_control(interp: *interpreter.Interpreter) !void {
+pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     try interp.root_env.set(interp, "apply", core.Value{ .procedure = control.apply });
     try interp.root_env.set(interp, "eval", core.Value{ .procedure = control.eval_proc });
     try interp.root_env.set(interp, "call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
@@ -179,7 +210,28 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "dynamic-wind", core.Value{ .procedure = control.dynamic_wind });
     try interp.root_env.set(interp, "force", core.Value{ .procedure = control.force });
     try interp.root_env.set(interp, "make-promise", core.Value{ .procedure = control.make_promise });
+    try interp.root_env.set(interp, "%%make-delayed%%", core.Value{ .procedure = control.make_delayed });
     try interp.root_env.set(interp, "values", core.Value{ .procedure = control.values });
+    try interp.root_env.set(interp, "error", core.Value{ .procedure = control.error_fn });
+    try interp.root_env.set(interp, "raise", core.Value{ .procedure = control.raise_fn });
+    if (flags.enable_process) {
+        try interp.root_env.set(interp, "get-environment-variables", core.Value{ .procedure = os.get_environment_variables });
+    }
+    try interp.root_env.set(interp, "command-line", core.Value{ .procedure = os.command_line });
+    try interp.root_env.set(interp, "promise?", core.Value{ .procedure = predicates.promise_p });
+    try interp.root_env.set(interp, "raise-continuable", core.Value{ .procedure = control.raise_continuable_fn });
+    try interp.root_env.set(interp, "with-exception-handler", core.Value{ .procedure = control.with_exception_handler });
+    // The built-in record type behind error objects; accessors live in std.elz.
+    {
+        const rtd = try interp.allocator.create(core.RecordType);
+        const field_names = try interp.allocator.alloc([]const u8, 3);
+        field_names[0] = "kind";
+        field_names[1] = "message";
+        field_names[2] = "irritants";
+        rtd.* = .{ .name = "error-object", .field_names = field_names };
+        interp.error_rtd = rtd;
+        try interp.root_env.set(interp, "%error-rtd", core.Value{ .record_type = rtd });
+    }
     try interp.root_env.set(interp, "call-with-values", core.Value{ .procedure = control.call_with_values });
     // Internal primitive backing the try/catch special form; not user-facing.
     try interp.root_env.set(interp, "%%try%%", core.Value{ .procedure = control.prim_try });
@@ -189,11 +241,16 @@ pub fn populate_control(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_io(interp: *interpreter.Interpreter) !void {
+pub fn populate_io(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     try interp.root_env.set(interp, "display", core.Value{ .procedure = io.display });
     try interp.root_env.set(interp, "write", core.Value{ .procedure = io.write_proc });
+    try interp.root_env.set(interp, "write-shared", core.Value{ .procedure = io.write_shared_proc });
+    try interp.root_env.set(interp, "write-simple", core.Value{ .procedure = io.write_simple_proc });
     try interp.root_env.set(interp, "newline", core.Value{ .procedure = io.newline });
-    try interp.root_env.set(interp, "load", core.Value{ .procedure = io.load });
+    // `load` reads and runs a file, so it also needs filesystem access.
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "load", core.Value{ .procedure = io.load });
+    }
     try interp.root_env.set(interp, "read-string", core.Value{ .procedure = io.read_string });
 }
 
@@ -209,7 +266,10 @@ pub fn populate_modules(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_process(interp: *interpreter.Interpreter) !void {
+pub fn populate_process(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    // `exit` terminates the host process, so it is unavailable when process
+    // access is disabled.
+    if (!flags.enable_process) return;
     try interp.root_env.set(interp, "exit", core.Value{ .procedure = process.exit });
 }
 
@@ -217,13 +277,17 @@ pub fn populate_process(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_os(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set(interp, "getenv", core.Value{ .procedure = os.getenv });
-    try interp.root_env.set(interp, "file-exists?", core.Value{ .procedure = os.file_exists });
-    try interp.root_env.set(interp, "delete-file", core.Value{ .procedure = os.delete_file });
-    try interp.root_env.set(interp, "current-directory", core.Value{ .procedure = os.current_directory });
-    try interp.root_env.set(interp, "directory-list", core.Value{ .procedure = os.directory_list });
-    try interp.root_env.set(interp, "rename-file", core.Value{ .procedure = os.rename_file });
+pub fn populate_os(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    if (flags.enable_process) {
+        try interp.root_env.set(interp, "getenv", core.Value{ .procedure = os.getenv });
+    }
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "file-exists?", core.Value{ .procedure = os.file_exists });
+        try interp.root_env.set(interp, "delete-file", core.Value{ .procedure = os.delete_file });
+        try interp.root_env.set(interp, "current-directory", core.Value{ .procedure = os.current_directory });
+        try interp.root_env.set(interp, "directory-list", core.Value{ .procedure = os.directory_list });
+        try interp.root_env.set(interp, "rename-file", core.Value{ .procedure = os.rename_file });
+    }
 }
 
 /// Populates the interpreter's root environment with date/time primitive functions.
@@ -251,6 +315,22 @@ pub fn populate_vectors(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "list->vector", core.Value{ .procedure = vectors.list_to_vector });
     try interp.root_env.set(interp, "vector->list", core.Value{ .procedure = vectors.vector_to_list });
     try interp.root_env.set(interp, "vector-fill!", core.Value{ .procedure = vectors.vector_fill_bang });
+    try interp.root_env.set(interp, "bytevector", core.Value{ .procedure = bytevectors.bytevector });
+    try interp.root_env.set(interp, "make-bytevector", core.Value{ .procedure = bytevectors.make_bytevector });
+    try interp.root_env.set(interp, "bytevector?", core.Value{ .procedure = bytevectors.bytevector_p });
+    try interp.root_env.set(interp, "bytevector-length", core.Value{ .procedure = bytevectors.bytevector_length });
+    try interp.root_env.set(interp, "bytevector-u8-ref", core.Value{ .procedure = bytevectors.bytevector_u8_ref });
+    try interp.root_env.set(interp, "bytevector-u8-set!", core.Value{ .procedure = bytevectors.bytevector_u8_set_bang });
+    try interp.root_env.set(interp, "bytevector-copy", core.Value{ .procedure = bytevectors.bytevector_copy });
+    try interp.root_env.set(interp, "bytevector-copy!", core.Value{ .procedure = bytevectors.bytevector_copy_bang });
+    try interp.root_env.set(interp, "bytevector-append", core.Value{ .procedure = bytevectors.bytevector_append });
+    try interp.root_env.set(interp, "utf8->string", core.Value{ .procedure = bytevectors.utf8_to_string });
+    try interp.root_env.set(interp, "string->utf8", core.Value{ .procedure = bytevectors.string_to_utf8 });
+    try interp.root_env.set(interp, "%make-record-type", core.Value{ .procedure = records.make_record_type });
+    try interp.root_env.set(interp, "%make-record", core.Value{ .procedure = records.make_record });
+    try interp.root_env.set(interp, "%record-of-type?", core.Value{ .procedure = records.record_of_type_p });
+    try interp.root_env.set(interp, "%record-ref", core.Value{ .procedure = records.record_ref });
+    try interp.root_env.set(interp, "%record-set!", core.Value{ .procedure = records.record_set_bang });
 }
 
 /// Populates the interpreter's root environment with hash map primitive functions.
@@ -310,9 +390,31 @@ pub fn populate_globals(interp: *interpreter.Interpreter) !void {
 ///
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
-pub fn populate_ports(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
-    try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+pub fn populate_ports(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
+    if (flags.enable_filesystem) {
+        try interp.root_env.set(interp, "open-input-file", core.Value{ .procedure = ports.open_input_file });
+        try interp.root_env.set(interp, "open-output-file", core.Value{ .procedure = ports.open_output_file });
+        try interp.root_env.set(interp, "open-binary-input-file", core.Value{ .procedure = ports.open_binary_input_file });
+        try interp.root_env.set(interp, "open-binary-output-file", core.Value{ .procedure = ports.open_binary_output_file });
+    }
+    try interp.root_env.set(interp, "eof-object", core.Value{ .procedure = ports.eof_object });
+    try interp.root_env.set(interp, "open-input-bytevector", core.Value{ .procedure = ports.open_input_bytevector });
+    try interp.root_env.set(interp, "open-output-bytevector", core.Value{ .procedure = ports.open_output_bytevector });
+    try interp.root_env.set(interp, "get-output-bytevector", core.Value{ .procedure = ports.get_output_bytevector });
+    try interp.root_env.set(interp, "read-u8", core.Value{ .procedure = ports.read_u8 });
+    try interp.root_env.set(interp, "peek-u8", core.Value{ .procedure = ports.peek_u8 });
+    try interp.root_env.set(interp, "u8-ready?", core.Value{ .procedure = ports.u8_ready_p });
+    try interp.root_env.set(interp, "write-u8", core.Value{ .procedure = ports.write_u8 });
+    try interp.root_env.set(interp, "read-bytevector", core.Value{ .procedure = ports.read_bytevector });
+    try interp.root_env.set(interp, "read-bytevector!", core.Value{ .procedure = ports.read_bytevector_bang });
+    try interp.root_env.set(interp, "write-bytevector", core.Value{ .procedure = ports.write_bytevector });
+    try interp.root_env.set(interp, "binary-port?", core.Value{ .procedure = ports.binary_port_p });
+    try interp.root_env.set(interp, "textual-port?", core.Value{ .procedure = ports.textual_port_p });
+    try interp.root_env.set(interp, "close-port", core.Value{ .procedure = ports.close_port });
+    try interp.root_env.set(interp, "input-port-open?", core.Value{ .procedure = ports.input_port_open_p });
+    try interp.root_env.set(interp, "output-port-open?", core.Value{ .procedure = ports.output_port_open_p });
+    try interp.root_env.set(interp, "flush-output-port", core.Value{ .procedure = ports.flush_output_port });
+    try interp.root_env.set(interp, "current-error-port", core.Value{ .procedure = ports.current_error_port });
     try interp.root_env.set(interp, "open-input-string", core.Value{ .procedure = ports.open_input_string });
     try interp.root_env.set(interp, "open-output-string", core.Value{ .procedure = ports.open_output_string });
     try interp.root_env.set(interp, "get-output-string", core.Value{ .procedure = ports.get_output_string });

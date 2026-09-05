@@ -65,4 +65,152 @@
 (test-case "nested when"
   (= (when #t (when #t 99)) 99))
 
+;; --- Full syntax-rules: nested and mid-list ellipsis ---
+
+(define-syntax my-let
+  (syntax-rules ()
+    ((_ ((name val) ...) body1 body2 ...)
+     ((lambda (name ...) body1 body2 ...) val ...))))
+(test-case "my-let over lambda"
+  (= (my-let ((a 1) (b 2)) (+ a b)) 3))
+
+(define-syntax firsts
+  (syntax-rules ()
+    ((_ (x y ...) ...) '(x ...))))
+(test-case "nested ellipsis, outer vars"
+  (equal? (firsts (1 2 3) (4 5) (6)) '(1 4 6)))
+
+(define-syntax rests
+  (syntax-rules ()
+    ((_ (x y ...) ...) '((y ...) ...))))
+(test-case "nested ellipsis, inner groups"
+  (equal? (rests (1 2 3) (4 5) (6)) '((2 3) (5) ())))
+
+(define-syntax splice-all
+  (syntax-rules ()
+    ((_ (x ...) ...) '(x ... ...))))
+(test-case "double ellipsis splices one level"
+  (equal? (splice-all (1 2) (3) (4 5 6)) '(1 2 3 4 5 6)))
+
+(define-syntax mid
+  (syntax-rules ()
+    ((_ a ... b) '(b a ...))))
+(test-case "mid-list ellipsis"
+  (equal? (mid 1 2 3) '(3 1 2)))
+(test-case "mid-list ellipsis with zero repetitions"
+  (equal? (mid 7) '(7)))
+
+(define-syntax second-of
+  (syntax-rules ()
+    ((_ _ x) x)))
+(test-case "underscore wildcard"
+  (= (second-of 1 2) 2))
+
+(define-syntax ooo-list
+  (syntax-rules ooo ()
+    ((_ x ooo) '(x ooo))))
+(test-case "custom ellipsis identifier"
+  (equal? (ooo-list 1 2 3) '(1 2 3)))
+
+(define-syntax literal-ellipsis
+  (syntax-rules ()
+    ((_) '(... (a ...)))))
+(test-case "ellipsis escape in template"
+  (equal? (literal-ellipsis) '(a ...)))
+
+(test-case "syntax-error raises at expansion"
+  (try
+    (begin
+      (eval '(begin
+               (define-syntax boom (syntax-rules () ((_) (syntax-error "boom"))))
+               (boom)))
+      #f)
+    (catch e #t)))
+
+
+;; --- Derived forms (R7RS) ---
+
+(test-case "let-values basic"
+  (equal? (let-values (((a b) (values 1 2)) ((c) (values 3))) (list a b c)) '(1 2 3)))
+(test-case "let-values with rest formals"
+  (equal? (let-values (((a . rest) (values 1 2 3))) (list a rest)) '(1 (2 3))))
+(test-case "let*-values sees earlier bindings"
+  (equal? (let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (list a b c)) '(1 2 3)))
+
+(define-values (dv-a dv-b) (values 10 20))
+(test-case "define-values at top level" (= (+ dv-a dv-b) 30))
+
+(define cl (case-lambda ((x) 'one) ((x y) 'two) ((x . rest) 'many)))
+(test-case "case-lambda one arg" (equal? (cl 1) 'one))
+(test-case "case-lambda two args" (equal? (cl 1 2) 'two))
+(test-case "case-lambda rest clause" (equal? (cl 1 2 3) 'many))
+(test-case "case-lambda no match raises"
+  (try (begin (cl) #f) (catch e #t)))
+
+(test-case "features includes r7rs" (and (memq 'r7rs (features)) #t))
+(test-case "cond-expand matching feature" (= (cond-expand (elz 1) (else 2)) 1))
+(test-case "cond-expand else" (= (cond-expand (unknown-feature 1) (else 2)) 2))
+(test-case "cond-expand and-or-not"
+  (= (cond-expand ((and r7rs (not unknown-feature)) 1) (else 2)) 1))
+
+(test-case "error is catchable" (try (begin (error "boom" 1 2) #f) (catch e #t)))
+
+(test-case "case with arrow" (= (case 5 ((5) => (lambda (x) (* x 10))) (else 0)) 50))
+(test-case "case else arrow" (= (case 9 ((5) 1) (else => (lambda (x) x))) 9))
+
+;; --- Datum patterns ---
+(define-syntax classify
+  (syntax-rules ()
+    ((_ 0) 'zero)
+    ((_ 1) 'one)
+    ((_ x) (list 'other x))))
+(test-case "an exact integer datum pattern matches"
+  (and (eq? (classify 0) 'zero)
+       (eq? (classify 1) 'one)
+       (equal? (classify 9) '(other 9))))
+
+;; --- Vectors in patterns and templates ---
+(define-syntax vec-of
+  (syntax-rules ()
+    ((_ a b) #(a b))))
+(test-case "a vector template substitutes pattern variables"
+  (equal? (vec-of 1 2) #(1 2)))
+
+(define-syntax split-vec
+  (syntax-rules ()
+    ((_ #(a b ...)) (list a (list b ...)))))
+(test-case "a vector pattern matches with an ellipsis"
+  (equal? (split-vec #(1 2 3)) '(1 (2 3))))
+
+;; --- Hygiene ---
+(define-syntax use-later-helper
+  (syntax-rules ()
+    ((_ x) (%macro-test-helper x))))
+(define (%macro-test-helper y) (* y 10))
+(test-case "a template may reference a global defined later"
+  (= (use-later-helper 4) 40))
+
+(define-syntax swap-pair!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(define %swap-left 1)
+(define tmp 2)
+(test-case "a template temporary does not capture a user binding"
+  (begin (swap-pair! %swap-left tmp)
+         (and (= %swap-left 2) (= tmp 1))))
+
+;; --- let-syntax scoping ---
+(define-syntax outer-marker
+  (syntax-rules ()
+    ((_ x) (list 'outer x))))
+(test-case "let-syntax shadows a transformer only in its body"
+  (and (equal? (let-syntax ((outer-marker (syntax-rules () ((_ x) (list 'inner x)))))
+                 (outer-marker 1))
+               '(inner 1))
+       (equal? (outer-marker 2) '(outer 2))))
+(test-case "a let-syntax transformer does not leak out of its body"
+  (begin
+    (let-syntax ((%only-here (syntax-rules () ((_) 'gone)))) (%only-here))
+    (eq? 'caught (try (eval '(%only-here)) (catch e 'caught)))))
+
 (report-summary)

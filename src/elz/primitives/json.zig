@@ -8,8 +8,35 @@ const interpreter = @import("../interpreter.zig");
 
 const ParseResult = struct { value: Value, pos: usize };
 
+/// Nodes on the current serialization path, so a cyclic structure is
+/// reported instead of recursing without bound.
+const PathSet = std.AutoHashMapUnmanaged(usize, void);
+
+fn containerPtr(value: Value) ?usize {
+    return switch (value) {
+        .pair => |p| @intFromPtr(p),
+        .vector => |v| @intFromPtr(v),
+        .hash_map => |h| @intFromPtr(h),
+        else => null,
+    };
+}
+
 /// Serializes a Value to JSON format and writes to the writer.
 fn serializeValue(value: Value, w: *std.Io.Writer) !void {
+    var path: PathSet = .empty;
+    defer path.deinit(std.heap.page_allocator);
+    try serializeInner(value, w, &path);
+}
+
+fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
+    const ptr_opt = containerPtr(value);
+    if (ptr_opt) |ptr| {
+        const entry = try path.getOrPut(std.heap.page_allocator, ptr);
+        if (entry.found_existing) return error.OutOfMemory; // cycle
+    }
+    defer if (ptr_opt) |ptr| {
+        _ = path.remove(ptr);
+    };
     switch (value) {
         .number => |n| {
             // Handle special float values
@@ -20,9 +47,15 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
             }
         },
         .exact_integer => |n| try w.print("{d}", .{n}),
+        .bigint => |b| {
+            const text = @import("../bigint.zig").toString(std.heap.page_allocator, b, 10) catch return error.OutOfMemory;
+            defer std.heap.page_allocator.free(text);
+            try w.writeAll(text);
+        },
         .rational => |r| try w.print("{d}", .{@as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator))}),
         .complex => return error.OutOfMemory,
-        .string => |s| {
+        .string => |ms| {
+            const s = ms.bytes;
             try w.writeByte('"');
             for (s) |c| {
                 switch (c) {
@@ -52,13 +85,16 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
             while (current == .pair) {
                 if (!first) try w.writeByte(',');
                 first = false;
-                try serializeValue(current.pair.car, w);
+                try serializeInner(current.pair.car, w, path);
                 current = current.pair.cdr;
+                // A cdr cycle never reaches the end of the list.
+                if (current == .pair and path.contains(@intFromPtr(current.pair))) return error.OutOfMemory;
+                if (current == .pair) try path.put(std.heap.page_allocator, @intFromPtr(current.pair), {});
             }
             // If improper list, serialize the cdr too
             if (current != .nil) {
                 if (!first) try w.writeByte(',');
-                try serializeValue(current, w);
+                try serializeInner(current, w, path);
             }
             try w.writeByte(']');
         },
@@ -66,7 +102,7 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
             try w.writeByte('[');
             for (v.items, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
-                try serializeValue(item, w);
+                try serializeInner(item, w, path);
             }
             try w.writeByte(']');
         },
@@ -88,7 +124,7 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
                 }
                 try w.writeByte('"');
                 try w.writeByte(':');
-                try serializeValue(entry.value_ptr.*, w);
+                try serializeInner(entry.value_ptr.*, w, path);
             }
             try w.writeByte('}');
         },
@@ -120,7 +156,7 @@ fn serializeValue(value: Value, w: *std.Io.Writer) !void {
             try w.writeByte('"');
         },
         // Non-serializable types
-        .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .unspecified => {
+        .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .unspecified, .eof => {
             return error.OutOfMemory; // Signal unsupported type
         },
     }
@@ -142,10 +178,29 @@ fn parseJsonString(json: []const u8, start: usize, allocator: std.mem.Allocator)
                 '"' => try result.append(allocator, '"'),
                 '\\' => try result.append(allocator, '\\'),
                 '/' => try result.append(allocator, '/'),
-                else => {
-                    try result.append(allocator, '\\');
-                    try result.append(allocator, json[i + 1]);
+                'b' => try result.append(allocator, 8),
+                'f' => try result.append(allocator, 12),
+                'u' => {
+                    // \uXXXX, with UTF-16 surrogate pairs combined.
+                    var cp: u21 = try parseHex4(json, i + 2);
+                    i += 6;
+                    if (cp >= 0xD800 and cp <= 0xDBFF) {
+                        if (i + 6 <= json.len and json[i] == '\\' and json[i + 1] == 'u') {
+                            const low = try parseHex4(json, i + 2);
+                            if (low >= 0xDC00 and low <= 0xDFFF) {
+                                cp = 0x10000 + ((@as(u21, cp) - 0xD800) << 10) + (low - 0xDC00);
+                                i += 6;
+                            } else return error.OutOfMemory;
+                        } else return error.OutOfMemory;
+                    } else if (cp >= 0xDC00 and cp <= 0xDFFF) {
+                        return error.OutOfMemory;
+                    }
+                    var buf: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(cp, &buf) catch return error.OutOfMemory;
+                    try result.appendSlice(allocator, buf[0..len]);
+                    continue;
                 },
+                else => return error.OutOfMemory,
             }
             i += 2;
         } else {
@@ -155,10 +210,19 @@ fn parseJsonString(json: []const u8, start: usize, allocator: std.mem.Allocator)
     }
     if (i >= json.len) return error.OutOfMemory;
     return .{
-        .value = Value{ .string = try result.toOwnedSlice(allocator) },
+        .value = (try core.makeString(allocator, try result.toOwnedSlice(allocator))),
         .pos = i + 1, // skip closing quote
     };
 }
+
+fn parseHex4(json: []const u8, at: usize) !u16 {
+    if (at + 4 > json.len) return error.OutOfMemory;
+    return std.fmt.parseInt(u16, json[at .. at + 4], 16) catch return error.OutOfMemory;
+}
+
+/// Deepest nesting of arrays and objects accepted, so hostile input cannot
+/// exhaust the native stack.
+const MAX_JSON_DEPTH: usize = 512;
 
 /// Skip whitespace in JSON.
 fn skipWhitespace(json: []const u8, start: usize) usize {
@@ -171,6 +235,11 @@ fn skipWhitespace(json: []const u8, start: usize) usize {
 
 /// Parse a single JSON value, returning the parsed value and position after it.
 fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) !ParseResult {
+    return parseJsonValueDepth(json, start, allocator, 0);
+}
+
+fn parseJsonValueDepth(json: []const u8, start: usize, allocator: std.mem.Allocator, depth: usize) !ParseResult {
+    if (depth > MAX_JSON_DEPTH) return error.OutOfMemory;
     var i = skipWhitespace(json, start);
     if (i >= json.len) return error.OutOfMemory;
 
@@ -207,7 +276,7 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
             }
 
             while (i < json.len) {
-                const elem = try parseJsonValue(json, i, allocator);
+                const elem = try parseJsonValueDepth(json, i, allocator, depth + 1);
                 try elements.append(allocator, elem.value);
                 i = skipWhitespace(json, elem.pos);
 
@@ -252,10 +321,10 @@ fn parseJsonValue(json: []const u8, start: usize, allocator: std.mem.Allocator) 
                 if (i >= json.len or json[i] != ':') return error.OutOfMemory;
                 i += 1;
 
-                const val = try parseJsonValue(json, i, allocator);
+                const val = try parseJsonValueDepth(json, i, allocator, depth + 1);
                 i = val.pos;
 
-                try hm.put(key.value.string, val.value);
+                try hm.put(key.value.string.bytes, val.value);
 
                 i = skipWhitespace(json, i);
                 if (i < json.len and json[i] == ',') {
@@ -308,7 +377,7 @@ pub fn json_serialize(_: *interpreter.Interpreter, env: *core.Environment, args:
     errdefer aw.deinit();
 
     serializeValue(args.items[0], &aw.writer) catch return ElzError.InvalidArgument;
-    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
+    return (try core.makeString(allocator, aw.toOwnedSlice() catch return ElzError.OutOfMemory));
 }
 
 /// `json-deserialize` parses a JSON string into a Value.
@@ -320,7 +389,7 @@ pub fn json_deserialize(_: *interpreter.Interpreter, env: *core.Environment, arg
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
 
-    const result = parseJsonValue(str_val.string, 0, env.allocator) catch return ElzError.InvalidArgument;
+    const result = parseJsonValue(str_val.string.bytes, 0, env.allocator) catch return ElzError.InvalidArgument;
     return result.value;
 }
 
@@ -332,7 +401,7 @@ test "json serialize numbers" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-serialize 42)", &fuel);
     try testing.expect(r == .string);
-    try testing.expectEqualStrings("42", r.string);
+    try testing.expectEqualStrings("42", r.string.bytes);
 }
 
 test "json serialize strings" {
@@ -343,7 +412,7 @@ test "json serialize strings" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-serialize \"hello\")", &fuel);
     try testing.expect(r == .string);
-    try testing.expectEqualStrings("\"hello\"", r.string);
+    try testing.expectEqualStrings("\"hello\"", r.string.bytes);
 }
 
 test "json serialize booleans and nil" {
@@ -353,15 +422,15 @@ test "json serialize booleans and nil" {
 
     var fuel: u64 = 10000;
     const r1 = try interp.evalString("(json-serialize #t)", &fuel);
-    try testing.expectEqualStrings("true", r1.string);
+    try testing.expectEqualStrings("true", r1.string.bytes);
 
     fuel = 10000;
     const r2 = try interp.evalString("(json-serialize #f)", &fuel);
-    try testing.expectEqualStrings("false", r2.string);
+    try testing.expectEqualStrings("false", r2.string.bytes);
 
     fuel = 10000;
     const r3 = try interp.evalString("(json-serialize '())", &fuel);
-    try testing.expectEqualStrings("null", r3.string);
+    try testing.expectEqualStrings("null", r3.string.bytes);
 }
 
 test "json serialize list as array" {
@@ -372,7 +441,7 @@ test "json serialize list as array" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-serialize '(1 2 3))", &fuel);
     try testing.expect(r == .string);
-    try testing.expectEqualStrings("[1,2,3]", r.string);
+    try testing.expectEqualStrings("[1,2,3]", r.string.bytes);
 }
 
 test "json deserialize number" {
@@ -394,7 +463,7 @@ test "json deserialize string" {
     var fuel: u64 = 10000;
     const r = try interp.evalString("(json-deserialize \"\\\"hello\\\"\")", &fuel);
     try testing.expect(r == .string);
-    try testing.expectEqualStrings("hello", r.string);
+    try testing.expectEqualStrings("hello", r.string.bytes);
 }
 
 test "json deserialize array" {
@@ -424,7 +493,7 @@ test "json roundtrip" {
     fuel = 10000;
     const r2 = try interp.evalString("(json-deserialize (json-serialize \"hello\"))", &fuel);
     try testing.expect(r2 == .string);
-    try testing.expectEqualStrings("hello", r2.string);
+    try testing.expectEqualStrings("hello", r2.string.bytes);
 
     // Serialize then deserialize a boolean
     fuel = 10000;

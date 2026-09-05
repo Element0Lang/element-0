@@ -1,0 +1,184 @@
+//! Unicode character data for the character and string procedures.
+//!
+//! Generated from the Unicode @@VERSION@@ database with
+//! `tools/gen_unicode.py`; do not edit by hand. Property tables are inclusive
+//! code point ranges. Case mappings are runs with a constant delta, stepping
+//! by 1 or 2 (alphabets that alternate upper and lower case). Full mappings
+//! that expand to several code points are listed separately.
+const std = @import("std");
+
+const Range = struct { lo: u21, hi: u21 };
+const MapRun = struct { lo: u21, hi: u21, delta: i32, step: u8 };
+const Special = struct { cp: u21, len: u8, to: [3]u21 };
+
+fn inRanges(table: []const Range, cp: u21) bool {
+    var lo: usize = 0;
+    var hi: usize = table.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const r = table[mid];
+        if (cp < r.lo) {
+            hi = mid;
+        } else if (cp > r.hi) {
+            lo = mid + 1;
+        } else return true;
+    }
+    return false;
+}
+
+fn mapRun(table: []const MapRun, cp: u21) u21 {
+    var lo: usize = 0;
+    var hi: usize = table.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const r = table[mid];
+        if (cp < r.lo) {
+            hi = mid;
+        } else if (cp > r.hi) {
+            lo = mid + 1;
+        } else {
+            if ((cp - r.lo) % r.step != 0) return cp;
+            return @intCast(@as(i32, cp) + r.delta);
+        }
+    }
+    return cp;
+}
+
+fn special(table: []const Special, cp: u21) ?[]const u21 {
+    var lo: usize = 0;
+    var hi: usize = table.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const s = &table[mid];
+        if (cp < s.cp) {
+            hi = mid;
+        } else if (cp > s.cp) {
+            lo = mid + 1;
+        } else return s.to[0..s.len];
+    }
+    return null;
+}
+
+pub fn isAlphabetic(cp: u21) bool {
+    return inRanges(&alphabetic, cp);
+}
+
+pub fn isUpper(cp: u21) bool {
+    return inRanges(&uppercase, cp);
+}
+
+pub fn isLower(cp: u21) bool {
+    return inRanges(&lowercase, cp);
+}
+
+pub fn isWhitespace(cp: u21) bool {
+    return inRanges(&whitespace, cp);
+}
+
+/// The value of a decimal digit character (Numeric_Type=Decimal), or null.
+pub fn digitValue(cp: u21) ?u8 {
+    var lo: usize = 0;
+    var hi: usize = decimal_digits.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const r = decimal_digits[mid];
+        if (cp < r.lo) {
+            hi = mid;
+        } else if (cp > r.hi) {
+            lo = mid + 1;
+        } else return @intCast((cp - r.lo) % 10);
+    }
+    return null;
+}
+
+pub fn isNumeric(cp: u21) bool {
+    return digitValue(cp) != null;
+}
+
+/// Simple (one to one) case mappings, for the character procedures.
+pub fn toUpper(cp: u21) u21 {
+    return mapRun(&simple_upper, cp);
+}
+
+pub fn toLower(cp: u21) u21 {
+    return mapRun(&simple_lower, cp);
+}
+
+pub fn foldCase(cp: u21) u21 {
+    return mapRun(&simple_fold, cp);
+}
+
+/// Full case mappings, for the string procedures: the result may hold up to
+/// three code points. `buf` backs the single-code-point result.
+pub fn fullUpper(cp: u21, buf: *[1]u21) []const u21 {
+    if (special(&special_upper, cp)) |s| return s;
+    buf[0] = toUpper(cp);
+    return buf[0..1];
+}
+
+pub fn fullLower(cp: u21, buf: *[1]u21) []const u21 {
+    if (special(&special_lower, cp)) |s| return s;
+    buf[0] = toLower(cp);
+    return buf[0..1];
+}
+
+pub fn fullFold(cp: u21, buf: *[1]u21) []const u21 {
+    if (special(&special_fold, cp)) |s| return s;
+    buf[0] = foldCase(cp);
+    return buf[0..1];
+}
+
+const alphabetic = [_]Range{
+@@ALPHA@@,
+};
+
+const uppercase = [_]Range{
+@@UPPER@@,
+};
+
+const lowercase = [_]Range{
+@@LOWER@@,
+};
+
+const whitespace = [_]Range{
+@@SPACE@@,
+};
+
+const decimal_digits = [_]Range{
+@@DIGITS@@,
+};
+
+const simple_upper = [_]MapRun{
+@@RUP@@,
+};
+
+const simple_lower = [_]MapRun{
+@@RLO@@,
+};
+
+const simple_fold = [_]MapRun{
+@@RFO@@,
+};
+
+const special_upper = [_]Special{
+@@SPU@@,
+};
+
+const special_lower = [_]Special{
+@@SPL@@,
+};
+
+const special_fold = [_]Special{
+@@SPF@@,
+};
+
+test "case mapping samples" {
+    try std.testing.expectEqual(@as(u21, 'A'), toUpper('a'));
+    try std.testing.expectEqual(@as(u21, 0x39B), toUpper(0x3BB)); // lambda
+    try std.testing.expectEqual(@as(u21, 0x3C3), foldCase(0x3C2)); // final sigma folds to sigma
+    try std.testing.expect(isAlphabetic(0x39B));
+    try std.testing.expect(isWhitespace(0x3000));
+    try std.testing.expectEqual(@as(?u8, 4), digitValue(0x664));
+    var buf: [1]u21 = undefined;
+    try std.testing.expectEqual(@as(usize, 2), fullUpper(0xDF, &buf).len); // sharp s -> SS
+}

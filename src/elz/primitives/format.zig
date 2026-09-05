@@ -5,20 +5,10 @@ const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 
-/// Writes a value in display mode (strings without quotes, chars as raw characters).
+/// Writes a value in display mode (strings without quotes, chars as raw
+/// characters), at every nesting level.
 fn writeDisplay(value: Value, w: anytype) !void {
-    switch (value) {
-        .string => |s| try w.writeAll(s),
-        .character => |c| {
-            if (c > 0x10FFFF) return;
-            const codepoint: u21 = @intCast(c);
-            if (!std.unicode.utf8ValidCodepoint(codepoint)) return;
-            var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(codepoint, &buf) catch return;
-            try w.writeAll(buf[0..@as(usize, @intCast(len))]);
-        },
-        else => try writer_mod.write(value, w),
-    }
+    try writer_mod.display(value, w);
 }
 
 /// `format` implements the `format` primitive function.
@@ -37,7 +27,7 @@ pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 
     const template_val = args.items[0];
     if (template_val != .string) return ElzError.InvalidArgument;
-    const template = template_val.string;
+    const template = template_val.string.bytes;
 
     const allocator = env.allocator;
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -79,7 +69,7 @@ pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
         }
     }
 
-    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
+    return (try core.makeString(env.allocator, aw.toOwnedSlice() catch return ElzError.OutOfMemory));
 }
 
 /// `value->string` converts any value to its string representation (write mode).
@@ -95,7 +85,7 @@ pub fn value_to_string(_: *interpreter.Interpreter, env: *core.Environment, args
     errdefer aw.deinit();
 
     writer_mod.write(args.items[0], &aw.writer) catch return ElzError.OutOfMemory;
-    return Value{ .string = aw.toOwnedSlice() catch return ElzError.OutOfMemory };
+    return (try core.makeString(env.allocator, aw.toOwnedSlice() catch return ElzError.OutOfMemory));
 }
 
 test "format basic substitution" {
@@ -108,25 +98,25 @@ test "format basic substitution" {
     // ~a with string (no quotes)
     const r1 = try interp.evalString("(format \"hello ~a\" \"world\")", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("hello world", r1.string);
+    try testing.expectEqualStrings("hello world", r1.string.bytes);
 
     // ~s with string (with quotes)
     fuel = 10000;
     const r2 = try interp.evalString("(format \"hello ~s\" \"world\")", &fuel);
     try testing.expect(r2 == .string);
-    try testing.expectEqualStrings("hello \"world\"", r2.string);
+    try testing.expectEqualStrings("hello \"world\"", r2.string.bytes);
 
     // ~% newline
     fuel = 10000;
     const r3 = try interp.evalString("(format \"line1~%line2\")", &fuel);
     try testing.expect(r3 == .string);
-    try testing.expectEqualStrings("line1\nline2", r3.string);
+    try testing.expectEqualStrings("line1\nline2", r3.string.bytes);
 
     // ~~ literal tilde
     fuel = 10000;
     const r4 = try interp.evalString("(format \"cost: ~~100\")", &fuel);
     try testing.expect(r4 == .string);
-    try testing.expectEqualStrings("cost: ~100", r4.string);
+    try testing.expectEqualStrings("cost: ~100", r4.string.bytes);
 }
 
 test "format with numbers" {
@@ -137,7 +127,7 @@ test "format with numbers" {
     var fuel: u64 = 10000;
     const r1 = try interp.evalString("(format \"x = ~a\" 42)", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("x = 42", r1.string);
+    try testing.expectEqualStrings("x = 42", r1.string.bytes);
 }
 
 test "format with multiple args" {
@@ -148,7 +138,7 @@ test "format with multiple args" {
     var fuel: u64 = 10000;
     const r1 = try interp.evalString("(format \"~a + ~a = ~a\" 1 2 3)", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("1 + 2 = 3", r1.string);
+    try testing.expectEqualStrings("1 + 2 = 3", r1.string.bytes);
 }
 
 test "format with no template args" {
@@ -159,7 +149,7 @@ test "format with no template args" {
     var fuel: u64 = 10000;
     const r1 = try interp.evalString("(format \"plain text\")", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("plain text", r1.string);
+    try testing.expectEqualStrings("plain text", r1.string.bytes);
 }
 
 test "format error on too few args" {

@@ -131,7 +131,7 @@ test "string operations" {
         \\(string-append "hello" " " "world")
     , &fuel);
     try testing.expect(result == .string);
-    try testing.expectEqualStrings("hello world", result.string);
+    try testing.expectEqualStrings("hello world", result.string.bytes);
 }
 
 test "list operations" {
@@ -216,7 +216,7 @@ test "try/catch catches errors" {
         \\(try (/ 1 0) (catch err "caught"))
     , &fuel);
     try testing.expect(result == .string);
-    try testing.expectEqualStrings("caught", result.string);
+    try testing.expectEqualStrings("caught", result.string.bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,4 +254,24 @@ test "write produces valid output" {
     var w: std.Io.Writer = .fixed(&buf);
     try elz.write(value, &w);
     try testing.expectEqualStrings("(1 2 3)", w.buffered());
+}
+
+test "runtime errors carry a source location" {
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+
+    var forms = try elz.parser.readAllTracked("(define (f)\n  (car 42))\n(f)\n", interp.allocator, "<test>", &interp.source_locations);
+    defer forms.deinit(interp.allocator);
+
+    var failed = false;
+    for (forms.items) |form| {
+        var fuel: u64 = 1_000_000;
+        _ = interp.evalForm(&form, &fuel) catch {
+            failed = true;
+            break;
+        };
+    }
+    try std.testing.expect(failed);
+    try std.testing.expectEqual(@as(u32, 2), interp.last_error_line.?);
+    try std.testing.expectEqualStrings("<test>", interp.last_error_file.?);
 }

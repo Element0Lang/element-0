@@ -55,9 +55,67 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                 try tokens.append(allocator, source[i .. j + 1]);
                 i = j + 1;
             },
+            '|' => {
+                // Pipe-delimited symbol: |name with spaces| with \-escapes.
+                var j = i + 1;
+                while (j < source.len and source[j] != '|') {
+                    if (source[j] == '\\' and j + 1 < source.len) {
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                if (j >= source.len) return ElzError.UnterminatedString;
+                try tokens.append(allocator, source[i .. j + 1]);
+                i = j + 1;
+            },
             else => {
                 // #( is the vector literal prefix — emit it as a two-character token.
-                if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
+                // #u8( is the bytevector literal prefix — emit it as a four-character token.
+                if (char == '#' and i + 1 < source.len and source[i + 1] == '|') {
+                    // Block comment, nestable: #| ... |#
+                    var nesting: usize = 1;
+                    var j = i + 2;
+                    while (j + 1 < source.len and nesting > 0) {
+                        if (source[j] == '#' and source[j + 1] == '|') {
+                            nesting += 1;
+                            j += 2;
+                        } else if (source[j] == '|' and source[j + 1] == '#') {
+                            nesting -= 1;
+                            j += 2;
+                        } else {
+                            j += 1;
+                        }
+                    }
+                    if (nesting > 0) return ElzError.UnexpectedEndOfInput;
+                    i = j;
+                } else if (char == '#' and i + 1 < source.len and source[i + 1] == ';') {
+                    // Datum comment: the parser discards the following form.
+                    try tokens.append(allocator, source[i .. i + 2]);
+                    i += 2;
+                } else if (char == '#' and i + 1 < source.len and source[i + 1] == '\\') {
+                    // Character literal: always take one character after the
+                    // backslash (it may be a delimiter), then any name tail.
+                    var j = i + 2;
+                    if (j < source.len) {
+                        const seq_len = std.unicode.utf8ByteSequenceLength(source[j]) catch 1;
+                        j += seq_len;
+                    }
+                    while (j < source.len and (std.ascii.isAlphanumeric(source[j]) or source[j] == '-')) {
+                        j += 1;
+                    }
+                    try tokens.append(allocator, source[i..j]);
+                    i = j;
+                } else if (char == '#' and i + 1 < source.len and std.ascii.isDigit(source[i + 1]) and datumLabelEnd(source, i) != null) {
+                    // Datum label `#n=` or reference `#n#`: its own token, so
+                    // `#0=(...)` and `#0=a` split before the labelled datum.
+                    const end = datumLabelEnd(source, i).?;
+                    try tokens.append(allocator, source[i..end]);
+                    i = end;
+                } else if (char == '#' and i + 3 < source.len and std.mem.eql(u8, source[i .. i + 4], "#u8(")) {
+                    try tokens.append(allocator, source[i .. i + 4]);
+                    i += 4;
+                } else if (char == '#' and i + 1 < source.len and source[i + 1] == '(') {
                     try tokens.append(allocator, source[i .. i + 2]);
                     i += 2;
                 } else {
@@ -77,21 +135,110 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
     return tokens;
 }
 
+/// If `source[i..]` starts a datum label (`#n=`) or reference (`#n#`), returns
+/// the index just past it.
+fn datumLabelEnd(source: []const u8, i: usize) ?usize {
+    var j = i + 1;
+    while (j < source.len and std.ascii.isDigit(source[j])) j += 1;
+    if (j == i + 1 or j >= source.len) return null;
+    if (source[j] == '=' or source[j] == '#') return j + 1;
+    return null;
+}
+
 /// The parser for Element 0 source code.
 /// It holds the state of the parsing process.
+/// A source location attached to a parsed form.
+pub const SourceLoc = struct {
+    file: []const u8,
+    line: u32,
+};
+
+/// Maps a Pair pointer (as usize) to the source location of its opening paren.
+pub const FormLocations = std.AutoHashMapUnmanaged(usize, SourceLoc);
+
+/// Deepest datum nesting the reader accepts. Each level costs a native stack
+/// frame, so hostile input must be bounded.
+const MAX_PARSE_DEPTH: usize = 2048;
+
 const Parser = struct {
     tokens: std.ArrayList([]const u8),
     position: usize,
     allocator: std.mem.Allocator,
+    depth: usize = 0,
+    /// Set by the `#!fold-case` directive: symbols read after it are lowercased.
+    fold_case: bool = false,
+    /// Datum labels (`#n=`) seen so far, by label number.
+    labels: std.AutoHashMapUnmanaged(usize, Value) = .empty,
+    /// Set when tracking locations: the original source and its file name.
+    source: []const u8 = "",
+    file: []const u8 = "",
+    locations: ?*FormLocations = null,
+
+    /// The 1-based line number of a token (a slice into `source`).
+    fn lineOf(self: *const Parser, token: []const u8) u32 {
+        const off = @intFromPtr(token.ptr) - @intFromPtr(self.source.ptr);
+        var line: u32 = 1;
+        for (self.source[0..off]) |c| {
+            if (c == '\n') line += 1;
+        }
+        return line;
+    }
+
+    fn recordLocation(self: *Parser, form: Value, token: []const u8) void {
+        const locs = self.locations orelse return;
+        if (form != .pair) return;
+        if (@intFromPtr(token.ptr) < @intFromPtr(self.source.ptr)) return;
+        locs.put(self.allocator, @intFromPtr(form.pair), .{
+            .file = self.file,
+            .line = self.lineOf(token),
+        }) catch {};
+    }
 
     /// Parses a single form from the token stream.
     ///
     /// - `self`: A pointer to the parser.
     /// - `return`: The parsed `Value`.
     fn parse_form(self: *Parser) ElzError!Value {
+        if (self.depth >= MAX_PARSE_DEPTH) return ElzError.UnexpectedEndOfInput;
+        self.depth += 1;
+        defer self.depth -= 1;
         if (self.position >= self.tokens.items.len) return ElzError.UnexpectedEndOfInput;
         const token = self.tokens.items[self.position];
         self.position += 1;
+        if (std.mem.eql(u8, token, "#;")) {
+            // Datum comment: discard the next form, return the one after it.
+            _ = try self.parse_form();
+            return self.parse_form();
+        }
+        if (std.mem.eql(u8, token, "#!fold-case")) {
+            self.fold_case = true;
+            return self.parse_form();
+        }
+        if (std.mem.eql(u8, token, "#!no-fold-case")) {
+            self.fold_case = false;
+            return self.parse_form();
+        }
+        // Datum labels: `#n=<datum>` defines label n, `#n#` refers to it.
+        if (token.len >= 3 and token[0] == '#' and std.ascii.isDigit(token[1])) {
+            const last = token[token.len - 1];
+            if (last == '=' or last == '#') {
+                const n = std.fmt.parseInt(usize, token[1 .. token.len - 1], 10) catch return parse_atom(token, self.allocator);
+                if (last == '#') {
+                    return self.labels.get(n) orelse ElzError.InvalidArgument;
+                }
+                // The datum may refer to itself: bind the label to a placeholder
+                // first, then replace every reference to it with the datum.
+                const placeholder = try self.allocator.create(core.Pair);
+                placeholder.* = .{ .car = .nil, .cdr = .nil };
+                try self.labels.put(self.allocator, n, Value{ .pair = placeholder });
+                const datum = try self.parse_form();
+                try self.labels.put(self.allocator, n, datum);
+                var seen: std.AutoHashMapUnmanaged(usize, void) = .empty;
+                defer seen.deinit(self.allocator);
+                try self.patchLabel(datum, placeholder, datum, &seen);
+                return datum;
+            }
+        }
         // Quote and quasiquote-family shorthand: each wraps the next form in a one-arg
         // application of the corresponding special form.
         const wrapper_name: ?[]const u8 = if (std.mem.eql(u8, token, "'"))
@@ -113,12 +260,42 @@ const Parser = struct {
             p2.* = .{ .car = sym, .cdr = Value{ .pair = p1 } };
             return Value{ .pair = p2 };
         }
+        if (std.mem.eql(u8, token, "#u8(")) {
+            var bytes = std.ArrayListUnmanaged(u8).empty;
+            defer bytes.deinit(self.allocator);
+            while (true) {
+                if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
+                const next = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next, "#;")) {
+                    self.position += 1;
+                    _ = try self.parse_form();
+                    continue;
+                }
+                if (std.mem.eql(u8, next, ")")) {
+                    self.position += 1;
+                    break;
+                }
+                const elem = try self.parse_form();
+                if (elem != .exact_integer or elem.exact_integer < 0 or elem.exact_integer > 255) {
+                    return ElzError.InvalidArgument;
+                }
+                try bytes.append(self.allocator, @intCast(elem.exact_integer));
+            }
+            const bv = try self.allocator.create(core.Bytevector);
+            bv.* = core.Bytevector{ .items = try bytes.toOwnedSlice(self.allocator) };
+            return Value{ .bytevector = bv };
+        }
         if (std.mem.eql(u8, token, "#(")) {
             var items = std.ArrayListUnmanaged(Value).empty;
             defer items.deinit(self.allocator);
             while (true) {
                 if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
                 const next = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next, "#;")) {
+                    self.position += 1;
+                    _ = try self.parse_form();
+                    continue;
+                }
                 if (std.mem.eql(u8, next, ")")) {
                     self.position += 1;
                     break;
@@ -130,6 +307,7 @@ const Parser = struct {
             return Value{ .vector = vec };
         }
         if (std.mem.eql(u8, token, "(")) {
+            const open_token = token;
             var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
@@ -137,6 +315,11 @@ const Parser = struct {
                     return ElzError.UnmatchedOpenParen;
                 }
                 const next_token = self.tokens.items[self.position];
+                if (std.mem.eql(u8, next_token, "#;")) {
+                    self.position += 1;
+                    _ = try self.parse_form();
+                    continue;
+                }
                 if (std.mem.eql(u8, next_token, ")")) {
                     self.position += 1;
                     var result: Value = Value.nil;
@@ -147,12 +330,18 @@ const Parser = struct {
                         p.* = .{ .car = values.items[j], .cdr = result };
                         result = Value{ .pair = p };
                     }
+                    self.recordLocation(result, open_token);
                     return result;
                 }
                 if (std.mem.eql(u8, next_token, ".")) {
                     self.position += 1;
                     if (values.items.len == 0) return ElzError.InvalidDottedPair;
                     const cdr = try self.parse_form();
+                    // Datum comments may follow the tail: `(a . b #;c)`.
+                    while (self.position < self.tokens.items.len and std.mem.eql(u8, self.tokens.items[self.position], "#;")) {
+                        self.position += 1;
+                        _ = try self.parse_form();
+                    }
                     if (self.position >= self.tokens.items.len or !std.mem.eql(u8, self.tokens.items[self.position], ")")) {
                         return ElzError.InvalidDottedPair;
                     }
@@ -171,11 +360,93 @@ const Parser = struct {
             }
         } else if (std.mem.eql(u8, token, ")")) {
             return ElzError.UnexpectedCloseParen;
+        } else if (std.mem.eql(u8, token, ".")) {
+            // A lone dot is only valid inside a list, where the list loop consumes it.
+            return ElzError.InvalidDottedPair;
         } else {
-            return parse_atom(token, self.allocator);
+            const atom = try parse_atom(token, self.allocator);
+            if (self.fold_case and atom == .symbol) {
+                const folded = try self.allocator.dupe(u8, atom.symbol);
+                for (folded) |*c| c.* = std.ascii.toLower(c.*);
+                return Value{ .symbol = folded };
+            }
+            return atom;
+        }
+    }
+
+    /// Replaces every reference to `placeholder` inside `value` with `target`.
+    fn patchLabel(self: *Parser, value: Value, placeholder: *core.Pair, target: Value, seen: *std.AutoHashMapUnmanaged(usize, void)) ElzError!void {
+        switch (value) {
+            .pair => |p| {
+                if (p == placeholder) return;
+                if ((try seen.getOrPut(self.allocator, @intFromPtr(p))).found_existing) return;
+                if (p.car == .pair and p.car.pair == placeholder) p.car = target else try self.patchLabel(p.car, placeholder, target, seen);
+                if (p.cdr == .pair and p.cdr.pair == placeholder) p.cdr = target else try self.patchLabel(p.cdr, placeholder, target, seen);
+            },
+            .vector => |v| {
+                if ((try seen.getOrPut(self.allocator, @intFromPtr(v))).found_existing) return;
+                for (v.items) |*item| {
+                    if (item.* == .pair and item.*.pair == placeholder) item.* = target else try self.patchLabel(item.*, placeholder, target, seen);
+                }
+            },
+            else => {},
         }
     }
 };
+
+/// Parses the real-number part of a complex literal: decimal, inf, or nan.
+fn parseRealText(text: []const u8) ?f64 {
+    return parseReal(text);
+}
+
+/// Parses a rectangular complex literal (ending in i). An exact-zero
+/// imaginary part ("+0i") yields the real part alone, per R7RS typing.
+fn parseComplex(text: []const u8, allocator: std.mem.Allocator) ElzError!Value {
+    const body = text[0 .. text.len - 1];
+    // Split at the sign of the imaginary part: the last +/- not at position 0
+    // and not part of an exponent or inf/nan spelling.
+    var split: ?usize = null;
+    var i = body.len;
+    while (i > 1) {
+        i -= 1;
+        const c = body[i];
+        if (c == '+' or c == '-') {
+            const prev = body[i - 1];
+            if (prev == 'e' or prev == 'E') continue;
+            // "inf.0" / "nan.0" contain no signs, so any other +/- splits.
+            if (std.mem.endsWith(u8, body[0..i], "inf.") or std.mem.endsWith(u8, body[0..i], "nan.")) continue;
+            split = i;
+            break;
+        }
+    }
+    var real_text: []const u8 = "";
+    var imag_text: []const u8 = body;
+    if (split) |at| {
+        real_text = body[0..at];
+        imag_text = body[at..];
+    }
+    if (imag_text.len == 0) return ElzError.InvalidArgument;
+    if (imag_text[0] != '+' and imag_text[0] != '-') {
+        // No sign on the imaginary part means this is not a complex literal.
+        return ElzError.InvalidArgument;
+    }
+    // An exact-zero imaginary part makes the value real.
+    if (std.mem.eql(u8, imag_text, "+0") or std.mem.eql(u8, imag_text, "-0")) {
+        if (real_text.len == 0) return Value{ .exact_integer = 0 };
+        return (try parseNumber(real_text, allocator)) orelse ElzError.InvalidArgument;
+    }
+    const imag: f64 = if (imag_text.len == 1)
+        (if (imag_text[0] == '+') @as(f64, 1) else @as(f64, -1))
+    else
+        parseRealText(imag_text) orelse return ElzError.InvalidArgument;
+    const real: f64 = if (real_text.len == 0)
+        0
+    else
+        parseRealText(real_text) orelse return ElzError.InvalidArgument;
+    const c = allocator.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = real, .imag = imag };
+    return Value{ .complex = c };
+}
 
 /// Parses an atomic value from a token.
 ///
@@ -183,8 +454,8 @@ const Parser = struct {
 /// - `allocator`: The memory allocator to use.
 /// - `return`: The parsed `Value`.
 fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
-    if (std.mem.eql(u8, token, "#t")) return Value{ .boolean = true };
-    if (std.mem.eql(u8, token, "#f")) return Value{ .boolean = false };
+    if (std.mem.eql(u8, token, "#t") or std.mem.eql(u8, token, "#true")) return Value{ .boolean = true };
+    if (std.mem.eql(u8, token, "#f") or std.mem.eql(u8, token, "#false")) return Value{ .boolean = false };
     if (token.len >= 2 and token[0] == '"' and token[token.len - 1] == '"') {
         var unescaped = std.ArrayListUnmanaged(u8).empty;
         defer unescaped.deinit(allocator);
@@ -194,12 +465,39 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
                 switch (token[i + 1]) {
                     'n' => try unescaped.append(allocator, '\n'),
                     't' => try unescaped.append(allocator, '\t'),
+                    'r' => try unescaped.append(allocator, '\r'),
+                    'a' => try unescaped.append(allocator, 7),
+                    'b' => try unescaped.append(allocator, 8),
+                    '0' => try unescaped.append(allocator, 0),
                     '\\' => try unescaped.append(allocator, '\\'),
                     '"' => try unescaped.append(allocator, '"'),
-                    else => {
-                        try unescaped.append(allocator, '\\');
-                        try unescaped.append(allocator, token[i + 1]);
+                    '|' => try unescaped.append(allocator, '|'),
+                    'x', 'X' => {
+                        // \xHH...; hex escape, terminated by a semicolon.
+                        const semi = std.mem.indexOfScalarPos(u8, token, i + 2, ';') orelse return ElzError.UnterminatedString;
+                        const cp = std.fmt.parseInt(u21, token[i + 2 .. semi], 16) catch return ElzError.UnterminatedString;
+                        var buf: [4]u8 = undefined;
+                        const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.UnterminatedString;
+                        try unescaped.appendSlice(allocator, buf[0..len]);
+                        i = semi + 1;
+                        continue;
                     },
+                    ' ', '\t', '\n', '\r' => {
+                        // Line continuation: backslash, optional intraline
+                        // whitespace, a line ending, then leading whitespace
+                        // of the next line, all dropped (R7RS 6.7).
+                        var j = i + 1;
+                        while (j < token.len - 1 and (token[j] == ' ' or token[j] == '\t')) j += 1;
+                        if (j < token.len - 1 and (token[j] == '\n' or token[j] == '\r')) {
+                            if (token[j] == '\r' and j + 1 < token.len - 1 and token[j + 1] == '\n') j += 1;
+                            j += 1;
+                            while (j < token.len - 1 and (token[j] == ' ' or token[j] == '\t')) j += 1;
+                            i = j;
+                            continue;
+                        }
+                        return ElzError.UnterminatedString;
+                    },
+                    else => return ElzError.UnterminatedString,
                 }
                 i += 2;
             } else {
@@ -207,7 +505,35 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
                 i += 1;
             }
         }
-        return Value{ .string = try unescaped.toOwnedSlice(allocator) };
+        return (try core.makeString(allocator, try unescaped.toOwnedSlice(allocator)));
+    }
+    if (token.len >= 2 and token[0] == '|' and token[token.len - 1] == '|') {
+        var name = std.ArrayListUnmanaged(u8).empty;
+        defer name.deinit(allocator);
+        var i: usize = 1;
+        while (i < token.len - 1) {
+            if (token[i] == '\\' and i + 1 < token.len - 1) {
+                switch (token[i + 1]) {
+                    'n' => try name.append(allocator, '\n'),
+                    't' => try name.append(allocator, '\t'),
+                    'x', 'X' => {
+                        const semi = std.mem.indexOfScalarPos(u8, token, i + 2, ';') orelse return ElzError.InvalidArgument;
+                        const cp = std.fmt.parseInt(u21, token[i + 2 .. semi], 16) catch return ElzError.InvalidArgument;
+                        var buf: [4]u8 = undefined;
+                        const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
+                        try name.appendSlice(allocator, buf[0..len]);
+                        i = semi + 1;
+                        continue;
+                    },
+                    else => try name.append(allocator, token[i + 1]),
+                }
+                i += 2;
+            } else {
+                try name.append(allocator, token[i]);
+                i += 1;
+            }
+        }
+        return Value{ .symbol = try name.toOwnedSlice(allocator) };
     }
     if (token.len > 2 and token[0] == '#' and token[1] == '\\') {
         const char_name = token[2..];
@@ -215,74 +541,235 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         if (std.mem.eql(u8, char_name, "newline")) return Value{ .character = '\n' };
         if (std.mem.eql(u8, char_name, "tab")) return Value{ .character = '\t' };
         if (std.mem.eql(u8, char_name, "return")) return Value{ .character = '\r' };
+        if (std.mem.eql(u8, char_name, "alarm")) return Value{ .character = 7 };
+        if (std.mem.eql(u8, char_name, "backspace")) return Value{ .character = 8 };
+        if (std.mem.eql(u8, char_name, "delete")) return Value{ .character = 127 };
+        if (std.mem.eql(u8, char_name, "escape")) return Value{ .character = 27 };
+        if (std.mem.eql(u8, char_name, "null")) return Value{ .character = 0 };
         if (char_name.len == 1) return Value{ .character = char_name[0] };
+        // #\xHH... hex code point.
+        if ((char_name[0] == 'x' or char_name[0] == 'X') and char_name.len > 1) {
+            const cp = std.fmt.parseInt(u32, char_name[1..], 16) catch return ElzError.InvalidCharacterLiteral;
+            if (cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF)) return ElzError.InvalidCharacterLiteral;
+            return Value{ .character = cp };
+        }
+        // A single non-ASCII UTF-8 character.
+        const seq_len = std.unicode.utf8ByteSequenceLength(char_name[0]) catch return ElzError.InvalidCharacterLiteral;
+        if (char_name.len == seq_len) {
+            const cp = std.unicode.utf8Decode(char_name) catch return ElzError.InvalidCharacterLiteral;
+            return Value{ .character = cp };
+        }
         return ElzError.InvalidCharacterLiteral;
     }
-    // Handle exactness prefix: #e (exact) or #i (inexact)
+    if (try parseNumber(token, allocator)) |num| return num;
+    return Value{ .symbol = try allocator.dupe(u8, token) };
+}
+
+/// Validates the strict decimal syntax `[+-]? (digits [. digits*] | . digits) ([eE] [+-]? digits)?`.
+/// `std.fmt.parseFloat` alone also accepts `inf`, `nan`, hex floats, and
+/// digit separators, none of which are Scheme numbers.
+fn isDecimalSyntax(text: []const u8) bool {
+    var i: usize = 0;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+    var int_digits: usize = 0;
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) int_digits += 1;
+    var frac_digits: usize = 0;
+    if (i < text.len and text[i] == '.') {
+        i += 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) frac_digits += 1;
+    }
+    if (int_digits == 0 and frac_digits == 0) return false;
+    if (i < text.len and (text[i] == 'e' or text[i] == 'E')) {
+        i += 1;
+        if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+        var exp_digits: usize = 0;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) exp_digits += 1;
+        if (exp_digits == 0) return false;
+    }
+    return i == text.len;
+}
+
+/// Parses a decimal real, including the inf/nan spellings. Returns null when
+/// `text` is not a real number.
+pub fn parseReal(text: []const u8) ?f64 {
+    if (std.mem.eql(u8, text, "+inf.0")) return std.math.inf(f64);
+    if (std.mem.eql(u8, text, "-inf.0")) return -std.math.inf(f64);
+    if (std.mem.eql(u8, text, "+nan.0") or std.mem.eql(u8, text, "-nan.0")) return std.math.nan(f64);
+    if (!isDecimalSyntax(text)) return null;
+    return std.fmt.parseFloat(f64, text) catch null;
+}
+
+/// Reports whether `text` is an optionally signed run of digits in `radix`.
+/// Digit separators are rejected.
+pub fn isIntegerSyntax(text: []const u8, radix: u8) bool {
+    var i: usize = 0;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+    if (i >= text.len) return false;
+    for (text[i..]) |c| {
+        _ = std.fmt.charToDigit(c, radix) catch return false;
+    }
+    return true;
+}
+
+/// Parses an integer in `radix` with an optional sign. Returns null when
+/// `text` is not such an integer or does not fit in an i64.
+pub fn parseIntegerStrict(text: []const u8, radix: u8) ?i64 {
+    if (!isIntegerSyntax(text, radix)) return null;
+    return std.fmt.parseInt(i64, text, radix) catch null;
+}
+
+/// Parses an integer of any size in `radix`; null when not integer syntax.
+pub fn parseInteger(text: []const u8, radix: u8, allocator: std.mem.Allocator) ElzError!?Value {
+    if (parseIntegerStrict(text, radix)) |n| return Value{ .exact_integer = n };
+    if (!isIntegerSyntax(text, radix)) return null;
+    const digits = if (text[0] == '+') text[1..] else text;
+    return try @import("bigint.zig").parse(allocator, digits, radix);
+}
+
+/// Converts a decimal literal to an exact rational, for the `#e` prefix.
+fn exactFromDecimal(text: []const u8, allocator: std.mem.Allocator) ElzError!Value {
+    var i: usize = 0;
+    var negative = false;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) {
+        negative = text[i] == '-';
+        i += 1;
+    }
+    var mantissa: i128 = 0;
+    var scale: i32 = 0; // value = mantissa * 10^scale
+    var seen_dot = false;
+    while (i < text.len and text[i] != 'e' and text[i] != 'E') : (i += 1) {
+        const c = text[i];
+        if (c == '.') {
+            seen_dot = true;
+            continue;
+        }
+        mantissa = std.math.mul(i128, mantissa, 10) catch return ElzError.Overflow;
+        mantissa += c - '0';
+        if (seen_dot) scale -= 1;
+    }
+    if (i < text.len) {
+        const exp = std.fmt.parseInt(i32, text[i + 1 ..], 10) catch return ElzError.Overflow;
+        scale += exp;
+    }
+    if (negative) mantissa = -mantissa;
+    var num: i128 = mantissa;
+    var den: i128 = 1;
+    var k = scale;
+    while (k > 0) : (k -= 1) num = std.math.mul(i128, num, 10) catch return ElzError.Overflow;
+    while (k < 0) : (k += 1) den = std.math.mul(i128, den, 10) catch return ElzError.Overflow;
+    // Reduce before narrowing to i64.
+    const g = gcd128(if (num < 0) -num else num, den);
+    if (g > 1) {
+        num = @divExact(num, g);
+        den = @divExact(den, g);
+    }
+    if (den == 1 and (num > std.math.maxInt(i64) or num < std.math.minInt(i64))) {
+        var m = std.math.big.int.Managed.initSet(allocator, num) catch return ElzError.OutOfMemory;
+        return @import("bigint.zig").toValue(allocator, &m);
+    }
+    if (num > std.math.maxInt(i64) or num < std.math.minInt(i64) or den > std.math.maxInt(i64)) return ElzError.Overflow;
+    return core.normalizeRational(@intCast(num), @intCast(den), allocator);
+}
+
+fn gcd128(a: i128, b: i128) i128 {
+    var x = a;
+    var y = b;
+    while (y != 0) {
+        const t = y;
+        y = @rem(x, y);
+        x = t;
+    }
+    return x;
+}
+
+/// Parses `token` as a number with the Scheme prefixes `#e`, `#i`, `#x`,
+/// `#o`, `#b`, and `#d` in either order. Returns null when the token is not
+/// numeric, so the caller can treat it as a symbol.
+pub fn parseNumber(token: []const u8, allocator: std.mem.Allocator) ElzError!?Value {
     var rest = token;
     var force_exact: ?bool = null;
-    if (token.len >= 2 and token[0] == '#') {
-        switch (token[1]) {
+    var radix: ?u8 = null;
+    // Up to two prefixes, in either order.
+    var prefixes: usize = 0;
+    while (prefixes < 2 and rest.len >= 2 and rest[0] == '#') : (prefixes += 1) {
+        switch (rest[1]) {
             'e', 'E' => {
+                if (force_exact != null) return null;
                 force_exact = true;
-                rest = token[2..];
             },
             'i', 'I' => {
+                if (force_exact != null) return null;
                 force_exact = false;
-                rest = token[2..];
             },
-            else => {},
+            'x', 'X' => {
+                if (radix != null) return null;
+                radix = 16;
+            },
+            'o', 'O' => {
+                if (radix != null) return null;
+                radix = 8;
+            },
+            'b', 'B' => {
+                if (radix != null) return null;
+                radix = 2;
+            },
+            'd', 'D' => {
+                if (radix != null) return null;
+                radix = 10;
+            },
+            else => return null,
         }
+        rest = rest[2..];
     }
+    const has_prefix = prefixes > 0;
+    const r: u8 = radix orelse 10;
 
-    // Try rational literal p/q
+    // Rational p/q.
     if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
-        const num_str = rest[0..slash];
-        const den_str = rest[slash + 1 ..];
-        const numer = std.fmt.parseInt(i64, num_str, 10) catch null;
-        const denom = std.fmt.parseInt(i64, den_str, 10) catch null;
-        if (numer != null and denom != null and denom.? != 0) {
-            const rational_val = try core.normalizeRational(numer.?, denom.?, allocator);
-            if (force_exact == false) {
-                const f = switch (rational_val) {
-                    .exact_integer => |n| @as(f64, @floatFromInt(n)),
-                    .rational => |r| r.toFloat(),
-                    else => unreachable,
-                };
-                return Value{ .number = f };
-            }
-            return rational_val;
+        const numer = parseIntegerStrict(rest[0..slash], r) orelse return if (has_prefix) ElzError.InvalidArgument else null;
+        const denom = parseIntegerStrict(rest[slash + 1 ..], r) orelse return if (has_prefix) ElzError.InvalidArgument else null;
+        if (rest[slash + 1] == '+' or rest[slash + 1] == '-') return if (has_prefix) ElzError.InvalidArgument else null;
+        if (denom == 0) return ElzError.DivisionByZero;
+        const rational_val = try core.normalizeRational(numer, denom, allocator);
+        if (force_exact == false) {
+            const f = switch (rational_val) {
+                .exact_integer => |n| @as(f64, @floatFromInt(n)),
+                .rational => |rv| rv.toFloat(),
+                else => unreachable,
+            };
+            return Value{ .number = f };
         }
+        return rational_val;
     }
 
-    // Try integer (no decimal point, no exponent)
-    const is_int = blk: {
-        var s = rest;
-        if (s.len > 0 and (s[0] == '+' or s[0] == '-')) s = s[1..];
-        if (s.len == 0) break :blk false;
-        for (s) |c| {
-            if (c < '0' or c > '9') break :blk false;
-        }
-        break :blk true;
-    };
-    if (is_int) {
-        const n = std.fmt.parseInt(i64, rest, 10) catch null;
-        if (n != null) {
-            if (force_exact == false) return Value{ .number = @floatFromInt(n.?) };
-            return Value{ .exact_integer = n.? };
-        }
+    // Integer, of any size.
+    if (try parseInteger(rest, r, allocator)) |n| {
+        if (force_exact == false) return Value{ .number = n.asFloat().? };
+        return n;
+    }
+    if (r != 10) {
+        // An integer that overflows i64 in a non-decimal radix, or garbage.
+        return if (has_prefix) ElzError.InvalidArgument else null;
     }
 
-    const num = std.fmt.parseFloat(f64, rest) catch {
-        if (force_exact != null) return ElzError.InvalidArgument;
-        return Value{ .symbol = try allocator.dupe(u8, token) };
-    };
-    if (force_exact == true) {
-        const as_int = @as(i64, @intFromFloat(num));
-        if (@as(f64, @floatFromInt(as_int)) == num) return Value{ .exact_integer = as_int };
-        return ElzError.InvalidArgument;
+    // Decimal real, infinities, and NaN.
+    if (parseReal(rest)) |num| {
+        if (force_exact == true) {
+            if (!std.math.isFinite(num)) return ElzError.InvalidArgument;
+            return try exactFromDecimal(rest, allocator);
+        }
+        return Value{ .number = num };
     }
-    return Value{ .number = num };
+
+    // Complex literal: <real><sign><imag>i, e.g. 3+4i, -2.5+0.0i, +inf.0i.
+    if (rest.len >= 2 and (rest[rest.len - 1] == 'i' or rest[rest.len - 1] == 'I')) {
+        if (parseComplex(rest, allocator)) |v| {
+            if (force_exact == true) return ElzError.InvalidArgument;
+            return v;
+        } else |_| {}
+    }
+
+    return if (has_prefix) ElzError.InvalidArgument else null;
 }
 
 /// Reads and parses a single form from a string of source code.
@@ -305,7 +792,30 @@ pub fn read(source: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         .position = 0,
         .allocator = allocator,
     };
+    defer parser.labels.deinit(allocator);
     return parser.parse_form();
+}
+
+/// Parses the first datum in `source`. Returns the value and the byte offset
+/// just past its final token, or null when the source holds no datum.
+pub fn readOne(source: []const u8, allocator: std.mem.Allocator) ElzError!?struct { value: Value, consumed: usize } {
+    var tokens = tokenize(source, allocator) catch |err| return err;
+    defer tokens.deinit(allocator);
+    if (tokens.items.len == 0) return null;
+
+    var p = Parser{
+        .tokens = tokens,
+        .position = 0,
+        .allocator = allocator,
+        .source = source,
+    };
+    defer p.labels.deinit(allocator);
+    const v = try p.parse_form();
+    const consumed = if (p.position < p.tokens.items.len) blk: {
+        const next_tok = p.tokens.items[p.position];
+        break :blk @intFromPtr(next_tok.ptr) - @intFromPtr(source.ptr);
+    } else source.len;
+    return .{ .value = v, .consumed = consumed };
 }
 
 /// Reads and parses all forms from a string of source code.
@@ -318,6 +828,12 @@ pub fn read(source: []const u8, allocator: std.mem.Allocator) ElzError!Value {
 /// Returns:
 /// An `ArrayList` of parsed `Value`s, or an error if parsing fails.
 pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(Value) {
+    return readAllTracked(source, allocator, "", null);
+}
+
+/// Like `readAll`, but records the file and line of every parsed pair into
+/// `locations` (keyed by pair pointer) for error reporting.
+pub fn readAllTracked(source: []const u8, allocator: std.mem.Allocator, file: []const u8, locations: ?*FormLocations) !std.ArrayListUnmanaged(Value) {
     var tokens = tokenize(source, allocator) catch |err| {
         return err;
     };
@@ -328,7 +844,11 @@ pub fn readAll(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListU
         .tokens = tokens,
         .position = 0,
         .allocator = allocator,
+        .source = source,
+        .file = file,
+        .locations = locations,
     };
+    defer parser.labels.deinit(allocator);
 
     var forms = std.ArrayListUnmanaged(Value).empty;
     while (parser.position < parser.tokens.items.len) {
@@ -358,7 +878,7 @@ test "parser" {
     // Test parsing a string
     value = try read("\"hello world\"", allocator);
     try testing.expect(value == .string);
-    try testing.expectEqualStrings("hello world", value.string);
+    try testing.expectEqualStrings("hello world", value.string.bytes);
 
     // Test parsing a list
     value = try read("(+ 1 2)", allocator);

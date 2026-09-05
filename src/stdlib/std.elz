@@ -277,12 +277,13 @@
 ;;;
 ;;; Returns:
 ;;;   The sublist starting with obj, or #f if obj is not found.
-(define (member obj lst)
-  (if (null? lst)
-      #f
-      (if (equal? obj (car lst))
-          lst
-          (member obj (cdr lst)))))
+(define (member obj lst . compare)
+  (let ((same? (if (null? compare) equal? (car compare))))
+    (let loop ((l lst))
+      (cond
+        ((null? l) #f)
+        ((same? obj (car l)) l)
+        (else (loop (cdr l)))))))
 
 ;;; (memv obj lst)
 ;;;
@@ -304,12 +305,13 @@
 ;;;
 ;;; Returns:
 ;;;   The pair whose car is obj, or #f if no such pair is found.
-(define (assoc obj alist)
-  (if (null? alist)
-      #f
-      (if (equal? obj (caar alist))
-          (car alist)
-          (assoc obj (cdr alist)))))
+(define (assoc obj alist . compare)
+  (let ((same? (if (null? compare) equal? (car compare))))
+    (let loop ((al alist))
+      (cond
+        ((null? al) #f)
+        ((same? obj (caar al)) (car al))
+        (else (loop (cdr al)))))))
 
 ;;; (assv obj alist)
 ;;;
@@ -381,11 +383,18 @@
 ;;;
 ;;; Returns:
 ;;;   An unspecified value.
-(define (for-each proc lst)
-  (if (not (null? lst))
-      (begin
-        (proc (car lst))
-        (for-each proc (cdr lst)))))
+(define (for-each proc lst . more)
+  (if (null? more)
+      (let loop ((l lst))
+        (if (pair? l)
+            (begin
+              (proc (car l))
+              (loop (cdr l)))))
+      (let loop ((ls (cons lst more)))
+        (if (every? pair? ls)
+            (begin
+              (apply proc (map car ls))
+              (loop (map cdr ls)))))))
 
 ;;; ---------------------------------
 ;;; Higher-Order Functions
@@ -598,3 +607,452 @@
            (error "boolean=?: not a boolean" (car items)))
           ((eq? b (car items)) (loop (cdr items)))
           (else #f)))))
+
+;;; ---------------------------------
+;;; R7RS Small Library Completions
+;;; ---------------------------------
+
+;;; (make-list k [fill])
+;;;
+;;; Returns a list of k elements, each set to fill (or an unspecified value).
+(define (make-list k . fill)
+  (let ((f (if (null? fill) (if #f #f) (car fill))))
+    (let loop ((n k) (acc '()))
+      (if (<= n 0) acc (loop (- n 1) (cons f acc))))))
+
+;;; (list-copy lst)
+;;;
+;;; Returns a fresh copy of the spine of lst. Improper tails are shared.
+(define (list-copy lst)
+  (let loop ((l lst) (acc '()))
+    (if (pair? l)
+        (loop (cdr l) (cons (car l) acc))
+        (let build ((acc acc) (result l))
+          (if (null? acc)
+              result
+              (build (cdr acc) (cons (car acc) result)))))))
+
+;;; (symbol=? sym1 sym2 ...)
+;;;
+;;; Returns #t if all arguments are the same symbol, #f otherwise.
+(define (symbol=? a . rest)
+  (and (symbol? a)
+       (let loop ((items rest))
+         (cond
+           ((null? items) #t)
+           ((eq? a (car items)) (loop (cdr items)))
+           (else #f)))))
+
+;;; (string-map proc str1 str2 ...)
+;;;
+;;; Applies proc element-wise to the characters of the strings and returns a
+;;; new string of the results. Stops at the shortest string.
+(define (string-map proc . strs)
+  (list->string (apply map proc (map string->list strs))))
+
+;;; (string-for-each proc str1 str2 ...)
+;;;
+;;; Applies proc element-wise to the characters of the strings, in order,
+;;; for its side effects.
+(define (string-for-each proc . strs)
+  (apply map proc (map string->list strs))
+  (if #f #f))
+
+;;; (string-copy! to at from [start [end]])
+;;;
+;;; Copies the characters of from between start and end into to, starting
+;;; at index at. The source range is snapshotted first, so overlapping
+;;; copies within one string are safe.
+(define (string-copy! to at from . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (string-length from) (cadr se)))
+         (chars (string->list (substring from start end))))
+    (let loop ((i at) (cs chars))
+      (if (null? cs)
+          (if #f #f)
+          (begin
+            (string-set! to i (car cs))
+            (loop (+ i 1) (cdr cs)))))))
+
+;;; (vector-map proc vec1 vec2 ...)
+;;;
+;;; Applies proc element-wise to the vectors and returns a new vector of the
+;;; results. Stops at the shortest vector.
+(define (vector-map proc . vecs)
+  (list->vector (apply map proc (map vector->list vecs))))
+
+;;; (vector-for-each proc vec1 vec2 ...)
+;;;
+;;; Applies proc element-wise to the vectors, in order, for its side effects.
+(define (vector-for-each proc . vecs)
+  (apply map proc (map vector->list vecs))
+  (if #f #f))
+
+;;; (vector-copy vec [start [end]])
+;;;
+;;; Returns a fresh vector holding the elements of vec between start and end.
+(define (vector-copy vec . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (vector-length vec) (cadr se))))
+    (let loop ((i (- end 1)) (acc '()))
+      (if (< i start)
+          (list->vector acc)
+          (loop (- i 1) (cons (vector-ref vec i) acc))))))
+
+;;; (vector-copy! to at from [start [end]])
+;;;
+;;; Copies the elements of from between start and end into to, starting at
+;;; index at. The source range is snapshotted first, so overlapping copies
+;;; within one vector are safe.
+(define (vector-copy! to at from . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (vector-length from) (cadr se)))
+         (elems (vector->list (vector-copy from start end))))
+    (let loop ((i at) (es elems))
+      (if (null? es)
+          (if #f #f)
+          (begin
+            (vector-set! to i (car es))
+            (loop (+ i 1) (cdr es)))))))
+
+;;; (vector-append vec ...)
+;;;
+;;; Returns a fresh vector holding the elements of the vectors in order.
+(define (vector-append . vecs)
+  (list->vector (apply append (map vector->list vecs))))
+
+;;; (vector->string vec [start [end]])
+;;;
+;;; Returns a string holding the characters of vec between start and end.
+(define (vector->string vec . se)
+  (list->string (vector->list (apply vector-copy vec se))))
+
+;;; (string->vector str [start [end]])
+;;;
+;;; Returns a vector holding the characters of str between start and end.
+(define (string->vector str . se)
+  (let* ((start (if (null? se) 0 (car se)))
+         (end (if (or (null? se) (null? (cdr se))) (string-length str) (cadr se))))
+    (list->vector (string->list (substring str start end)))))
+
+;;; (write-string str [port])
+;;;
+;;; Writes the characters of str to port (default: the current output port).
+(define (write-string str . rest)
+  (let* ((port (if (null? rest) (current-output-port) (car rest)))
+         (start (if (or (null? rest) (null? (cdr rest))) 0 (cadr rest)))
+         (end (if (or (null? rest) (null? (cdr rest)) (null? (cddr rest)))
+                  (string-length str)
+                  (caddr rest))))
+    (display (substring str start end) port)))
+
+;;; ---------------------------------
+;;; R7RS Derived Forms
+;;; ---------------------------------
+
+;;; (features)
+;;;
+;;; Returns the list of feature identifiers this implementation supports.
+(define (features) '(r7rs elz))
+
+;;; (%feature-satisfied? req)
+;;;
+;;; Evaluates a cond-expand feature requirement against (features).
+(define (%feature-satisfied? req)
+  (cond
+    ((symbol? req) (if (memq req (features)) #t #f))
+    ((pair? req)
+     (let ((op (car req)))
+       (cond
+         ((eq? op 'and)
+          (let loop ((rs (cdr req)))
+            (cond ((null? rs) #t)
+                  ((%feature-satisfied? (car rs)) (loop (cdr rs)))
+                  (else #f))))
+         ((eq? op 'or)
+          (let loop ((rs (cdr req)))
+            (cond ((null? rs) #f)
+                  ((%feature-satisfied? (car rs)) #t)
+                  (else (loop (cdr rs))))))
+         ((eq? op 'not) (not (%feature-satisfied? (cadr req))))
+         (else #f))))
+    (else #f)))
+
+;;; (cond-expand clause ...)
+;;;
+;;; Expands to the body of the first clause whose feature requirement is
+;;; satisfied. Requirements support and, or, not, and feature identifiers.
+(define-macro (cond-expand . clauses)
+  (let loop ((cs clauses))
+    (if (null? cs)
+        '(syntax-error "cond-expand: no matching clause")
+        (let ((req (car (car cs)))
+              (body (cdr (car cs))))
+          (if (or (eq? req 'else) (%feature-satisfied? req))
+              (cons 'begin body)
+              (loop (cdr cs)))))))
+
+;;; (let-values ((formals expr) ...) body ...)
+;;;
+;;; Binds each formals list to the values returned by its expr. The exprs are
+;;; evaluated before any binding is visible. R7RS sample implementation.
+(define-syntax let-values
+  (syntax-rules ()
+    ((let-values (binding ...) body0 body1 ...)
+     (let-values "bind" (binding ...) () (begin body0 body1 ...)))
+    ((let-values "bind" () tmps body)
+     (let tmps body))
+    ((let-values "bind" ((b0 e0) binding ...) tmps body)
+     (let-values "mktmp" b0 e0 () (binding ...) tmps body))
+    ((let-values "mktmp" () e0 args bindings tmps body)
+     (call-with-values (lambda () e0) (lambda args (let-values "bind" bindings tmps body))))
+    ((let-values "mktmp" (a . b) e0 (arg ...) bindings (tmp ...) body)
+     (let-values "mktmp" b e0 (arg ... x) bindings (tmp ... (a x)) body))
+    ((let-values "mktmp" a e0 (arg ...) bindings (tmp ...) body)
+     (call-with-values (lambda () e0) (lambda (arg ... . x) (let-values "bind" bindings (tmp ... (a x)) body))))))
+
+;;; (let*-values ((formals expr) ...) body ...)
+;;;
+;;; Like let-values, but each binding sees the previous ones.
+(define-syntax let*-values
+  (syntax-rules ()
+    ((let*-values () body0 body1 ...)
+     (let () body0 body1 ...))
+    ((let*-values (binding0 binding1 ...) body0 body1 ...)
+     (let-values (binding0) (let*-values (binding1 ...) body0 body1 ...)))))
+
+;;; (define-values (name ...) expr)
+;;;
+;;; Defines each name to the corresponding value returned by expr.
+(define-syntax define-values
+  (syntax-rules ()
+    ((define-values (name ...) expr)
+     (begin
+       (define results (call-with-values (lambda () expr) list))
+       (define name
+         (let ((v (car results)))
+           (set! results (cdr results))
+           v))
+       ...))
+    ((define-values (name ... . rest) expr)
+     (begin
+       (define results (call-with-values (lambda () expr) list))
+       (define name
+         (let ((v (car results)))
+           (set! results (cdr results))
+           v))
+       ...
+       (define rest results)))
+    ((define-values name expr)
+     (define name (call-with-values (lambda () expr) list)))))
+
+;;; (%formals-min-count formals)
+;;;
+;;; Returns the number of required parameters in a lambda formals spec.
+(define (%formals-min-count formals)
+  (let loop ((f formals) (n 0))
+    (if (pair? f) (loop (cdr f) (+ n 1)) n)))
+
+;;; (case-lambda (formals body ...) ...)
+;;;
+;;; Returns a procedure that dispatches on argument count to the first
+;;; matching clause.
+(define-macro (case-lambda . clauses)
+  (let ((args-sym (gensym)))
+    `(lambda ,args-sym
+       (cond
+         ,@(map (lambda (clause)
+                  (let ((formals (car clause))
+                        (body (cdr clause)))
+                    (cond
+                      ((symbol? formals)
+                       `(#t (apply (lambda ,formals ,@body) ,args-sym)))
+                      ((list? formals)
+                       `((= (length ,args-sym) ,(length formals))
+                         (apply (lambda ,formals ,@body) ,args-sym)))
+                      (else
+                       `((>= (length ,args-sym) ,(%formals-min-count formals))
+                         (apply (lambda ,formals ,@body) ,args-sym))))))
+                clauses)
+         (#t (error "case-lambda: no matching clause"))))))
+
+;;; (define-record-type name (ctor field ...) pred (field accessor [modifier]) ...)
+;;;
+;;; Defines a record type: name is bound to the type descriptor, ctor
+;;; constructs instances (unlisted fields start unspecified), pred tests
+;;; membership, and each field spec defines an accessor and an optional
+;;; modifier.
+(define-macro (define-record-type type-name ctor-spec pred . field-specs)
+  (let ((field-names (map car field-specs))
+        (ctor-name (car ctor-spec))
+        (ctor-args (cdr ctor-spec)))
+    `(begin
+       (define ,type-name (%make-record-type ',type-name ',field-names))
+       (define (,ctor-name ,@ctor-args)
+         (%make-record ,type-name
+                       (list ,@(map (lambda (f) (if (memq f ctor-args) f '(if #f #f)))
+                                    field-names))))
+       (define (,pred x) (%record-of-type? x ,type-name))
+       ,@(let loop ((specs field-specs) (i 0))
+           (if (null? specs)
+               '()
+               (let* ((spec (car specs))
+                      (accessor (cadr spec))
+                      (rest (cddr spec))
+                      (acc-def `(define (,accessor r) (%record-ref ,type-name r ,i)))
+                      (more (loop (cdr specs) (+ i 1))))
+                 (if (null? rest)
+                     (cons acc-def more)
+                     (cons acc-def
+                           (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
+                                 more)))))))))
+
+;;; (call-with-port port proc)
+;;;
+;;; Calls proc with port, closes the port when proc returns, and returns
+;;; the result of proc.
+(define (call-with-port port proc)
+  (let ((result (proc port)))
+    (close-port port)
+    result))
+
+;;; ---------------------------------
+;;; R7RS Exceptions
+;;; ---------------------------------
+
+;;; (error-object? obj)
+;;;
+;;; Returns #t if obj is an error object created by error.
+(define (error-object? obj)
+  (%record-of-type? obj %error-rtd))
+
+;;; (error-object-message err)
+;;;
+;;; Returns the message of an error object.
+(define (error-object-message err)
+  (%record-ref %error-rtd err 1))
+
+;;; (error-object-irritants err)
+;;;
+;;; Returns the list of irritants of an error object.
+(define (error-object-irritants err)
+  (%record-ref %error-rtd err 2))
+
+;;; (read-error? obj)
+;;;
+;;; Returns #t if obj is an error object raised by read.
+(define (read-error? obj)
+  (and (error-object? obj) (eq? (%record-ref %error-rtd obj 0) 'read)))
+
+;;; (file-error? obj)
+;;;
+;;; Returns #t if obj is an error object raised by a file operation.
+(define (file-error? obj)
+  (and (error-object? obj) (eq? (%record-ref %error-rtd obj 0) 'file)))
+
+;;; (%guard-clauses-have-else? clauses)
+;;;
+;;; Reports whether a guard clause list ends in an else clause.
+(define (%guard-clauses-have-else? clauses)
+  (any? (lambda (c) (eq? (car c) 'else)) clauses))
+
+;;; (guard (var clause ...) body ...)
+;;;
+;;; Evaluates body; if it raises, binds the raised object to var and
+;;; dispatches on the cond-style clauses. Reraises when no clause matches.
+(define-macro (guard spec . body)
+  (let ((var (car spec))
+        (clauses (cdr spec)))
+    `(try (begin ,@body)
+          (catch ,var
+            (cond ,@clauses
+                  ,@(if (%guard-clauses-have-else? clauses)
+                        '()
+                        `((else (raise ,var)))))))))
+
+;;; ---------------------------------
+;;; Parameters, Process Context, Time, and Lazy Completions
+;;; ---------------------------------
+
+;;; (make-parameter init [converter])
+;;;
+;;; Returns a parameter object: a procedure that returns its current value
+;;; when called with no arguments. Rebind it dynamically with parameterize.
+(define (make-parameter init . conv)
+  (let* ((converter (if (null? conv) (lambda (x) x) (car conv)))
+         (value (converter init)))
+    (lambda args
+      (cond
+        ((null? args) value)
+        ((eq? (car args) '%param-set!) (set! value (cadr args)) (if #f #f))
+        ((eq? (car args) '%param-convert) (converter (cadr args)))
+        (else (error "parameter: unexpected arguments"))))))
+
+;;; (parameterize ((param value) ...) body ...)
+;;;
+;;; Rebinds each parameter to its converted value for the dynamic extent of
+;;; body, restoring the previous values on exit.
+(define-macro (parameterize bindings . body)
+  (let ((psyms (map (lambda (b) (gensym)) bindings))
+        (olds (map (lambda (b) (gensym)) bindings))
+        (news (map (lambda (b) (gensym)) bindings)))
+    `(let ,(map (lambda (ps b) `(,ps ,(car b))) psyms bindings)
+       (let ,(map (lambda (o ps) `(,o (,ps))) olds psyms)
+         (let ,(map (lambda (n ps b) `(,n (,ps '%param-convert ,(cadr b)))) news psyms bindings)
+           (dynamic-wind
+             (lambda () ,@(map (lambda (ps n) `(,ps '%param-set! ,n)) psyms news))
+             (lambda () ,@body)
+             (lambda () ,@(map (lambda (ps o) `(,ps '%param-set! ,o)) psyms olds))))))))
+
+;;; (get-environment-variable name)
+;;;
+;;; Returns the value of the environment variable name, or #f.
+(define (get-environment-variable name) (getenv name))
+
+;;; (emergency-exit [status])
+;;;
+;;; Exits the process immediately.
+(define (emergency-exit status) (exit status))
+
+;;; (current-second)
+;;;
+;;; Returns the current time in seconds since the epoch, as an inexact number.
+(define (current-second)
+  (* (current-time-ms) 0.001))
+
+;;; (current-jiffy)
+;;;
+;;; Returns the current time in jiffies (milliseconds), as an exact integer.
+(define (current-jiffy)
+  (exact (current-time-ms)))
+
+;;; (jiffies-per-second)
+;;;
+;;; Returns the number of jiffies in one second.
+(define (jiffies-per-second) 1000)
+
+;;; (delay-force expr)
+;;;
+;;; Returns a promise that, when forced, forces the promise produced by expr.
+(define-macro (delay-force expr)
+  `(%%make-delayed%% (lambda () ,expr) #t))
+
+;;; (interaction-environment)
+;;;
+;;; Returns the environment eval uses by default. Elz has a single global
+;;; environment, so this is an opaque marker accepted by eval.
+(define (interaction-environment) '%interaction-environment)
+
+;;; (null-environment version)
+;;; (scheme-report-environment version)
+;;;
+;;; R5RS environment specifiers. Elz has a single global environment, so both
+;;; resolve to the interaction environment.
+(define (null-environment . version) '%interaction-environment)
+(define (scheme-report-environment . version) '%interaction-environment)
+
+;;; (environment import-spec ...)
+;;;
+;;; Returns an environment for eval. Elz has a single global environment,
+;;; so every import spec resolves to the interaction environment.
+(define (environment . import-specs) '%interaction-environment)

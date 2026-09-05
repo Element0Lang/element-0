@@ -8,7 +8,7 @@ Element 0 is a small, embeddable Lisp dialect inspired by Scheme, implemented in
 The interpreter (Elz) is designed to integrate into Zig applications as a scripting engine.
 Priorities, in order:
 
-1. Correctness and R5RS compliance where applicable.
+1. Correctness and R7RS-small compliance where applicable (see `ROADMAP.md`).
 2. Clean, minimal public API for embedding into Zig projects.
 3. Maintainable and well-tested code.
 4. Cross-platform support (Linux, macOS, and Windows).
@@ -22,18 +22,33 @@ Priorities, in order:
 
 ## Writing Style
 
+- Write in simple, plain English. Use short sentences and everyday words.
 - Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
-- Do not use em dashes. Restructure the sentence, or use a colon or semicolon instead.
+- Do not use em dashes. Restructure the sentence or use a semicolon instead.
+- Avoid colons in the middle of sentences, in new prose. A colon that introduces a code block or a list is fine;
+  existing text is reworded when it is touched anyway, not in a sweep.
 - Avoid colorful adjectives and adverbs. Write "garbage collector" not "efficient garbage collector", "parser" not "robust parser".
-- Use noun phrases for checklist items, not imperative verbs. Write "opcode timing table" not "build the opcode timing table".
+- Prefer noun phrases for checklist items over imperative verbs. Write "opcode timing table" not "build the opcode timing table".
 - Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
   at, to, by, of) stay lowercase unless they are the first word.
+- Do not bold the lead-in of a list item. Write "Vectors and hash maps: ..." not "**Vectors and hash maps**: ...".
+- Use sentence case for the lead-in of a list item. Write "Upvalue capture: ..." not "Upvalue Capture: ...". Proper nouns keep their capitals.
+- Capitalize only the first part of a hyphenated compound: "Tail-call Detection" in a heading, "Stack-based" at the start of a sentence, and
+  "stack-based bytecode VM" elsewhere. Never write "Tail-Call".
+- Start each sentence with a capital letter, capitalize proper nouns (Zig, Scheme, Element 0, Elz, R7RS), and leave common nouns lowercase
+  in the middle of a sentence.
+- Write correct and complete sentences.
+- Avoid made-up words and abbreviations.
+- Use participial phrases scarcely.
 
 ## Repository Layout
 
 - `src/lib.zig`: Main public API export module for embedding Elz as a library.
 - `src/main.zig`: REPL entry point (`elz-repl` binary).
 - `src/elz/core.zig`: Core value types, Environment, and Module definitions.
+- `src/elz/bigint.zig`: Arbitrary-precision exact integers over `std.math.big`.
+- `src/elz/unicode.zig`: Generated Unicode tables for character predicates and case mappings (regenerate with
+  `python3 tools/gen_unicode.py`).
 - `src/elz/interpreter.zig`: Main `Interpreter` struct.
 - `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
 - `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
@@ -46,13 +61,14 @@ Priorities, in order:
 - `src/elz/errors.zig`: Error types.
 - `src/elz/writer.zig`: Value serialization and display.
 - `src/elz/api_helpers.zig`: Public API helper functions.
-- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime,
-  os, modules, and process).
+- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, bytevectors,
+  records, hashmaps, io, ports, format, json, regex, datetime, os, modules, and process).
 - `src/stdlib/std.elz`: Standard library written in Element 0 itself.
 - `examples/zig/`: FFI examples showing how to call Zig functions from Element 0.
 - `examples/elz/`: Element 0 script examples.
-- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
-  `test_module_lib.elz`).
+- `tests/`: Element 0 language-level tests (`test_*.elz`), Zig property tests (`*_prop_test.zig`), Zig integration tests
+  (`*_integ_test.zig`), and the R7RS conformance harness (`r7rs_conformance.elz` over the suite vendored in `tests/vendor/`).
+- `tools/`: Development scripts, currently the Unicode table generator and its template.
 - `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
@@ -75,8 +91,9 @@ The `Interpreter` struct in `interpreter.zig` ties these together and manages th
 Zig functions can be registered with the interpreter via `env_setup.define_foreign_func()`.
 This is the primary extension mechanism for embedding use cases.
 
-`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus two variadic forms:
-`(std.mem.Allocator, []const core.Value)` and `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)`.
+`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus one variadic form, `(std.mem.Allocator, []const core.Value)`.
+A function needing the primitive signature `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)` is bound
+directly as a `core.Value.procedure`, as `env_setup.zig` does for the built-ins.
 Parameter types supported by `Caster`: `f64`, integers, `bool`, `[]const u8`, `?T`, `core.Value`, Zig structs
 (mapped to/from Elz hash-maps by field name), and `ElzCallback` (an Elz closure or procedure wrapped for
 invocation from Zig). `valueFromNative` converts Zig scalars, strings, optionals, and structs back to `core.Value`.
@@ -89,10 +106,10 @@ Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. 
 
 Managed via Zig's package manager (`build.zig.zon`):
 
-- Chilli: CLI framework for the REPL.
+- Chilli (v0.3.1): CLI framework for the REPL.
 - BDWGC (v8.2.12): Garbage collector.
-- Linenoise (v2.0): Line editing for the REPL (POSIX only).
-- Minish: Property-based testing framework.
+- Bestline: Line editing and history for the REPL.
+- Minish (v0.3.0): Property-based testing framework.
 
 ## Zig Conventions
 

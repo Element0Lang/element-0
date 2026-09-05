@@ -1,0 +1,88 @@
+;;; ---------------------------------------
+;;; R7RS Conformance Driver
+;;; Runs the vendored Chibi Scheme r7rs-tests.scm with shims for the
+;;; (chibi test) interface, and reports a compliance score.
+;;; ---------------------------------------
+
+(display "Running the R7RS conformance suite (vendored from Chibi Scheme)...")
+(newline)
+
+(define *conf-run* 0)
+(define *conf-failed* 0)
+(define *conf-group* "")
+
+(define (test-begin name) (set! *conf-group* name))
+(define (test-end . rest) (if #f #f))
+
+;; Approximate equality: like equal?, but inexact reals compare within a
+;; small relative tolerance, matching (chibi test) behavior.
+(define (%conf-error? v) (and (pair? v) (eq? (car v) '%conf-error)))
+
+(define (%approx-equal? a b)
+  (cond
+    ;; Both sides raised: the test expected an error and got one.
+    ((and (%conf-error? a) (%conf-error? b)) #t)
+    ((and (number? a) (number? b))
+     (cond
+       ((and (exact? a) (exact? b)) (= a b))
+       ((= a b) #t)
+       ((not (= a a)) (not (= b b)))
+       ((not (= b b)) #f)
+       ;; (chibi test) uses a relative epsilon of 1e-5; the suite's expected
+       ;; inexact values are written to that precision, e.g. 9.728 for the
+       ;; geometric mean 9.728000255822641.
+       ;; magnitude rather than abs, so complex results compare too.
+       (else (let ((mag (max (magnitude a) (magnitude b))))
+               (<= (magnitude (- a b)) (* mag 1e-5))))))
+    ((and (pair? a) (pair? b))
+     (and (%approx-equal? (car a) (car b)) (%approx-equal? (cdr a) (cdr b))))
+    ((and (vector? a) (vector? b))
+     (%approx-equal? (vector->list a) (vector->list b)))
+    (else (equal? a b))))
+
+(define (%conf-record name expected got)
+  (set! *conf-run* (+ *conf-run* 1))
+  (if (not (%approx-equal? expected got))
+      (begin
+        (set! *conf-failed* (+ *conf-failed* 1))
+        (display "[FAIL ") (display *conf-group*) (display "] ")
+        (write name)
+        (display " expected ") (write expected)
+        (display " but got ") (write got)
+        (newline))))
+
+(define-macro (test expected expr)
+  `(%conf-record ',expr
+                 (try ,expected (catch e (list '%conf-error e)))
+                 (try ,expr (catch e (list '%conf-error e)))))
+
+(define-macro (test-values expected expr)
+  `(test (call-with-values (lambda () ,expected) list)
+         (call-with-values (lambda () ,expr) list)))
+
+(define-macro (test-error expr)
+  `(%conf-record ',expr #t (try (begin ,expr #f) (catch e #t))))
+
+(define-macro (test-assert name expr)
+  `(%conf-record ,name #t (try (if ,expr #t 'assert-failed) (catch e (list '%conf-error e)))))
+
+;; The suite imports (chibi test); the shims above provide its interface.
+(define-library (chibi test) (export))
+
+(define (%conf-block-failed e)
+  (set! *conf-run* (+ *conf-run* 1))
+  (set! *conf-failed* (+ *conf-failed* 1))
+  (display "[ABORTED BLOCK ") (display *conf-group*) (display "] ")
+  (if (error-object? e)
+      (begin (display (error-object-message e)) (display " ") (write (error-object-irritants e)))
+      (write e))
+  (newline))
+
+(include "tests/vendor/r7rs-tests-wrapped.scm")
+
+(newline)
+(display "--------------------") (newline)
+(display "Conformance Finished.") (newline)
+(display "Total run: ") (display *conf-run*) (newline)
+(display "Passed: ") (display (- *conf-run* *conf-failed*)) (newline)
+(display "Failed: ") (display *conf-failed*) (newline)

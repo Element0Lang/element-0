@@ -11,7 +11,7 @@ pub const Value = core.Value;
 pub const Environment = core.Environment;
 pub const ElzError = @import("elz/errors.zig").ElzError;
 // GC utilities for embedders that allocate the Interpreter on the managed heap
-// (like the REPL which ost embedders do not need these).
+// (like the REPL does); most embedders do not need these.
 const _gc = @import("elz/gc.zig");
 pub const gc_allocator: @import("std").mem.Allocator = _gc.allocator;
 pub const gc_add_roots = _gc.add_roots;
@@ -21,8 +21,10 @@ pub const write = @import("elz/writer.zig").write;
 pub const listToSlice = @import("elz/api_helpers.zig").listToSlice;
 pub const sliceToList = @import("elz/api_helpers.zig").sliceToList;
 
-// FFI function for extending Elz with native Zig code.
+// FFI function for extending Elz with native Zig code, and the FFI module for
+// the types a native function may take (`ffi.ElzCallback`, `ffi.Caster`).
 pub const define_foreign_func = @import("elz/env_setup.zig").define_foreign_func;
+pub const ffi = @import("elz/ffi.zig");
 
 // Advanced API: Direct access to the parser, needed by the REPL.
 // Use Interpreter.evalString for normal use; Interpreter.evalForm for per-form REPL loops.

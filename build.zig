@@ -129,7 +129,7 @@ pub fn build(b: *std.Build) void {
 
     // --- Docs Setup ---
     const docs_step = b.step("docs", "Generate API documentation");
-    const doc_install_path = "docs/api";
+    const doc_install_path = "docs/zig-api";
 
     b.build_root.handle.createDirPath(b.graph.io, doc_install_path) catch {};
 

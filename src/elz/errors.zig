@@ -30,6 +30,8 @@ pub const ElzError = error{
     LambdaInvalidParams,
     /// A procedure was called with the wrong number of arguments.
     WrongArgumentCount,
+    /// An error raised from Elz code via the `error` procedure.
+    UserError,
     /// A value that is not a procedure was called as if it were one.
     NotAFunction,
     /// A procedure was called with an argument of the wrong type.
@@ -63,4 +65,9 @@ pub const ElzError = error{
     Overflow,
     /// The VM call stack or value stack overflowed.
     StackOverflow,
+    /// A capability disabled by `SandboxFlags` was used (filesystem or process access).
+    PermissionDenied,
+    /// A body needs more local slots, parameters, or arguments than the
+    /// bytecode format allows (the limit is 255 per frame).
+    TooManyLocals,
 };

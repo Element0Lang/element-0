@@ -41,6 +41,11 @@ pub const SandboxFlags = struct {
     enable_strings: bool = true,
     /// Enables or disables I/O functions (e.g., `display`, `load`).
     enable_io: bool = true,
+    /// Enables or disables filesystem access: file ports, `load`, `include`,
+    /// module imports, and the file operations in `os`.
+    enable_filesystem: bool = true,
+    /// Enables or disables process access: `exit` and environment variables.
+    enable_process: bool = true,
     /// Maximum wall-clock execution time in milliseconds. Null means no limit.
     time_limit_ms: ?u64 = null,
 };
@@ -50,8 +55,19 @@ pub const SandboxFlags = struct {
 pub const CpsState = struct {
     /// Value carried by the most recently invoked escape continuation.
     escape_value: ?core.Value = null,
+    /// Identity of the escape continuation that carried `escape_value`, so the
+    /// `call/ec` frame that created it can tell whether the jump is its own.
+    escape_id: u64 = 0,
+    /// Counter handing out escape continuation identities.
+    escape_counter: u64 = 0,
     /// Innermost active dynamic-wind frame, null when none is in effect.
     winders: ?*core.Winder = null,
+};
+
+/// What a hygiene-renamed identifier stands for.
+pub const HygieneAlias = struct {
+    base: []const u8,
+    def_scope_id: u64,
 };
 
 /// `Interpreter` is the top-level handle for the Elz scripting engine.
@@ -71,6 +87,9 @@ pub const Interpreter = struct {
     gensym_counter: u64 = 0,
     /// Maximum wall-clock execution time in milliseconds (null = no limit).
     time_limit_ms: ?u64 = null,
+    /// Whether filesystem access is permitted. Checked by the compiler for
+    /// `include` and by `importModule`, which read files at compile time.
+    enable_filesystem: bool = true,
     /// Timestamp (ms) when the current evaluation started.
     eval_start_ms: ?i64 = null,
     /// Step counter for throttling time checks (check every N steps).
@@ -82,6 +101,49 @@ pub const Interpreter = struct {
     stdin_port: ?*core.Port = null,
     /// The current output port. Populated lazily on first reference.
     stdout_port: ?*core.Port = null,
+    stderr_port: ?*core.Port = null,
+    /// The value raised by `raise`/`raise-continuable`/`error`, carried
+    /// alongside the Zig error until a catch site consumes it.
+    current_exception: ?core.Value = null,
+    /// Handlers installed by with-exception-handler, innermost last.
+    exception_handlers: std.ArrayListUnmanaged(core.Value) = .empty,
+    /// The built-in record type used for error objects (set by env_setup).
+    error_rtd: ?*core.RecordType = null,
+    /// The process argument list for (command-line), set by the host.
+    command_line: ?core.Value = null,
+    /// Libraries registered by define-library, keyed by the canonical
+    /// space-joined library name (e.g. "my lib").
+    library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
+    /// Source locations of parsed forms, keyed by pair pointer.
+    source_locations: parser.FormLocations = .empty,
+    /// Idle VM instances kept for primitive callbacks. Creating a VM allocates
+    /// a large value stack and frame array, so `vm.callProc` borrows from here
+    /// instead of allocating one per call (`map` calls it once per element).
+    vm_pool: std.ArrayListUnmanaged(*vm.VM) = .empty,
+    /// Top-level names the current compilation unit will define. A macro
+    /// template may reference one before its `define` has run, so hygiene
+    /// renaming must leave these alone.
+    pending_globals: std.StringHashMapUnmanaged(void) = .empty,
+    /// Location of the most recent uncaught runtime error, when known.
+    last_error_file: ?[]const u8 = null,
+    last_error_line: ?u32 = null,
+    /// Nesting depth of evalString/evalForm calls. The time-limit clock starts
+    /// with the outermost call only, so nested evaluation (macro expansion,
+    /// `eval`, `load`) cannot extend the budget.
+    eval_depth: u32 = 0,
+    /// Current expression nesting depth inside the compiler.
+    compile_depth: u32 = 0,
+    /// Current nesting of VM runs started by primitive callbacks.
+    native_depth: u32 = 0,
+    /// Hygiene aliases: a fresh identifier introduced by a `syntax-rules`
+    /// template, mapped to the name it stands for and the scope the macro
+    /// was defined in. The compiler resolves an alias from that scope.
+    hygiene_aliases: std.StringHashMapUnmanaged(HygieneAlias) = .empty,
+    /// Hands out compiler scope identities.
+    compiler_id_counter: u64 = 0,
+    /// Files currently being loaded by `include`, `import`, or `load`, so a
+    /// file that includes itself is reported instead of recursing forever.
+    loading_files: std.StringHashMapUnmanaged(void) = .empty,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
@@ -103,6 +165,7 @@ pub const Interpreter = struct {
             .last_error_message = null,
             .module_cache = std.StringHashMap(*core.Module).init(allocator),
             .time_limit_ms = flags.time_limit_ms,
+            .enable_filesystem = flags.enable_filesystem,
         };
 
         const root_env = try allocator.create(core.Environment);
@@ -130,22 +193,22 @@ pub const Interpreter = struct {
             try env_setup.populate_strings(&self);
         }
         if (flags.enable_io) {
-            try env_setup.populate_io(&self);
+            try env_setup.populate_io(&self, flags);
         }
-        try env_setup.populate_control(&self);
+        try env_setup.populate_control(&self, flags);
         try env_setup.populate_modules(&self);
-        try env_setup.populate_process(&self);
+        try env_setup.populate_process(&self, flags);
         try env_setup.populate_vectors(&self);
         try env_setup.populate_hashmaps(&self);
-        try env_setup.populate_ports(&self);
-        try env_setup.populate_os(&self);
+        try env_setup.populate_ports(&self, flags);
+        try env_setup.populate_os(&self, flags);
         try env_setup.populate_datetime(&self);
         try env_setup.populate_format(&self);
         try env_setup.populate_json(&self);
         try env_setup.populate_regex(&self);
 
         const std_lib_source = @embedFile("../stdlib/std.elz");
-        var std_lib_forms = try parser.readAll(std_lib_source, allocator);
+        var std_lib_forms = try parser.readAllTracked(std_lib_source, allocator, "<stdlib>", &self.source_locations);
         defer std_lib_forms.deinit(allocator);
 
         if (std_lib_forms.items.len > 0) {
@@ -175,16 +238,13 @@ pub const Interpreter = struct {
     /// Returns:
     /// The `core.Value` of the last evaluated expression, or an error if parsing or evaluation fails.
     pub fn evalString(self: *Interpreter, source: []const u8, fuel: *u64) !core.Value {
-        var forms = try parser.readAll(source, self.allocator);
+        var forms = try parser.readAllTracked(source, self.allocator, "<eval>", &self.source_locations);
         defer forms.deinit(self.allocator);
 
         if (forms.items.len == 0) return .unspecified;
 
-        // Set the eval start time for time-limited execution
-        if (self.time_limit_ms != null) {
-            self.eval_start_ms = currentTimeMs();
-            self.time_check_counter = 0;
-        }
+        self.beginEval();
+        defer self.endEval();
 
         const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, fuel);
         // Protos are GC-allocated and may be referenced by closures stored in the environment.
@@ -200,11 +260,21 @@ pub const Interpreter = struct {
     /// Returns the cached `core.Value.module` if the path was already loaded.
     pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
         if (path_val != .string) return core.ElzError.InvalidArgument;
-        const path_str = path_val.string;
+        if (!self.enable_filesystem) {
+            self.last_error_message = "import: filesystem access is disabled";
+            return core.ElzError.PermissionDenied;
+        }
+        const path_str = path_val.string.bytes;
 
         if (self.module_cache.get(path_str)) |cached_mod_ptr| {
             return core.Value{ .module = cached_mod_ptr };
         }
+
+        if (!self.beginLoading(path_str)) {
+            self.last_error_message = std.fmt.allocPrint(self.allocator, "import: '{s}' imports itself", .{path_str}) catch null;
+            return core.ElzError.InvalidArgument;
+        }
+        defer self.endLoading(path_str);
 
         const source_bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path_str, self.allocator, .limited(1024 * 1024)) catch {
             self.last_error_message = "Failed to read module file.";
@@ -212,7 +282,7 @@ pub const Interpreter = struct {
         };
         defer self.allocator.free(source_bytes);
 
-        var forms = @import("parser.zig").readAll(source_bytes, self.allocator) catch {
+        var forms = @import("parser.zig").readAllTracked(source_bytes, self.allocator, try self.allocator.dupe(u8, path_str), &self.source_locations) catch {
             self.last_error_message = "Failed to parse module file.";
             return core.ElzError.InvalidArgument;
         };
@@ -272,6 +342,8 @@ pub const Interpreter = struct {
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
     pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
+        self.beginEval();
+        defer self.endEval();
         const forms = [_]core.Value{form.*};
         const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, &forms, self.root_env, fuel);
         // Protos are GC-allocated and may be referenced by closures stored in the environment.
@@ -281,6 +353,32 @@ pub const Interpreter = struct {
         defer machine.deinit();
 
         return wrapEvalResult(self, machine.runProto(proto, fuel));
+    }
+
+    /// Starts the time-limit clock for an outermost evaluation.
+    fn beginEval(self: *Interpreter) void {
+        if (self.eval_depth == 0 and self.time_limit_ms != null) {
+            self.eval_start_ms = currentTimeMs();
+            self.time_check_counter = 0;
+        }
+        self.eval_depth += 1;
+    }
+
+    fn endEval(self: *Interpreter) void {
+        self.eval_depth -= 1;
+    }
+
+    /// Marks `path` as being loaded. Returns false when it is already in
+    /// progress, which means the file recursively includes or imports itself.
+    pub fn beginLoading(self: *Interpreter, path: []const u8) bool {
+        if (self.loading_files.contains(path)) return false;
+        const owned = self.allocator.dupe(u8, path) catch return true;
+        self.loading_files.put(self.allocator, owned, {}) catch {};
+        return true;
+    }
+
+    pub fn endLoading(self: *Interpreter, path: []const u8) void {
+        _ = self.loading_files.remove(path);
     }
 
     /// Converts internal CPS signals into embedder-facing errors at the API boundary.
@@ -304,7 +402,9 @@ pub const Interpreter = struct {
         self.time_check_counter +%= 1;
         if (self.time_check_counter & 0xFF == 0) {
             if (self.time_limit_ms) |limit| {
-                const elapsed = currentTimeMs() - (self.eval_start_ms orelse 0);
+                // No eval window yet (e.g. the stdlib load during init): nothing to limit.
+                const start = self.eval_start_ms orelse return;
+                const elapsed = currentTimeMs() - start;
                 if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
             }
         }
@@ -314,6 +414,12 @@ pub const Interpreter = struct {
     /// Most memory is GC-managed; this cleans up the module cache.
     pub fn deinit(self: *Interpreter) void {
         self.module_cache.deinit();
+        for (self.vm_pool.items) |machine| {
+            machine.deinit();
+            self.allocator.destroy(machine);
+        }
+        self.vm_pool.deinit(self.allocator);
+        self.pending_globals.deinit(self.allocator);
     }
 
     /// Returns the lazily initialized port that wraps the host's standard input stream.
@@ -331,6 +437,15 @@ pub const Interpreter = struct {
         const port = try self.allocator.create(core.Port);
         port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
         self.stdout_port = port;
+        return port;
+    }
+
+    /// Returns the lazily initialized port that wraps the host's standard error stream.
+    pub fn currentErrorPort(self: *Interpreter) !*core.Port {
+        if (self.stderr_port) |p| return p;
+        const port = try self.allocator.create(core.Port);
+        port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stderr(), false, "<stderr>");
+        self.stderr_port = port;
         return port;
     }
 };

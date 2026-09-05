@@ -4,6 +4,15 @@ const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 const vm_mod = @import("../vm.zig");
+const predicates = @import("predicates.zig");
+
+/// Charges one unit of work while a primitive walks a list, so a circular
+/// list or a very long one stays inside the caller's fuel and time budget.
+fn tick(interp: *interpreter.Interpreter, fuel: *u64) ElzError!void {
+    try interp.checkTimeBudget();
+    if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
+    fuel.* -= 1;
+}
 
 /// `cons` creates a new pair.
 ///
@@ -16,8 +25,8 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = try env.allocator.create(core.Pair);
     p.* = .{
-        .car = try args.items[0].deep_clone(env.allocator),
-        .cdr = try args.items[1].deep_clone(env.allocator),
+        .car = args.items[0],
+        .cdr = args.items[1],
     };
     return Value{ .pair = p };
 }
@@ -29,11 +38,11 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The `car` of the pair.
-pub fn car(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    return p.pair.car.deep_clone(env.allocator);
+    return p.pair.car;
 }
 
 /// `cdr` returns the second element of a pair.
@@ -43,11 +52,11 @@ pub fn car(_: *interpreter.Interpreter, env: *core.Environment, args: core.Value
 ///
 /// Returns:
 /// The `cdr` of the pair.
-pub fn cdr(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
-    return p.pair.cdr.deep_clone(env.allocator);
+    return p.pair.cdr;
 }
 
 /// `list` creates a new list from its arguments.
@@ -64,7 +73,7 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
         i -= 1;
         const p = try env.allocator.create(core.Pair);
         p.* = .{
-            .car = try args.items[i].deep_clone(env.allocator),
+            .car = args.items[i],
             .cdr = head,
         };
         head = Value{ .pair = p };
@@ -79,11 +88,14 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The length of the list as a `Value.number`.
-pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    // A circular list has no length (R7RS: it is an error).
+    if (!predicates.isProperList(args.items[0])) return ElzError.InvalidArgument;
     var count: i64 = 0;
     var current = args.items[0];
     while (current != .nil) {
+        try tick(interp, fuel);
         const p = switch (current) {
             .pair => |pair_val| pair_val,
             else => return ElzError.InvalidArgument,
@@ -97,9 +109,12 @@ pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core
 /// Helper for converting a numeric `Value` to a non-negative `usize` index.
 fn toIndex(v: Value) ElzError!usize {
     return switch (v) {
-        .exact_integer => |i| if (i < 0) ElzError.InvalidArgument else @intCast(i),
+        .exact_integer => |i| std.math.cast(usize, i) orelse ElzError.InvalidArgument,
         .number => |n| blk: {
-            if (n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            // Reject non-finite and out-of-range values: `@intFromFloat` is
+            // illegal behavior unless the value fits the destination type.
+            if (!std.math.isFinite(n) or n < 0 or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) break :blk ElzError.InvalidArgument;
             break :blk @intFromFloat(n);
         },
         else => ElzError.InvalidArgument,
@@ -113,19 +128,20 @@ fn toIndex(v: Value) ElzError!usize {
 ///
 /// Returns:
 /// A new list containing the elements of all the input lists.
-pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn append(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len == 0) return Value.nil;
     var result_head: core.Value = .nil;
     var result_tail: ?*core.Pair = null;
     for (args.items[0 .. args.items.len - 1]) |list_val| {
         var current_node = list_val;
         while (current_node != .nil) {
+            try tick(interp, fuel);
             const p_node = switch (current_node) {
                 .pair => |p| p,
                 else => return ElzError.InvalidArgument,
             };
             const new_pair = try env.allocator.create(core.Pair);
-            new_pair.* = .{ .car = try p_node.car.deep_clone(env.allocator), .cdr = .nil };
+            new_pair.* = .{ .car = p_node.car, .cdr = .nil };
             if (result_head == .nil) {
                 result_head = Value{ .pair = new_pair };
                 result_tail = new_pair;
@@ -138,7 +154,7 @@ pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
             current_node = p_node.cdr;
         }
     }
-    const last_list = try args.items[args.items.len - 1].deep_clone(env.allocator);
+    const last_list = args.items[args.items.len - 1];
     if (result_head == .nil) {
         return last_list;
     } else {
@@ -156,17 +172,18 @@ pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 ///
 /// Returns:
 /// A new list with the elements in reverse order.
-pub fn reverse(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn reverse(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     var head: core.Value = .nil;
     var current = args.items[0];
     while (current != .nil) {
+        try tick(interp, fuel);
         const p_node = switch (current) {
             .pair => |p| p,
             else => return ElzError.InvalidArgument,
         };
         const new_pair = try env.allocator.create(core.Pair);
-        new_pair.* = .{ .car = try p_node.car.deep_clone(env.allocator), .cdr = head };
+        new_pair.* = .{ .car = p_node.car, .cdr = head };
         head = Value{ .pair = new_pair };
         current = p_node.cdr;
     }
@@ -193,15 +210,16 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
     var call_args = core.ValueList.init(env.allocator);
     defer call_args.deinit();
     while (true) {
-        // Check if all lists are exhausted (stop at shortest).
-        var all_done = true;
+        // Stop at the shortest list (R7RS): done when any cursor is exhausted.
+        var any_done = false;
         for (cursors) |cur| {
-            if (cur != .nil) {
-                all_done = false;
+            if (cur != .pair) {
+                any_done = true;
                 break;
             }
         }
-        if (all_done) break;
+        if (any_done) break;
+        try tick(interp, fuel);
         // Collect one element from each list.
         call_args.items.len = 0;
         for (0..num_lists) |i| {
@@ -226,41 +244,44 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
 
 /// `list_ref` returns the k-th element of a list.
 /// Syntax: (list-ref list k)
-pub fn list_ref(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         current = current.pair.cdr;
     }
     if (current != .pair) return ElzError.InvalidArgument;
-    return current.pair.car.deep_clone(env.allocator);
+    return current.pair.car;
 }
 
 /// `list_tail` returns the sublist of a list starting at position k.
 /// Syntax: (list-tail list k)
-pub fn list_tail(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_tail(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         current = current.pair.cdr;
     }
-    return current.deep_clone(env.allocator);
+    return current;
 }
 
 /// `memq` returns the first sublist whose car is eq? to obj, or #f.
 /// Syntax: (memq obj list)
-pub fn memq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn memq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const obj = args.items[0];
     var current = args.items[1];
 
     while (current != .nil) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         const p = current.pair;
         // eq? comparison - pointer/value equality
@@ -272,31 +293,21 @@ pub fn memq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueL
     return Value{ .boolean = false };
 }
 
-/// Helper for eq? check
+/// Helper for eq? check: `eq?` and `eqv?` coincide in this implementation, so
+/// procedures, strings, and other heap objects compare by identity here too.
 fn eqCheck(a: Value, b: Value) bool {
-    return switch (a) {
-        .nil => b == .nil,
-        .boolean => |av| if (b == .boolean) av == b.boolean else false,
-        .number => |av| if (b == .number) av == b.number else false,
-        .exact_integer => |av| if (b == .exact_integer) av == b.exact_integer else false,
-        .rational => |av| if (b == .rational) (av.numerator == b.rational.numerator and av.denominator == b.rational.denominator) else false,
-        .complex => |av| if (b == .complex) (av.real == b.complex.real and av.imag == b.complex.imag) else false,
-        .character => |av| if (b == .character) av == b.character else false,
-        .symbol => |av| if (b == .symbol) std.mem.eql(u8, av, b.symbol) else false,
-        .pair => |av| if (b == .pair) av == b.pair else false,
-        .vector => |av| if (b == .vector) av == b.vector else false,
-        else => false,
-    };
+    return predicates.is_eqv_internal(a, b);
 }
 
 /// `assq` returns the first pair in alist whose car is eq? to obj, or #f.
 /// Syntax: (assq obj alist)
-pub fn assq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn assq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const obj = args.items[0];
     var current = args.items[1];
 
     while (current != .nil) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         const p = current.pair;
         if (p.car != .pair) return ElzError.InvalidArgument;
@@ -322,6 +333,22 @@ pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
     const p = args.items[0];
     if (p != .pair) return ElzError.InvalidArgument;
     p.pair.car = args.items[1];
+    return Value.unspecified;
+}
+
+/// `list_set_bang` stores a value in element k of a list, in place.
+/// Syntax: (list-set! list k obj)
+pub fn list_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 3) return ElzError.WrongArgumentCount;
+    if (args.items[1] != .exact_integer or args.items[1].exact_integer < 0) return ElzError.InvalidArgument;
+    var cur = args.items[0];
+    var k = args.items[1].exact_integer;
+    while (k > 0) : (k -= 1) {
+        if (cur != .pair) return ElzError.InvalidArgument;
+        cur = cur.pair.cdr;
+    }
+    if (cur != .pair) return ElzError.InvalidArgument;
+    cur.pair.car = args.items[2];
     return Value.unspecified;
 }
 
