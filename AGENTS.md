@@ -106,9 +106,9 @@ Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. 
 
 Managed via Zig's package manager (`build.zig.zon`):
 
-- Chilli (v0.3.1): CLI framework for the REPL.
 - BDWGC (v8.2.12): Garbage collector.
 - Bestline: Line editing and history for the REPL.
+- Chilli (v0.3.2): CLI framework for the REPL.
 - Minish (v0.3.0): Property-based testing framework.
 
 ## Zig Conventions

@@ -1,9 +1,14 @@
 const std = @import("std");
 const elz = @import("elz");
 const chilli = @import("chilli");
+const build_options = @import("build_options");
 
 const builtin = @import("builtin");
-const bestline = @cImport({
+const is_windows = builtin.os.tag == .windows;
+
+/// Bestline is POSIX-only (it needs poll.h and termios), so the Windows build
+/// reads lines from stdin without editing or history.
+const bestline = if (is_windows) struct {} else @cImport({
     @cInclude("bestline.h");
 });
 
@@ -86,13 +91,45 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
     return true;
 }
 
-fn repl(interpreter: *elz.Interpreter) !void {
-    while (true) {
-        const line = bestline.bestlineWithHistory("> ", "history.txt");
-        if (line == null) return;
-        defer bestline.bestlineFree(line);
+/// Reads one line from the terminal. Returns null at end of input.
+const LineReader = struct {
+    stdin_buffer: [64 * 1024]u8 = undefined,
+    stdin_reader: ?std.Io.File.Reader = null,
+    current: ?[*:0]u8 = null,
 
-        const line_slice = std.mem.sliceTo(line, 0);
+    fn readLine(self: *LineReader, io: std.Io) !?[]const u8 {
+        if (comptime is_windows) {
+            if (self.stdin_reader == null) {
+                self.stdin_reader = std.Io.File.stdin().reader(io, &self.stdin_buffer);
+            }
+            var out_buffer: [64]u8 = undefined;
+            var stdout_writer = std.Io.File.stdout().writer(io, &out_buffer);
+            try stdout_writer.interface.writeAll("> ");
+            try stdout_writer.interface.flush();
+            const line = try self.stdin_reader.?.interface.takeDelimiter('\n') orelse return null;
+            return std.mem.trimEnd(u8, line, "\r");
+        } else {
+            self.release();
+            const line = bestline.bestlineWithHistory("> ", "history.txt");
+            if (line == null) return null;
+            self.current = line;
+            return std.mem.sliceTo(line, 0);
+        }
+    }
+
+    fn release(self: *LineReader) void {
+        if (comptime !is_windows) {
+            if (self.current) |line| bestline.bestlineFree(line);
+            self.current = null;
+        }
+    }
+};
+
+fn repl(interpreter: *elz.Interpreter) !void {
+    var reader = LineReader{};
+    defer reader.release();
+    while (true) {
+        const line_slice = (try reader.readLine(interpreter.io)) orelse return;
         if (line_slice.len == 0) continue;
         if (std.mem.eql(u8, line_slice, ".exit")) return;
 
@@ -245,7 +282,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     var root_cmd = try chilli.Command.init(gpa.allocator(), .{
         .name = "elz",
         .description = "Element 0 is a Lisp dialect implemented in Zig",
-        .version = "0.1.0-alpha.5",
+        .version = build_options.version,
         .exec = rootExec,
     });
     defer root_cmd.deinit();

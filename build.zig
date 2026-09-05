@@ -1,4 +1,5 @@
 const std = @import("std");
+const manifest = @import("build.zig.zon");
 const Io = std.Io;
 
 pub fn build(b: *std.Build) void {
@@ -110,10 +111,20 @@ pub fn build(b: *std.Build) void {
         .root_module = repl_module,
     });
 
-    // --- Bestline dependency (cross-platform line editing) ---
-    const bestline_dep = b.dependency("bestline", .{});
-    repl_module.addIncludePath(bestline_dep.path(""));
-    repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
+    // Expose the package version to the REPL so `--version` cannot drift from
+    // build.zig.zon.
+    const repl_options = b.addOptions();
+    repl_options.addOption([]const u8, "version", manifest.version);
+    repl_module.addOptions("build_options", repl_options);
+
+    // --- Bestline dependency (line editing on POSIX terminals) ---
+    // Bestline needs poll.h and termios, so the Windows REPL falls back to a
+    // plain stdin reader (see src/main.zig).
+    if (target.result.os.tag != .windows) {
+        const bestline_dep = b.dependency("bestline", .{});
+        repl_module.addIncludePath(bestline_dep.path(""));
+        repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
+    }
     repl_module.linkSystemLibrary("c", .{});
 
     // Add dependency on 'chilli' library
