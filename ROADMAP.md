@@ -34,7 +34,8 @@ It outlines the features to be implemented and their current status.
 
 ### Language Core
 
-The R5RS core is complete and verified by the test suite.
+The R7RS-small core is complete and verified by the test suite and the vendored
+conformance suite.
 
 * Data types: booleans, the full numeric tower, symbols, pairs and lists, characters,
   UTF-8 strings, procedures and closures, vectors, hash maps, and ports.
@@ -54,7 +55,7 @@ The R5RS core is complete and verified by the test suite.
 * I/O: `read`, `write`, `display`, file ports, `read-line`, `read-char`, `peek-char`,
   `char-ready?`, `current-input-port`, `current-output-port`, `with-input-from-file`,
   `call-with-input-file` and friends, and `load`.
-* Beyond R5RS: error handling (`try`/`catch`), a module system, regular expressions
+* Beyond R7RS-small: error handling (`try`/`catch`), a module system, regular expressions
   (NFA engine), `format`, JSON serialization, OS and filesystem procedures, date and
   time, `gensym`, and list utilities (`filter`, `fold-left`, and `fold-right`).
 

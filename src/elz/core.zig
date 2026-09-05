@@ -129,7 +129,7 @@ pub const Environment = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         // Only the inline byte-slice variants need to own their backing memory; heap
         // values (pair, vector, hash_map, port, cell, closure, ...) are shared by
-        // reference so that aliased bindings observe each other's mutations as R5RS
+        // reference so that aliased bindings observe each other's mutations as Scheme
         // requires for `(define w v)` style aliasing.
         const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
@@ -265,7 +265,7 @@ pub const Macro = struct {
 };
 
 /// One pattern/template pair from a `syntax-rules` form. The pattern starts with the
-/// macro keyword (or `_`) by R5RS convention.
+/// macro keyword (or `_`), as R7RS specifies.
 pub const SyntaxRule = struct {
     pattern: Value,
     template: Value,

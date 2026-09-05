@@ -145,7 +145,7 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
 }
 
 /// `read_string` parses a single S-expression from a string.
-/// This is similar to R5RS `read`, but operates on strings.
+/// This is similar to `read`, but operates on strings.
 ///
 /// Syntax: (read-string str)
 ///

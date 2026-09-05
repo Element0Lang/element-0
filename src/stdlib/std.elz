@@ -59,16 +59,26 @@
 ;;;   x: Any value.
 ;;;
 ;;; Returns:
-;;;   A string, e.g., "nil", "pair", "boolean", "number", etc.
+;;;   One of "nil", "pair", "boolean", "number", "string", "symbol", "char",
+;;;   "vector", "bytevector", "hash-map", "port", "promise", "procedure",
+;;;   "eof-object", or "unknown".
 (define (typename x)
-  (if (null? x) "nil"
-    (if (pair? x) "pair"
-      (if (boolean? x) "boolean"
-        (if (number? x) "number"
-          (if (string? x) "string"
-            (if (symbol? x) "symbol"
-              (if (procedure? x) "procedure"
-                  "unknown"))))))))
+  (cond
+    ((null? x) "nil")
+    ((pair? x) "pair")
+    ((boolean? x) "boolean")
+    ((number? x) "number")
+    ((string? x) "string")
+    ((symbol? x) "symbol")
+    ((char? x) "char")
+    ((vector? x) "vector")
+    ((bytevector? x) "bytevector")
+    ((hash-map? x) "hash-map")
+    ((port? x) "port")
+    ((promise? x) "promise")
+    ((procedure? x) "procedure")
+    ((eof-object? x) "eof-object")
+    (else "unknown")))
 
 ;;; ---------------------------------
 ;;; Numeric Functions
@@ -267,13 +277,14 @@
                           (find (cdr sublist) (+ 1 index)))))))
     (find lst 0)))
 
-;;; (member obj lst)
+;;; (member obj lst [compare])
 ;;;
 ;;; Returns the first sublist of lst whose car is equal to obj.
 ;;;
 ;;; Parameters:
 ;;;   obj: Any value.
 ;;;   lst: A list.
+;;;   compare: An optional two-argument comparison procedure (default: equal?).
 ;;;
 ;;; Returns:
 ;;;   The sublist starting with obj, or #f if obj is not found.
@@ -295,13 +306,14 @@
           lst
           (memv obj (cdr lst)))))
 
-;;; (assoc obj alist)
+;;; (assoc obj alist [compare])
 ;;;
 ;;; Finds the first pair in an association list whose car is equal to obj.
 ;;;
 ;;; Parameters:
 ;;;   obj: Any value.
 ;;;   alist: An association list (a list of pairs).
+;;;   compare: An optional two-argument comparison procedure (default: equal?).
 ;;;
 ;;; Returns:
 ;;;   The pair whose car is obj, or #f if no such pair is found.
@@ -332,7 +344,8 @@
 ;;;   lst: A list.
 ;;;
 ;;; Returns:
-;;;   A new list containing the first n elements of lst.
+;;;   A new list containing the first n elements of lst, or all of lst when it
+;;;   has fewer than n elements.
 (define (take n lst)
   (letrec ((take-iter (lambda (count l acc)
                        (if (or (= count 0) (null? l))
@@ -373,13 +386,15 @@
 ;;; Iteration
 ;;; ---------------------------------
 
-;;; (for-each proc lst)
+;;; (for-each proc lst1 lst2 ...)
 ;;;
-;;; Applies a procedure to each element of a list for its side effects.
+;;; Applies a procedure to the elements of the lists, in order, for its side
+;;; effects. With several lists, proc receives one element from each and the
+;;; iteration stops at the shortest list.
 ;;;
 ;;; Parameters:
-;;;   proc: A procedure that takes one argument.
-;;;   lst: A list.
+;;;   proc: A procedure that takes as many arguments as there are lists.
+;;;   lst1 lst2 ...: One or more lists.
 ;;;
 ;;; Returns:
 ;;;   An unspecified value.
@@ -588,7 +603,7 @@
 ;;; (call-with-output-string proc)
 ;;;
 ;;; Creates a string output port, applies proc to it, and returns the accumulated
-;;; string. This is the R5RS-compatible form of with-output-to-string.
+;;; string. This is the procedure-argument form of with-output-to-string.
 (define (call-with-output-string proc)
   (let ((port (open-output-string)))
     (proc port)
@@ -735,9 +750,10 @@
          (end (if (or (null? se) (null? (cdr se))) (string-length str) (cadr se))))
     (list->vector (string->list (substring str start end)))))
 
-;;; (write-string str [port])
+;;; (write-string str [port [start [end]]])
 ;;;
-;;; Writes the characters of str to port (default: the current output port).
+;;; Writes the characters of str between start and end to port (default: the
+;;; current output port).
 (define (write-string str . rest)
   (let* ((port (if (null? rest) (current-output-port) (car rest)))
          (start (if (or (null? rest) (null? (cdr rest))) 0 (cadr rest)))
@@ -753,7 +769,10 @@
 ;;; (features)
 ;;;
 ;;; Returns the list of feature identifiers this implementation supports.
-(define (features) '(r7rs elz))
+;;; exact-closed, ratios, and full-unicode are the standard identifiers for
+;;; arbitrary-precision exact arithmetic, exact rationals, and full Unicode
+;;; strings and case mappings.
+(define (features) '(r7rs exact-closed ratios full-unicode elz))
 
 ;;; (%feature-satisfied? req)
 ;;;
@@ -922,7 +941,8 @@
 
 ;;; (error-object? obj)
 ;;;
-;;; Returns #t if obj is an error object created by error.
+;;; Returns #t if obj is an error object, whether created by error or raised
+;;; by the runtime for a failed operation.
 (define (error-object? obj)
   (%record-of-type? obj %error-rtd))
 
@@ -1011,8 +1031,9 @@
 
 ;;; (emergency-exit [status])
 ;;;
-;;; Exits the process immediately.
-(define (emergency-exit status) (exit status))
+;;; Exits the process immediately, without running dynamic-wind after thunks.
+;;; The status is interpreted as for exit.
+(define (emergency-exit . status) (apply exit status))
 
 ;;; (current-second)
 ;;;
@@ -1046,7 +1067,8 @@
 ;;; (null-environment version)
 ;;; (scheme-report-environment version)
 ;;;
-;;; R5RS environment specifiers. Elz has a single global environment, so both
+;;; Environment specifiers inherited from R5RS, which R7RS keeps in its
+;;; (scheme r5rs) library. Elz has a single global environment, so both
 ;;; resolve to the interaction environment.
 (define (null-environment . version) '%interaction-environment)
 (define (scheme-report-environment . version) '%interaction-environment)

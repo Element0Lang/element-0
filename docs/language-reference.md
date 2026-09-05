@@ -112,9 +112,9 @@ through the wrong type's accessor raises an error.
 
 ## Standard Procedures
 
-The R5RS-era core is complete; the R7RS-small additions listed here are
-implemented as well. Procedures behave as the report specifies unless noted
-in the deviations section.
+The R7RS-small procedure set is implemented in full. The list below groups it
+by section, and procedures behave as the report specifies unless noted in the
+deviations section.
 
 * Equivalence: `eq?`, `eqv?`, `equal?`.
 * Numbers: the arithmetic and comparison operators (n-ary, chained), the

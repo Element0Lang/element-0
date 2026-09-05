@@ -586,7 +586,7 @@ pub const Compiler = struct {
         switch (expr) {
             .pair => |p| {
                 // Check whether unquote/unquote-splicing are locally bound (in which case they
-                // lose their special meaning inside quasiquote per R5RS §4.2.6).
+                // lose their special meaning inside quasiquote per R7RS §4.2.8).
                 const unquote_is_global = try self.isKeyword(p.car, "unquote");
                 const unquote_splice_is_global = try self.isKeyword(p.car, "unquote-splicing");
                 // (unquote x) at level 1 → compile x
@@ -1439,7 +1439,7 @@ pub const Compiler = struct {
             }
 
             // cond => arrow: (cond (test => proc) ...) — compile as (let ((t test)) (if t (proc t) ...))
-            // Only treat => as the arrow keyword when it is not locally bound (R5RS §4.2.1).
+            // Only treat => as the arrow keyword when it is not locally bound (R7RS §4.2.1).
             const arrow_not_bound = clause_body != .nil and try self.isKeyword(clause_body.pair.car, "=>");
             if (arrow_not_bound) {
                 const arrow_rest = try self.requirePair("cond", clause_body.pair.cdr);
