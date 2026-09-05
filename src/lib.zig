@@ -29,6 +29,8 @@ pub const ffi = @import("elz/ffi.zig");
 // Advanced API: Direct access to the parser, needed by the REPL.
 // Use Interpreter.evalString for normal use; Interpreter.evalForm for per-form REPL loops.
 pub const parser = @import("elz/parser.zig");
+/// Names of the compiler's special forms, for tools such as REPL completion.
+pub const special_form_names = @import("elz/compiler.zig").special_form_names;
 
 // Pull inline `test` blocks from the implementation modules into `make test`. Each
 // transitively imports `core`, `interpreter`, `compiler`, `vm`, and the primitives, so the

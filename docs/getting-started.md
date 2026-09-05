@@ -29,23 +29,44 @@ This produces `zig-out/bin/elz-repl` and the FFI example programs. Prebuilt bina
 make repl
 ```
 
-The prompt evaluates one or more forms per line and prints the value of the last one. History is kept in `history.txt` in the current directory. Type `.exit` or press Ctrl-D to leave.
+The prompt reads forms and prints each value with `write`, so strings show their quotes. A form that is still open at the end of a line continues on the next line behind a `...` prompt. Type `.exit` or press Ctrl-D to leave.
 
 ```scheme
-> (define (square x) (* x x))
+> (define (square x)
+...   (* x x))
 > (map square '(1 2 3))
 (1 4 9)
 > (expt 2 100)
 1267650600228229401496703205376
 ```
 
+On Linux and macOS the REPL has line editing, a history file at `~/.elz_history`, and Tab completion of global names and special forms. Ctrl-C discards the input typed so far. The Windows build reads plain lines from the console without these features.
+
+Lines that start with a dot and a letter are REPL commands.
+
+| Command | Effect |
+| --- | --- |
+| `.help` | Show the command list. |
+| `.load <file>` | Run a source file in the current session. Definitions stay available afterwards. |
+| `.time <expr>` | Evaluate an expression and print how long it took. |
+| `.apropos <prefix>` | List the global names that start with a prefix. |
+| `.clear` | Clear the screen. |
+| `.exit` | Leave the REPL. |
+
+The `--eval` flag evaluates an expression from the command line, and `--interactive` drops into the REPL after running a file or expression, with its definitions loaded.
+
+```bash
+./zig-out/bin/elz-repl --eval '(expt 2 64)'
+./zig-out/bin/elz-repl --interactive examples/elz/e14-greetings-lib.elz
+```
+
 ## Running a Script
 
 ```bash
-./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+./zig-out/bin/elz-repl examples/elz/e13-hello-world.elz
 ```
 
-The value of the last top-level form is displayed unless it is unspecified. An uncaught error stops the run, prints the error code, message, and source location, and exits with status 1:
+The file can also be given with `--file`. The value of the last top-level form is displayed unless it is unspecified. An uncaught error stops the run, prints the error code, message, and source location, and exits with status 1:
 
 ```
 --- Runtime Error ---

@@ -2192,6 +2192,14 @@ const special_form_operands = [_]struct { name: []const u8, min: usize }{
     .{ .name = "try", .min = 1 },
 };
 
+/// Names of the special forms handled directly by the compiler. The REPL uses
+/// this for completion, since these names are not bound in any environment.
+pub const special_form_names: [special_form_operands.len][]const u8 = blk: {
+    var names: [special_form_operands.len][]const u8 = undefined;
+    for (special_form_operands, 0..) |entry, i| names[i] = entry.name;
+    break :blk names;
+};
+
 fn minOperands(sym: []const u8) ?usize {
     for (special_form_operands) |entry| {
         if (std.mem.eql(u8, entry.name, sym)) return entry.min;

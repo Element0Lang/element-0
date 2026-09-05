@@ -64,8 +64,10 @@ You can download the release binaries for Elz from the [release page](https://gi
 
 3. Run an Element 0 script file
     ```sh
-    ./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+    ./zig-out/bin/elz-repl examples/elz/e13-hello-world.elz
     ```
+
+   Run `./zig-out/bin/elz-repl --help` for the other flags, and type `.help` in the REPL for its commands.
 
 #### Embedding Elz in Zig Projects
 
