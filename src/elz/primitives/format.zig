@@ -22,11 +22,11 @@ fn writeDisplay(value: Value, w: anytype) !void {
 ///   ~~  - literal tilde
 ///
 /// Returns the formatted string.
-pub fn format(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn format(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
 
     const template_val = args.items[0];
-    if (template_val != .string) return ElzError.InvalidArgument;
+    if (template_val != .string) return interp.fail(ElzError.InvalidArgument, "format: expected a string, got {s}", .{core.typeName(template_val)});
     const template = template_val.string.bytes;
 
     const allocator = env.allocator;

@@ -112,9 +112,9 @@ through the wrong type's accessor raises an error.
 
 ## Standard Procedures
 
-The R5RS-era core is complete; the R7RS-small additions listed here are
-implemented as well. Procedures behave as the report specifies unless noted
-in the deviations section.
+The R7RS-small procedure set is implemented in full. The list below groups it
+by section, and procedures behave as the report specifies unless noted in the
+deviations section.
 
 * Equivalence: `eq?`, `eqv?`, `equal?`.
 * Numbers: the arithmetic and comparison operators (n-ary, chained), the
@@ -289,9 +289,10 @@ These features are not part of R7RS-small.
 
 ## Running and Embedding
 
-The `elz-repl` binary starts an interactive session, or runs a file with
-`--file`. Uncaught runtime errors report the error code, a message, the
-source location as `At: file:line`, and the failing top-level form.
+The `elz-repl` binary starts an interactive session, or runs a file given
+as its argument. Uncaught runtime errors report the error code, a message, the
+source location as `At: file:line`, the failing top-level form, and a
+backtrace of the calls that led to the failure.
 
 Elz embeds into Zig applications through the `Interpreter` API in
 `src/lib.zig`; see the [Embedding Guide](embedding.md). `SandboxFlags`

@@ -565,8 +565,8 @@ fn collect_template_bound(
 }
 
 fn fresh_hygiene_name(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
-    interp.gensym_counter += 1;
-    return std.fmt.allocPrint(allocator, "{s}__h{d}", .{ base, interp.gensym_counter });
+    interp.runtime.gensym_counter += 1;
+    return std.fmt.allocPrint(allocator, "{s}__h{d}", .{ base, interp.runtime.gensym_counter });
 }
 
 fn rename_template(
@@ -812,7 +812,7 @@ pub fn expandSyntaxRules(
             for (introduced.items) |name| {
                 const fresh = fresh_hygiene_name(interp, allocator, name) catch return ElzError.OutOfMemory;
                 try rename_map.put(allocator, name, fresh);
-                interp.hygiene_aliases.put(interp.allocator, fresh, .{ .base = name, .def_scope_id = sr.def_scope_id }) catch return ElzError.OutOfMemory;
+                interp.compiler.hygiene_aliases.put(interp.allocator, fresh, .{ .base = name, .def_scope_id = sr.def_scope_id }) catch return ElzError.OutOfMemory;
             }
 
             const renamed_template = try rename_template(allocator, rule.template, &rename_map);
@@ -820,6 +820,5 @@ pub fn expandSyntaxRules(
         }
     }
 
-    interp.last_error_message = std.fmt.allocPrint(allocator, "No matching syntax-rules pattern for '{s}'.", .{sr.name}) catch null;
-    return ElzError.InvalidArgument;
+    return interp.fail(ElzError.InvalidArgument, "No matching syntax-rules pattern for '{s}'.", .{sr.name});
 }

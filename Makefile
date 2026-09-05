@@ -94,6 +94,13 @@ bench: ## Run the Element 0 benchmarks (like 'make bench BENCH=bench-tak BENCH_I
 	   ./zig-out/bin/elz-repl --bench $(BENCH_ITERS) --file benches/$(BENCH).elz; \
 	fi
 
+build-wasm: ## Build the library and examples for wasm32-wasi into zig-out/wasm
+	@echo "Building for wasm32-wasi..."
+	@$(ZIG) build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
+
+run-wasm: build-wasm ## Run a wasm example under Node's WASI (like 'make run-wasm EXAMPLE=e1_ffi_pow')
+	@node --no-warnings tools/run_wasi.mjs zig-out/wasm/bin/$(EXAMPLE).wasm
+
 repl: ## Start the REPL
 	@echo "Starting the REPL..."
 	@$(ZIG) build repl $(BUILD_OPTS)

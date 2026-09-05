@@ -1,13 +1,9 @@
 .{
     .name = .elz,
-    .version = "0.1.0-alpha.6",
+    .version = "0.1.0-alpha.7",
     .fingerprint = 0xc8c56c5048e5528a, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .chilli = .{
-            .url = "https://github.com/CogitatorTech/chilli/archive/refs/tags/v0.3.1.tar.gz",
-            .hash = "chilli-0.3.1-c19PrjizAQByQrJlXzEb8SrMY6cDJyWaZ9FnxFfN0kYl",
-        },
         .bdwgc = .{
             .url = "https://github.com/bdwgc/bdwgc/archive/refs/tags/v8.2.12.tar.gz",
             .hash = "N-V-__8AACFbLwCc_S3bi22OQGduAL6tPehcttjX9PFqjkP-",
@@ -19,6 +15,10 @@
         .bestline = .{
             .url = "https://github.com/jart/bestline/archive/395fa5d1680a1caaef60d903e71f7ee7a62d292b.tar.gz",
             .hash = "N-V-__8AAE3fHQGvjfkDRURnfqgvr3qlTSIVqBJOKl6Eml_-",
+        },
+        .chilli = .{
+            .url = "https://github.com/CogitatorTech/chilli/archive/refs/tags/v0.3.2.tar.gz",
+            .hash = "chilli-0.3.2-c19PrireAQAXEfA7xrmJW2lrSiNiuuG8wtJI-MJVZgFU",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },

@@ -7,11 +7,11 @@ const interpreter = @import("../interpreter.zig");
 /// `getenv` returns the value of an environment variable.
 /// Syntax: (getenv "VAR")
 /// Returns the value as a string, or #f if the variable is not set.
-pub fn getenv(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+pub fn getenv(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const name_val = args.items[0];
-    if (name_val != .string) return ElzError.InvalidArgument;
+    if (name_val != .string) return interp.fail(ElzError.InvalidArgument, "getenv: expected a string, got {s}", .{core.typeName(name_val)});
 
     const name = name_val.string.bytes;
 
@@ -34,7 +34,7 @@ pub fn file_exists(interp: *interpreter.Interpreter, _: *core.Environment, args:
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const path_val = args.items[0];
-    if (path_val != .string) return ElzError.InvalidArgument;
+    if (path_val != .string) return interp.fail(ElzError.InvalidArgument, "file-exists?: expected a string, got {s}", .{core.typeName(path_val)});
 
     const path = path_val.string.bytes;
 
@@ -53,13 +53,12 @@ pub fn delete_file(interp: *interpreter.Interpreter, _: *core.Environment, args:
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const path_val = args.items[0];
-    if (path_val != .string) return ElzError.InvalidArgument;
+    if (path_val != .string) return interp.fail(ElzError.InvalidArgument, "delete-file: expected a string, got {s}", .{core.typeName(path_val)});
 
     const path = path_val.string.bytes;
 
     std.Io.Dir.cwd().deleteFile(interp.io, path) catch |err| {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to delete file '{s}': {s}", .{ path, @errorName(err) }) catch null;
-        return ElzError.ForeignFunctionError;
+        return interp.fail(ElzError.ForeignFunctionError, "Failed to delete file '{s}': {s}", .{ path, @errorName(err) });
     };
 
     return core.Value.unspecified;
@@ -85,7 +84,7 @@ pub fn directory_list(interp: *interpreter.Interpreter, env: *core.Environment, 
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const path_val = args.items[0];
-    if (path_val != .string) return ElzError.InvalidArgument;
+    if (path_val != .string) return interp.fail(ElzError.InvalidArgument, "directory-list: expected a string, got {s}", .{core.typeName(path_val)});
 
     const path = path_val.string.bytes;
 
@@ -133,8 +132,7 @@ pub fn rename_file(interp: *interpreter.Interpreter, _: *core.Environment, args:
     const new_path = new_val.string.bytes;
 
     std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, interp.io) catch |err| {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to rename '{s}' to '{s}': {s}", .{ old_path, new_path, @errorName(err) }) catch null;
-        return ElzError.ForeignFunctionError;
+        return interp.fail(ElzError.ForeignFunctionError, "Failed to rename '{s}' to '{s}': {s}", .{ old_path, new_path, @errorName(err) });
     };
 
     return core.Value.unspecified;

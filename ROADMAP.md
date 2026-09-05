@@ -34,7 +34,8 @@ It outlines the features to be implemented and their current status.
 
 ### Language Core
 
-The R5RS core is complete and verified by the test suite.
+The R7RS-small core is complete and verified by the test suite and the vendored
+conformance suite.
 
 * Data types: booleans, the full numeric tower, symbols, pairs and lists, characters,
   UTF-8 strings, procedures and closures, vectors, hash maps, and ports.
@@ -54,7 +55,7 @@ The R5RS core is complete and verified by the test suite.
 * I/O: `read`, `write`, `display`, file ports, `read-line`, `read-char`, `peek-char`,
   `char-ready?`, `current-input-port`, `current-output-port`, `with-input-from-file`,
   `call-with-input-file` and friends, and `load`.
-* Beyond R5RS: error handling (`try`/`catch`), a module system, regular expressions
+* Beyond R7RS-small: error handling (`try`/`catch`), a module system, regular expressions
   (NFA engine), `format`, JSON serialization, OS and filesystem procedures, date and
   time, `gensym`, and list utilities (`filter`, `fold-left`, and `fold-right`).
 
@@ -195,7 +196,8 @@ the capture point.
 
 * [x] Source locations in errors: the parser records each form's file and line,
   the compiler carries them into a per-instruction line table, and uncaught
-  runtime errors report `At: file:line`. Stack traces remain future work.
+  runtime errors report `At: file:line` and a backtrace of the calls that led
+  to the failure (`Interpreter.collect_backtrace`).
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
   `tests/vendor/` and runs via `make test-conformance`. Current score: 976 of
   977 checks pass. The remaining case re-enters a `dynamic-wind` through a full
@@ -204,3 +206,7 @@ the capture point.
   standard procedures, extensions, and deviations (removed pending a rewrite). The
   embedding API is covered by the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
+* [x] WebAssembly: the library and examples build for `wasm32-wasi`, with an
+  arena in place of the Boehm collector (memory is reclaimed only at `deinit`).
+* [ ] A precise garbage collector, which would remove the C dependency, make
+  memory use predictable, and give wasm builds real collection.

@@ -1,7 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 
-pub const c = @cImport({
+/// WebAssembly has no way to scan the native stack, which the Boehm collector
+/// depends on, so wasm builds fall back to an arena that never frees. Scripts
+/// that run to completion work unchanged; a long-lived interpreter grows
+/// without bound until `deinit`.
+pub const uses_arena = builtin.cpu.arch.isWasm();
+
+/// The Boehm collector's C API. Only present in native builds.
+pub const c = if (uses_arena) struct {} else @cImport({
     @cInclude("gc.h");
 });
 
@@ -39,11 +47,6 @@ fn gcFree(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, ret_addr: usize)
     _ = ret_addr;
 }
 
-/// Allocates memory that is not subject to garbage collection.
-pub fn allocUncollectable(len: usize) ?*anyopaque {
-    return c.GC_malloc_uncollectable(len);
-}
-
 const GcAllocator = struct {
     vtable: mem.Allocator.VTable = .{
         .alloc = gcAlloc,
@@ -55,22 +58,64 @@ const GcAllocator = struct {
 
 var gc_allocator_instance = GcAllocator{};
 
-/// A `std.mem.Allocator` that uses the Boehm-Demers-Weiser garbage collector.
-/// All memory allocated with this allocator is subject to garbage collection.
-pub const allocator: mem.Allocator = .{
+/// The arena behind wasm builds. Frees are ignored, matching the collector's
+/// allocator contract, and the memory comes back only at `deinit`.
+var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+
+fn arenaAlloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
+    _ = ctx;
+    return arena_instance.allocator().rawAlloc(len, alignment, ret_addr);
+}
+
+fn arenaResize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) bool {
+    _ = ctx;
+    return arena_instance.allocator().rawResize(buf, buf_align, new_len, ret_addr);
+}
+
+fn arenaRemap(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+    _ = ctx;
+    return arena_instance.allocator().rawRemap(buf, buf_align, new_len, ret_addr);
+}
+
+var arena_vtable: mem.Allocator.VTable = .{
+    .alloc = arenaAlloc,
+    .resize = arenaResize,
+    .remap = arenaRemap,
+    .free = gcFree,
+};
+
+/// Allocates memory that is not subject to garbage collection.
+pub fn allocUncollectable(len: usize) ?*anyopaque {
+    if (uses_arena) {
+        const bytes = arena_instance.allocator().alignedAlloc(u8, .@"16", len) catch return null;
+        return @ptrCast(bytes.ptr);
+    }
+    return c.GC_malloc_uncollectable(len);
+}
+
+/// A `std.mem.Allocator` whose memory is reclaimed by the collector. Values,
+/// environments, and everything else a script can reach are allocated here.
+/// On wasm this is the arena described above.
+pub const allocator: mem.Allocator = if (uses_arena) .{
+    .ptr = &arena_instance,
+    .vtable = &arena_vtable,
+} else .{
     .ptr = &gc_allocator_instance,
     .vtable = &gc_allocator_instance.vtable,
 };
 
 /// Initializes the garbage collector.
 pub fn init() void {
+    if (uses_arena) return;
     c.GC_init();
     // Enable recognition of all interior pointers to ensure HashMap internals are scanned
     c.GC_set_all_interior_pointers(1);
 }
 
-/// Adds a memory region to the set of roots for garbage collection.
+/// Adds a memory region to the set of roots for garbage collection. A no-op
+/// under the arena, which never collects.
 pub fn add_roots(start: usize, end: usize) void {
+    if (uses_arena) return;
     c.GC_add_roots(@ptrFromInt(start), @ptrFromInt(end));
 }
 

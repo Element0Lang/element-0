@@ -40,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Zig 0.16.0 (Unix)
         if: runner.os != 'Windows'
@@ -58,3 +58,11 @@ jobs:
 
       - name: Run tests
         run: zig build test --summary all
+
+      - name: Build and run the wasm32-wasi examples
+        if: runner.os == 'Linux'
+        run: |
+          zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
+          for example in e1_ffi_pow e2_ffi_list_increment e3_ffi_sum_of_squares; do
+            node --no-warnings tools/run_wasi.mjs "zig-out/wasm/bin/$example.wasm"
+          done

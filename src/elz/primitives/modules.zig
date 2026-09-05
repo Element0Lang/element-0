@@ -20,12 +20,10 @@ pub fn module_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: 
     const symbol_val = args.items[1];
 
     if (module_val != .module) {
-        interp.last_error_message = "First argument to module-ref must be a module object.";
-        return ElzError.InvalidArgument;
+        return interp.failWith(ElzError.InvalidArgument, "First argument to module-ref must be a module object.");
     }
     if (symbol_val != .symbol) {
-        interp.last_error_message = "Second argument to module-ref must be a symbol.";
-        return ElzError.InvalidArgument;
+        return interp.failWith(ElzError.InvalidArgument, "Second argument to module-ref must be a symbol.");
     }
 
     const module = module_val.module;
@@ -34,8 +32,7 @@ pub fn module_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: 
     if (module.exports.get(name)) |value| {
         return value;
     } else {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Module does not export symbol '{s}'.", .{name}) catch null;
-        return ElzError.SymbolNotFound;
+        return interp.fail(ElzError.SymbolNotFound, "Module does not export symbol '{s}'.", .{name});
     }
 }
 

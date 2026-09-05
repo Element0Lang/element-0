@@ -14,7 +14,7 @@ pub fn main() !void {
     const result = try interpreter.evalString(source, &fuel);
     var buffer: [4096]u8 = undefined;
     const stdout_file = std.Io.File.stdout();
-    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+    var stdout_writer = stdout_file.writerStreaming(interpreter.io, &buffer);
     const stdout = &stdout_writer.interface;
     try stdout.writeAll("Result: ");
     try elz.write(result, stdout);

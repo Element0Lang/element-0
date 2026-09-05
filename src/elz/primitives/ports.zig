@@ -11,7 +11,7 @@ pub fn open_input_file(interp: *interpreter.Interpreter, env: *core.Environment,
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const filename_val = args.items[0];
-    if (filename_val != .string) return ElzError.InvalidArgument;
+    if (filename_val != .string) return interp.fail(ElzError.InvalidArgument, "open-input-file: expected a string, got {s}", .{core.typeName(filename_val)});
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.openInput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotFound;
@@ -25,7 +25,7 @@ pub fn open_output_file(interp: *interpreter.Interpreter, env: *core.Environment
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const filename_val = args.items[0];
-    if (filename_val != .string) return ElzError.InvalidArgument;
+    if (filename_val != .string) return interp.fail(ElzError.InvalidArgument, "open-output-file: expected a string, got {s}", .{core.typeName(filename_val)});
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.openOutput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotWritable;
@@ -35,11 +35,11 @@ pub fn open_output_file(interp: *interpreter.Interpreter, env: *core.Environment
 
 /// `close_input_port` closes an input port.
 /// Syntax: (close-input-port port)
-pub fn close_input_port(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn close_input_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
+    if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "close-input-port: expected a port, got {s}", .{core.typeName(port_val)});
 
     port_val.port.close();
     return Value.unspecified;
@@ -47,11 +47,11 @@ pub fn close_input_port(_: *interpreter.Interpreter, _: *core.Environment, args:
 
 /// `close_output_port` closes an output port.
 /// Syntax: (close-output-port port)
-pub fn close_output_port(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn close_output_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
+    if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "close-output-port: expected a port, got {s}", .{core.typeName(port_val)});
 
     port_val.port.close();
     return Value.unspecified;
@@ -141,13 +141,13 @@ pub fn write_char(interp: *interpreter.Interpreter, _: *core.Environment, args: 
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
     const char_val = args.items[0];
-    if (char_val != .character) return ElzError.InvalidArgument;
+    if (char_val != .character) return interp.fail(ElzError.InvalidArgument, "write-char: expected a character, got {s}", .{core.typeName(char_val)});
 
     const port_val: Value = if (args.items.len == 2)
         args.items[1]
     else
         Value{ .port = interp.currentOutputPort() catch return ElzError.OutOfMemory };
-    if (port_val != .port) return ElzError.InvalidArgument;
+    if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "write-char: expected a port, got {s}", .{core.typeName(port_val)});
 
     const cp = char_val.character;
     if (cp > 0x10FFFF) return ElzError.InvalidArgument;
@@ -162,14 +162,14 @@ pub fn write_char(interp: *interpreter.Interpreter, _: *core.Environment, args: 
 
 /// `write_string_to_port` writes a string to an output port.
 /// Syntax: (write-port str port)
-pub fn write_to_port(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn write_to_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
 
     const str_val = args.items[0];
     const port_val = args.items[1];
 
-    if (str_val != .string) return ElzError.InvalidArgument;
-    if (port_val != .port) return ElzError.InvalidArgument;
+    if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "write-port: expected a string, got {s}", .{core.typeName(str_val)});
+    if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "write-port: expected a port, got {s}", .{core.typeName(port_val)});
 
     port_val.port.writeString(str_val.string.bytes) catch return ElzError.IOError;
     return Value.unspecified;
@@ -330,7 +330,7 @@ pub fn read(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     const port: *core.Port = blk: {
         if (args.items.len == 1) {
             const arg = args.items[0];
-            if (arg != .port) return ElzError.InvalidArgument;
+            if (arg != .port) return interp.fail(ElzError.InvalidArgument, "read: expected a port, got {s}", .{core.typeName(arg)});
             break :blk arg.port;
         }
         break :blk interp.currentInputPort() catch return ElzError.OutOfMemory;
@@ -388,17 +388,17 @@ pub fn current_output_port(interp: *interpreter.Interpreter, _: *core.Environmen
 pub fn set_current_output_port_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    if (v != .port) return ElzError.InvalidArgument;
-    interp.stdout_port = v.port;
+    if (v != .port) return interp.fail(ElzError.InvalidArgument, "set-current-output-port!: expected a port, got {s}", .{core.typeName(v)});
+    interp.runtime.stdout_port = v.port;
     return Value.unspecified;
 }
 
 /// `open_input_string` creates an input port that reads from a string.
 /// Syntax: (open-input-string str)
-pub fn open_input_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn open_input_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
-    if (str_val != .string) return ElzError.InvalidArgument;
+    if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "open-input-string: expected a string, got {s}", .{core.typeName(str_val)});
     const source = env.allocator.dupe(u8, str_val.string.bytes) catch return ElzError.OutOfMemory;
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.fromString(env.allocator, source) catch return ElzError.OutOfMemory;
@@ -416,10 +416,10 @@ pub fn open_output_string(_: *interpreter.Interpreter, env: *core.Environment, a
 
 /// `get_output_string` returns the string accumulated in a string output port.
 /// Syntax: (get-output-string port)
-pub fn get_output_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn get_output_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const port_val = args.items[0];
-    if (port_val != .port) return ElzError.InvalidArgument;
+    if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "get-output-string: expected a port, got {s}", .{core.typeName(port_val)});
     const s = port_val.port.getString(env.allocator) catch return ElzError.InvalidArgument;
     return (try core.makeString(env.allocator, s));
 }
@@ -429,8 +429,8 @@ pub fn get_output_string(_: *interpreter.Interpreter, env: *core.Environment, ar
 pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    if (v != .port) return ElzError.InvalidArgument;
-    interp.stdin_port = v.port;
+    if (v != .port) return interp.fail(ElzError.InvalidArgument, "set-current-input-port!: expected a port, got {s}", .{core.typeName(v)});
+    interp.runtime.stdin_port = v.port;
     return Value.unspecified;
 }
 
@@ -546,9 +546,9 @@ pub fn eof_object(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 }
 
 /// Syntax: (open-input-bytevector bv)
-pub fn open_input_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn open_input_bytevector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "open-input-bytevector: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     const copy = env.allocator.dupe(u8, args.items[0].bytevector.items) catch return ElzError.OutOfMemory;
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.fromString(env.allocator, copy) catch return ElzError.OutOfMemory;
@@ -566,9 +566,9 @@ pub fn open_output_bytevector(_: *interpreter.Interpreter, env: *core.Environmen
 }
 
 /// Syntax: (get-output-bytevector port)
-pub fn get_output_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn get_output_bytevector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    if (args.items[0] != .port) return interp.fail(ElzError.InvalidArgument, "get-output-bytevector: expected a port, got {s}", .{core.typeName(args.items[0])});
     const bytes = args.items[0].port.getString(env.allocator) catch return ElzError.InvalidArgument;
     const bv = env.allocator.create(core.Bytevector) catch return ElzError.OutOfMemory;
     bv.* = .{ .items = @constCast(bytes) };
@@ -648,10 +648,10 @@ pub fn read_bytevector(interp: *interpreter.Interpreter, env: *core.Environment,
 /// Syntax: (read-bytevector! bv) or (read-bytevector! bv port [start [end]])
 pub fn read_bytevector_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 4) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "read-bytevector!: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     const items = args.items[0].bytevector.items;
     const port = if (args.items.len >= 2) blk: {
-        if (args.items[1] != .port) return ElzError.InvalidArgument;
+        if (args.items[1] != .port) return interp.fail(ElzError.InvalidArgument, "read-bytevector!: expected a port, got {s}", .{core.typeName(args.items[1])});
         break :blk args.items[1].port;
     } else interp.currentInputPort() catch return ElzError.OutOfMemory;
     var start: usize = 0;
@@ -681,7 +681,7 @@ pub fn read_bytevector_bang(interp: *interpreter.Interpreter, _: *core.Environme
 /// Syntax: (write-bytevector bv) or (write-bytevector bv port [start [end]])
 pub fn write_bytevector(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 4) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "write-bytevector: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     const items = args.items[0].bytevector.items;
     const port = try outputPortArg(interp, args, if (args.items.len >= 2) 1 else args.items.len);
     var start: usize = 0;
@@ -712,25 +712,25 @@ pub fn textual_port_p(_: *interpreter.Interpreter, _: *core.Environment, args: c
 }
 
 /// Syntax: (close-port port)
-pub fn close_port(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn close_port(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    if (args.items[0] != .port) return interp.fail(ElzError.InvalidArgument, "close-port: expected a port, got {s}", .{core.typeName(args.items[0])});
     args.items[0].port.close();
     return Value.unspecified;
 }
 
 /// Syntax: (input-port-open? port)
-pub fn input_port_open_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn input_port_open_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    if (args.items[0] != .port) return interp.fail(ElzError.InvalidArgument, "input-port-open?: expected a port, got {s}", .{core.typeName(args.items[0])});
     const port = args.items[0].port;
     return Value{ .boolean = port.is_input and port.is_open };
 }
 
 /// Syntax: (output-port-open? port)
-pub fn output_port_open_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn output_port_open_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .port) return ElzError.InvalidArgument;
+    if (args.items[0] != .port) return interp.fail(ElzError.InvalidArgument, "output-port-open?: expected a port, got {s}", .{core.typeName(args.items[0])});
     const port = args.items[0].port;
     return Value{ .boolean = !port.is_input and port.is_open };
 }

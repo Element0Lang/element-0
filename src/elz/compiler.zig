@@ -133,11 +133,11 @@ pub const Compiler = struct {
         const proto = try allocator.create(FuncProto);
         proto.* = FuncProto.init(allocator, name);
         if (enclosing) |enc| proto.source_file = enc.current_file;
-        interp.compiler_id_counter += 1;
+        interp.compiler.id_counter += 1;
         return .{
             .allocator = allocator,
             .proto = proto,
-            .id = interp.compiler_id_counter,
+            .id = interp.compiler.id_counter,
             .current_line = if (enclosing) |enc| enc.current_line else 0,
             .current_file = if (enclosing) |enc| enc.current_file else "",
             .scope = Scope.init(allocator, null),
@@ -225,8 +225,7 @@ pub const Compiler = struct {
 
     /// Records a "malformed <name> form" message and returns a syntax error.
     fn badForm(self: *Compiler, name: []const u8) ElzError {
-        self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "malformed {s} form", .{name}) catch null;
-        return ElzError.InvalidArgument;
+        return self.interp.fail(ElzError.InvalidArgument, "malformed {s} form", .{name});
     }
 
     /// Requires `list` to be a proper list holding at least `min` elements.
@@ -325,14 +324,13 @@ pub const Compiler = struct {
         // Nested forms compile recursively; bound the depth so hostile or
         // runaway (self-expanding macro) input reports an error instead of
         // exhausting the native stack.
-        if (self.interp.compile_depth >= MAX_COMPILE_DEPTH) {
-            self.interp.last_error_message = "expression nesting too deep to compile";
-            return ElzError.InvalidArgument;
+        if (self.interp.compiler.depth >= MAX_COMPILE_DEPTH) {
+            return self.interp.failWith(ElzError.InvalidArgument, "expression nesting too deep to compile");
         }
-        self.interp.compile_depth += 1;
-        defer self.interp.compile_depth -= 1;
+        self.interp.compiler.depth += 1;
+        defer self.interp.compiler.depth -= 1;
         if (expr == .pair) {
-            if (self.interp.source_locations.get(@intFromPtr(expr.pair))) |loc| {
+            if (self.interp.compiler.source_locations.get(@intFromPtr(expr.pair))) |loc| {
                 self.current_line = loc.line;
                 self.current_file = loc.file;
                 if (self.proto.source_file.len == 0) self.proto.source_file = loc.file;
@@ -371,14 +369,14 @@ pub const Compiler = struct {
     // Hygiene: identifiers introduced by syntax-rules templates
     //
     // An introduced identifier is an alias (`name__hN`) registered in
-    // `interp.hygiene_aliases` with the scope its macro was defined in. It is
+    // `interp.compiler.hygiene_aliases` with the scope its macro was defined in. It is
     // resolved as its base name *from that scope*, so a binding at the use
     // site cannot capture it, and a keyword such as `if` or `else` keeps its
     // meaning even when the use site rebinds that name.
     // -----------------------------------------------------------------------
 
     fn aliasOf(self: *Compiler, name: []const u8) ?@import("interpreter.zig").HygieneAlias {
-        return self.interp.hygiene_aliases.get(name);
+        return self.interp.compiler.hygiene_aliases.get(name);
     }
 
     /// The compiler with identity `id` among this one and its enclosing ones.
@@ -550,9 +548,9 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, sym, "include-ci")) return self.compileInclude(args, env, tail, true, fuel);
         if (std.mem.eql(u8, sym, "syntax-error")) {
             if (args == .pair and args.pair.car == .string) {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string.bytes}) catch null;
+                self.interp.last_error.message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string.bytes}) catch null;
             } else {
-                self.interp.last_error_message = "syntax-error";
+                self.interp.last_error.message = "syntax-error";
             }
             return ElzError.InvalidArgument;
         }
@@ -586,7 +584,7 @@ pub const Compiler = struct {
         switch (expr) {
             .pair => |p| {
                 // Check whether unquote/unquote-splicing are locally bound (in which case they
-                // lose their special meaning inside quasiquote per R5RS §4.2.6).
+                // lose their special meaning inside quasiquote per R7RS §4.2.8).
                 const unquote_is_global = try self.isKeyword(p.car, "unquote");
                 const unquote_splice_is_global = try self.isKeyword(p.car, "unquote-splicing");
                 // (unquote x) at level 1 → compile x
@@ -766,8 +764,7 @@ pub const Compiler = struct {
             if (self.scope.findLocal(name)) |slot| {
                 _ = try self.emitA(.store_local, slot);
             } else {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "define: '{s}' is not at the start of a body", .{name}) catch null;
-                return ElzError.InvalidArgument;
+                return self.interp.fail(ElzError.InvalidArgument, "define: '{s}' is not at the start of a body", .{name});
             }
         }
     }
@@ -894,7 +891,7 @@ pub const Compiler = struct {
                 const m = try self.allocator.create(core.Macro);
                 m.* = .{ .name = macro_name, .formals = try sig.cdr.deep_clone(self.allocator), .body = try body.deep_clone(self.allocator), .env = env };
                 const macro_val = core.Value{ .macro = m };
-                try env.set(self.interp, macro_name, macro_val);
+                try env.set(macro_name, macro_val);
                 _ = try self.emitOp(.load_unspecified);
                 return;
             } else {
@@ -902,7 +899,7 @@ pub const Compiler = struct {
             }
         };
         const name = first.symbol;
-        try env.set(self.interp, name, transformer);
+        try env.set(name, transformer);
         _ = try self.emitOp(.load_unspecified);
     }
 
@@ -912,7 +909,7 @@ pub const Compiler = struct {
         const sr_expr = args.pair.cdr.pair.car;
 
         const sr_val = try evalTransformer(self, sr_expr, name, env);
-        try env.set(self.interp, name, sr_val);
+        try env.set(name, sr_val);
 
         _ = try self.emitOp(.load_unspecified);
     }
@@ -1439,7 +1436,7 @@ pub const Compiler = struct {
             }
 
             // cond => arrow: (cond (test => proc) ...) — compile as (let ((t test)) (if t (proc t) ...))
-            // Only treat => as the arrow keyword when it is not locally bound (R5RS §4.2.1).
+            // Only treat => as the arrow keyword when it is not locally bound (R7RS §4.2.1).
             const arrow_not_bound = clause_body != .nil and try self.isKeyword(clause_body.pair.car, "=>");
             if (arrow_not_bound) {
                 const arrow_rest = try self.requirePair("cond", clause_body.pair.cdr);
@@ -1631,9 +1628,8 @@ pub const Compiler = struct {
     /// Compiles (include "file" ...) by splicing the files' forms in place at
     /// compile time. include-ci case-folds symbols first.
     fn compileInclude(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fold_case: bool, fuel: *u64) ElzError!void {
-        if (!self.interp.enable_filesystem) {
-            self.interp.last_error_message = "include: filesystem access is disabled";
-            return ElzError.PermissionDenied;
+        if (!self.interp.flags.enable_filesystem) {
+            return self.interp.failWith(ElzError.PermissionDenied, "include: filesystem access is disabled");
         }
         var emitted = false;
         var cur = args;
@@ -1641,13 +1637,11 @@ pub const Compiler = struct {
             const filename_val = cur.pair.car;
             if (filename_val != .string) return ElzError.InvalidArgument;
             if (!self.interp.beginLoading(filename_val.string.bytes)) {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: '{s}' includes itself", .{filename_val.string.bytes}) catch null;
-                return ElzError.InvalidArgument;
+                return self.interp.fail(ElzError.InvalidArgument, "include: '{s}' includes itself", .{filename_val.string.bytes});
             }
             defer self.interp.endLoading(filename_val.string.bytes);
             const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, filename_val.string.bytes, self.allocator, .limited(1 * 1024 * 1024)) catch {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: cannot read '{s}'", .{filename_val.string.bytes}) catch null;
-                return ElzError.FileNotFound;
+                return self.interp.fail(ElzError.FileNotFound, "include: cannot read '{s}'", .{filename_val.string.bytes});
             };
             var forms = @import("parser.zig").readAll(source, self.allocator) catch |e| return e;
             defer forms.deinit(self.allocator);
@@ -1864,7 +1858,7 @@ pub const Compiler = struct {
             const name = binding.name.symbol;
             const transformer = try evalTransformer(self, binding.init, name, env);
             try saved.append(self.allocator, .{ .name = name, .previous = env.lookup(name) });
-            try env.set(self.interp, name, transformer);
+            try env.set(name, transformer);
             cur = cur.pair.cdr;
         }
         defer {
@@ -1873,7 +1867,7 @@ pub const Compiler = struct {
                 i -= 1;
                 const entry = saved.items[i];
                 if (entry.previous) |prev| {
-                    env.set(self.interp, entry.name, prev) catch {};
+                    env.set(entry.name, prev) catch {};
                 } else {
                     _ = env.remove(entry.name);
                 }
@@ -1956,10 +1950,10 @@ pub const Compiler = struct {
         }
         if (spec != .pair) return ElzError.InvalidArgument;
         const key = try self.libraryKey(spec);
-        if (self.interp.library_registry.get(key)) |module| {
+        if (self.interp.compiler.library_registry.get(key)) |module| {
             var it = module.exports.iterator();
             while (it.next()) |entry| {
-                try self.interp.root_env.set(self.interp, entry.key_ptr.*, entry.value_ptr.*);
+                try self.interp.root_env.set(entry.key_ptr.*, entry.value_ptr.*);
             }
             return;
         }
@@ -1968,8 +1962,7 @@ pub const Compiler = struct {
         if (head == .symbol and (std.mem.eql(u8, head.symbol, "scheme") or std.mem.eql(u8, head.symbol, "elz"))) {
             return;
         }
-        self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "import: library ({s}) not found", .{key}) catch null;
-        return ElzError.SymbolNotFound;
+        return self.interp.fail(ElzError.SymbolNotFound, "import: library ({s}) not found", .{key});
     }
 
     /// Compiles (define-library (name ...) clause ...). The body is evaluated
@@ -2009,9 +2002,8 @@ pub const Compiler = struct {
                 }
             } else if (std.mem.eql(u8, kind, "include") or std.mem.eql(u8, kind, "include-ci")) {
                 const fold = std.mem.eql(u8, kind, "include-ci");
-                if (!self.interp.enable_filesystem) {
-                    self.interp.last_error_message = "define-library: filesystem access is disabled";
-                    return ElzError.PermissionDenied;
+                if (!self.interp.flags.enable_filesystem) {
+                    return self.interp.failWith(ElzError.PermissionDenied, "define-library: filesystem access is disabled");
                 }
                 var f = clause.pair.cdr;
                 while (f == .pair) : (f = f.pair.cdr) {
@@ -2040,14 +2032,13 @@ pub const Compiler = struct {
         const module = self.allocator.create(core.Module) catch return ElzError.OutOfMemory;
         module.* = .{ .exports = std.StringHashMap(Value).init(self.allocator) };
         for (export_names.items) |name| {
-            const value = self.interp.root_env.get(name, self.interp) catch {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "define-library: exported name '{s}' is not defined", .{name}) catch null;
-                return ElzError.SymbolNotFound;
+            const value = self.interp.root_env.get(name) catch {
+                return self.interp.fail(ElzError.SymbolNotFound, "define-library: exported name '{s}' is not defined", .{name});
             };
             const owned = self.allocator.dupe(u8, name) catch return ElzError.OutOfMemory;
             module.exports.put(owned, value) catch return ElzError.OutOfMemory;
         }
-        self.interp.library_registry.put(self.interp.allocator, key, module) catch return ElzError.OutOfMemory;
+        self.interp.compiler.library_registry.put(self.interp.allocator, key, module) catch return ElzError.OutOfMemory;
         _ = try self.emitOp(.load_unspecified);
     }
 
@@ -2063,15 +2054,13 @@ pub const Compiler = struct {
         while (cur == .pair) {
             try self.compileExpr(cur.pair.car, env, false, fuel);
             if (argc == 255) {
-                self.interp.last_error_message = "a call may pass at most 255 arguments";
-                return ElzError.InvalidArgument;
+                return self.interp.failWith(ElzError.InvalidArgument, "a call may pass at most 255 arguments");
             }
             argc += 1;
             cur = cur.pair.cdr;
         }
         if (cur != .nil) {
-            self.interp.last_error_message = "an argument list must be a proper list";
-            return ElzError.InvalidArgument;
+            return self.interp.failWith(ElzError.InvalidArgument, "an argument list must be a proper list");
         }
         if (tail) {
             _ = try self.emitA(.tail_call, argc);
@@ -2103,7 +2092,7 @@ pub const Compiler = struct {
         defer added.deinit(allocator);
         defer {
             for (added.items) |name| {
-                _ = interp.pending_globals.remove(name);
+                _ = interp.compiler.pending_globals.remove(name);
             }
         }
         for (forms) |form| try collectTopLevelDefines(allocator, interp, form, &added);
@@ -2125,7 +2114,7 @@ pub const Compiler = struct {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Records the names a top-level form defines into `interp.pending_globals`,
+/// Records the names a top-level form defines into `interp.compiler.pending_globals`,
 /// descending into `begin` so spliced definitions are seen too.
 fn collectTopLevelDefines(
     allocator: std.mem.Allocator,
@@ -2150,8 +2139,8 @@ fn collectTopLevelDefines(
         .pair => |p| if (p.car == .symbol) p.car.symbol else return,
         else => return,
     };
-    if (!interp.pending_globals.contains(name)) {
-        interp.pending_globals.put(allocator, name, {}) catch return ElzError.OutOfMemory;
+    if (!interp.compiler.pending_globals.contains(name)) {
+        interp.compiler.pending_globals.put(allocator, name, {}) catch return ElzError.OutOfMemory;
         added.append(allocator, name) catch return ElzError.OutOfMemory;
     }
 }
@@ -2190,6 +2179,14 @@ const special_form_operands = [_]struct { name: []const u8, min: usize }{
     .{ .name = "import", .min = 1 },
     .{ .name = "define-library", .min = 1 },
     .{ .name = "try", .min = 1 },
+};
+
+/// Names of the special forms handled directly by the compiler. The REPL uses
+/// this for completion, since these names are not bound in any environment.
+pub const special_form_names: [special_form_operands.len][]const u8 = blk: {
+    var names: [special_form_operands.len][]const u8 = undefined;
+    for (special_form_operands, 0..) |entry, i| names[i] = entry.name;
+    break :blk names;
 };
 
 fn minOperands(sym: []const u8) ?usize {
@@ -2251,5 +2248,5 @@ test "compileTopLevel cleans up pending_globals" {
     const forms = [_]Value{define_form};
     _ = try Compiler.compileTopLevel(allocator, &interp, &forms, interp.root_env, &fuel);
 
-    try testing.expectEqual(@as(usize, 0), interp.pending_globals.count());
+    try testing.expectEqual(@as(usize, 0), interp.compiler.pending_globals.count());
 }

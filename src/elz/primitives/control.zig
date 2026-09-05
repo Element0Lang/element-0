@@ -19,7 +19,7 @@ fn describeValue(allocator: std.mem.Allocator, v: core.Value) ?[]const u8 {
 
 /// Builds an error-object record: fields are (kind message irritants).
 fn makeErrorObject(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, kind: core.Value, message: core.Value, irritants: core.Value) ElzError!core.Value {
-    const rtd = interp.error_rtd orelse return ElzError.InvalidArgument;
+    const rtd = interp.runtime.error_rtd orelse return ElzError.InvalidArgument;
     const fields = allocator.alloc(core.Value, 3) catch return ElzError.OutOfMemory;
     fields[0] = kind;
     fields[1] = message;
@@ -31,11 +31,11 @@ fn makeErrorObject(interp: *interpreter.Interpreter, allocator: std.mem.Allocato
 
 /// Raises `obj` through the Zig error channel, recording it for catch sites.
 fn raiseValue(interp: *interpreter.Interpreter, allocator: std.mem.Allocator, obj: core.Value) ElzError {
-    interp.current_exception = obj;
-    if (obj == .record and interp.error_rtd != null and obj.record.rtd == interp.error_rtd.?) {
-        interp.last_error_message = describeValue(allocator, obj.record.fields[1]);
+    interp.last_error.payload = obj;
+    if (obj == .record and interp.runtime.error_rtd != null and obj.record.rtd == interp.runtime.error_rtd.?) {
+        interp.last_error.message = describeValue(allocator, obj.record.fields[1]);
     } else {
-        interp.last_error_message = describeValue(allocator, obj);
+        interp.last_error.message = describeValue(allocator, obj);
     }
     return ElzError.UserError;
 }
@@ -73,7 +73,7 @@ pub fn raise_continuable_fn(interp: *interpreter.Interpreter, env: *core.Environ
     return raise_common(interp, env, args.items[0], fuel, true);
 }
 
-/// Pushed onto `interp.exception_handlers` for the extent of a `try` body. It
+/// Pushed onto `interp.runtime.exception_handlers` for the extent of a `try` body. It
 /// marks a handler boundary that is nearer than any installed
 /// `with-exception-handler` handler, so a `raise` inside the body reaches the
 /// `try` (and therefore `guard`) instead of jumping to an outer handler.
@@ -84,19 +84,19 @@ fn isTryBoundary(v: core.Value) bool {
 }
 
 fn raise_common(interp: *interpreter.Interpreter, env: *core.Environment, obj: core.Value, fuel: *u64, continuable: bool) ElzError!core.Value {
-    const handlers = interp.exception_handlers.items;
+    const handlers = interp.runtime.exception_handlers.items;
     if (handlers.len > 0 and !isTryBoundary(handlers[handlers.len - 1])) {
         // Call the innermost handler with it uninstalled, per R7RS.
-        const handler = interp.exception_handlers.pop().?;
+        const handler = interp.runtime.exception_handlers.pop().?;
         var handler_args = core.ValueList.init(env.allocator);
         defer handler_args.deinit();
         try handler_args.append(obj);
         const result = vm_mod.callProc(interp, handler, handler_args, fuel);
-        interp.exception_handlers.append(interp.allocator, handler) catch return ElzError.OutOfMemory;
+        interp.runtime.exception_handlers.append(interp.allocator, handler) catch return ElzError.OutOfMemory;
         const value = try result;
         if (continuable) return value;
-        interp.last_error_message = "exception handler returned from non-continuable raise";
-        interp.current_exception = obj;
+        interp.last_error.message = "exception handler returned from non-continuable raise";
+        interp.last_error.payload = obj;
         return ElzError.UserError;
     }
     return raiseValue(interp, env.allocator, obj);
@@ -106,8 +106,8 @@ fn raise_common(interp: *interpreter.Interpreter, env: *core.Environment, obj: c
 /// Syntax: (with-exception-handler handler thunk)
 pub fn with_exception_handler(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!core.Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    interp.exception_handlers.append(interp.allocator, args.items[0]) catch return ElzError.OutOfMemory;
-    defer _ = interp.exception_handlers.pop();
+    interp.runtime.exception_handlers.append(interp.allocator, args.items[0]) catch return ElzError.OutOfMemory;
+    defer _ = interp.runtime.exception_handlers.pop();
     var no_args = core.ValueList.init(env.allocator);
     defer no_args.deinit();
     return vm_mod.callProc(interp, args.items[1], no_args, fuel);
@@ -152,7 +152,7 @@ pub fn apply(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     while (current_node != .nil) {
         const p = switch (current_node) {
             .pair => |pair_val| pair_val,
-            else => return ElzError.InvalidArgument,
+            else => return interp.fail(ElzError.InvalidArgument, "apply: the last argument must be a list, got {s}", .{core.typeName(last_arg)}),
         };
         try final_args.append(p.car);
         current_node = p.cdr;
@@ -215,10 +215,10 @@ pub fn with_input_from_file(interp: *interpreter.Interpreter, env: *core.Environ
     const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     new_port.* = core.Port.openInput(env.allocator, interp.io, path_val.string.bytes) catch return ElzError.FileNotFound;
 
-    const saved = interp.stdin_port;
-    interp.stdin_port = new_port;
+    const saved = interp.runtime.stdin_port;
+    interp.runtime.stdin_port = new_port;
     defer {
-        interp.stdin_port = saved;
+        interp.runtime.stdin_port = saved;
         new_port.close();
     }
 
@@ -239,10 +239,10 @@ pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environm
     const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     new_port.* = core.Port.openOutput(env.allocator, interp.io, path_val.string.bytes) catch return ElzError.FileNotWritable;
 
-    const saved = interp.stdout_port;
-    interp.stdout_port = new_port;
+    const saved = interp.runtime.stdout_port;
+    interp.runtime.stdout_port = new_port;
     defer {
-        interp.stdout_port = saved;
+        interp.runtime.stdout_port = saved;
         new_port.close();
     }
 
@@ -368,9 +368,9 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     // Each escape continuation carries its own identity, so a jump aimed at an
     // outer call/ec passes through the inner ones instead of being consumed by
     // the first frame that sees it.
-    interp.cps.escape_counter += 1;
+    interp.runtime.cps.escape_counter += 1;
     const escape = env.allocator.create(core.Escape) catch return ElzError.OutOfMemory;
-    escape.* = .{ .id = interp.cps.escape_counter };
+    escape.* = .{ .id = interp.runtime.cps.escape_counter };
     // Invoking it after this frame returns is an error, not a jump.
     defer escape.active = false;
 
@@ -383,10 +383,10 @@ pub fn call_with_escape_continuation(interp: *interpreter.Interpreter, env: *cor
     if (result) |val| {
         return val;
     } else |err| {
-        if (err == ElzError.EscapeContinuationInvoked and interp.cps.escape_id == escape.id) {
-            const escaped_val = interp.cps.escape_value orelse core.Value.unspecified;
-            interp.cps.escape_value = null;
-            interp.cps.escape_id = 0;
+        if (err == ElzError.EscapeContinuationInvoked and interp.runtime.cps.escape_id == escape.id) {
+            const escaped_val = interp.runtime.cps.escape_value orelse core.Value.unspecified;
+            interp.runtime.cps.escape_value = null;
+            interp.runtime.cps.escape_id = 0;
             return escaped_val;
         }
         return err;
@@ -406,9 +406,9 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
     defer no_args.deinit();
 
     // Mark this `try` as the innermost handler for the body's extent.
-    interp.exception_handlers.append(interp.allocator, try_boundary) catch return ElzError.OutOfMemory;
+    interp.runtime.exception_handlers.append(interp.allocator, try_boundary) catch return ElzError.OutOfMemory;
     const body_result = vm_mod.callProc(interp, body_thunk, no_args, fuel);
-    _ = interp.exception_handlers.pop();
+    _ = interp.runtime.exception_handlers.pop();
 
     if (body_result) |val| {
         return val;
@@ -419,11 +419,11 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
         // A raised value takes precedence; otherwise wrap the runtime error in
         // an error object so `error-object?`, `file-error?`, and
         // `read-error?` classify it.
-        const err_val: core.Value = if (interp.current_exception) |exc| blk: {
-            interp.current_exception = null;
+        const err_val: core.Value = if (interp.last_error.payload) |exc| blk: {
+            interp.last_error.payload = null;
             break :blk exc;
         } else blk: {
-            const msg = interp.last_error_message orelse @errorName(err);
+            const msg = interp.last_error.message orelse @errorName(err);
             const msg_val = core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
             const kind: core.Value = switch (err) {
                 ElzError.FileNotFound, ElzError.FileNotWritable, ElzError.IOError => .{ .symbol = "file" },
@@ -432,9 +432,7 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
             };
             break :blk makeErrorObject(interp, env.allocator, kind, msg_val, .nil) catch msg_val;
         };
-        interp.last_error_message = null;
-        interp.last_error_line = null;
-        interp.last_error_file = null;
+        interp.last_error.clear();
 
         var handler_args = core.ValueList.init(env.allocator);
         defer handler_args.deinit();
@@ -474,14 +472,14 @@ pub fn dynamic_wind(
 
     // Register winder so call/ec escape can find it.
     const winder = try env.allocator.create(core.Winder);
-    winder.* = .{ .before = before, .after = after_proc, .next = interp.cps.winders };
-    const saved_winders = interp.cps.winders;
+    winder.* = .{ .before = before, .after = after_proc, .next = interp.runtime.cps.winders };
+    const saved_winders = interp.runtime.cps.winders;
 
     _ = try vm_mod.callProc(interp, before, no_args, fuel);
 
-    interp.cps.winders = winder;
+    interp.runtime.cps.winders = winder;
     const thunk_result = vm_mod.callProc(interp, thunk, no_args, fuel);
-    interp.cps.winders = saved_winders;
+    interp.runtime.cps.winders = saved_winders;
 
     // Always call after, even if thunk errored (e.g. escape continuation).
     _ = vm_mod.callProc(interp, after_proc, no_args, fuel) catch {};

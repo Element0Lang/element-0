@@ -13,7 +13,7 @@ defer interp.deinit();
 
 `Interpreter.init` takes a `SandboxFlags` value (see [Sandboxing](#sandboxing)), sets up the garbage collector, builds the global environment with every enabled primitive, and loads the standard library. Creating an interpreter is not free (the standard library is compiled on every `init`), so keep one per script context rather than one per evaluation.
 
-All memory that scripts allocate is managed by the Boehm-Demers-Weiser collector. The collector scans the stack and registers of the calling thread, so values held in Zig locals stay alive while they are in use. If you store an `Interpreter` or Element 0 values in memory the collector cannot see, such as a heap allocation from a different allocator, register that region with `elz.gc_add_roots`, or allocate it with `elz.gc_allocator` as the REPL does.
+All memory that scripts allocate is managed by the Boehm-Demers-Weiser collector. On `wasm32` targets the collector is replaced by an arena that frees nothing until `deinit`, because WebAssembly does not let a program scan its own stack; see [Building for WebAssembly](getting-started.md#building-for-webassembly). The collector scans the stack and registers of the calling thread, so values held in Zig locals stay alive while they are in use. If you store an `Interpreter` or Element 0 values in memory the collector cannot see, such as a heap allocation from a different allocator, register that region with `elz.gc_add_roots`, or allocate it with `elz.gc_allocator` as the REPL does.
 
 ## Evaluating Code
 
@@ -32,7 +32,7 @@ defer forms.deinit(interp.allocator);
 for (forms.items) |form| {
     var fuel: u64 = std.math.maxInt(u64);
     const result = interp.evalForm(&form, &fuel) catch |err| {
-        // interp.last_error_message, last_error_file, and last_error_line describe the failure
+        // interp.last_error holds the message, location, and backtrace
         return err;
     };
     _ = result;
@@ -121,14 +121,24 @@ Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use 
 
 ## Error Handling
 
-Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). Three fields on the interpreter add detail:
+Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). The detail lives in `interp.last_error`, an `ErrorState` with these fields:
 
-- `last_error_message`: a human-readable message, when one is available.
-- `last_error_file` and `last_error_line`: the location of the failing form, when the source was read with location tracking (`parser.readAllTracked`, which `evalString` uses).
+- `message`: a human-readable message, when the failing operation supplied one.
+- `file` and `line`: the location of the failing form, when the source was read with location tracking (`parser.readAllTracked`, which `evalString` uses).
+- `payload`: the object a script passed to `raise` or `error`, for `UserError`.
+- `backtrace`: the call frames the error unwound through, innermost first, each with a procedure name, file, and line. It is filled only while `collect_backtrace` is true, because errors caught by `try` inside the script pay for the recording too. The REPL turns it on; embedders that show errors to users should do the same.
 
 A value raised by a script (`(raise 'oops)`) arrives as `UserError`; inside the script, `guard` and `with-exception-handler` see the raised object itself. Runtime errors caught inside a script are error objects with a kind, so `file-error?` and `read-error?` work on them.
 
-Clear `last_error_message` before each evaluation if you display it, as the REPL does; it is only overwritten on failure.
+Call `interp.last_error.clear()` once you have shown a report, as the REPL does. The fields are only written on failure, so stale detail would otherwise attach itself to the next error.
+
+Primitives written in Zig produce their detail through `interp.fail`, which records a formatted message and returns the error in one expression:
+
+```zig
+if (args.items[0] != .pair) {
+    return interp.fail(elz.ElzError.InvalidArgument, "car: expected a pair, got {s}", .{elz.core.typeName(args.items[0])});
+}
+```
 
 ## Modules and Files
 

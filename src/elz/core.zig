@@ -66,20 +66,19 @@ pub const Environment = struct {
     /// Parameters:
     /// - `self`: A pointer to the current environment.
     /// - `name`: The name of the symbol to look up.
-    /// - `interp`: A pointer to the interpreter instance, used for error reporting.
     ///
     /// Returns:
     /// The `Value` bound to the symbol, or `ElzError.SymbolNotFound` if the symbol is not found.
-    pub fn get(self: *const Environment, name: []const u8, interp: *interpreter.Interpreter) ElzError!Value {
-        if (self.lookup(name)) |value| return value;
-        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Symbol '{s}' not found.", .{name}) catch null;
-        return ElzError.SymbolNotFound;
+    /// The environment does not know how to report errors; callers that want a
+    /// message attach one with `Interpreter.fail`.
+    pub fn get(self: *const Environment, name: []const u8) ElzError!Value {
+        return self.lookup(name) orelse ElzError.SymbolNotFound;
     }
 
     /// Looks a symbol up without reporting an error. Callers that treat a miss
     /// as an ordinary outcome (such as the compiler probing for a macro) must
     /// use this, so a failed probe does not leave a misleading message behind
-    /// in `interp.last_error_message`.
+    /// in `interp.last_error.message`.
     pub fn lookup(self: *const Environment, name: []const u8) ?Value {
         var current_env: ?*const Environment = self;
         while (current_env) |env| {
@@ -119,21 +118,19 @@ pub const Environment = struct {
     ///
     /// Parameters:
     /// - `self`: A pointer to the current environment.
-    /// - `interp`: A pointer to the interpreter instance (currently unused in this function).
     /// - `name`: The name of the symbol to bind.
     /// - `value`: The `Value` to bind to the symbol.
     ///
     /// Returns:
     /// `void` or an error if memory allocation for the name or value fails.
-    pub fn set(self: *Environment, interp: *interpreter.Interpreter, name: []const u8, value: Value) ElzError!void {
+    pub fn set(self: *Environment, name: []const u8, value: Value) ElzError!void {
         const owned_name = try self.allocator.dupe(u8, name);
         // Only the inline byte-slice variants need to own their backing memory; heap
         // values (pair, vector, hash_map, port, cell, closure, ...) are shared by
-        // reference so that aliased bindings observe each other's mutations as R5RS
+        // reference so that aliased bindings observe each other's mutations as Scheme
         // requires for `(define w v)` style aliasing.
         const owned_value = try own_value_slices(value, self.allocator);
         try self.bindings.put(owned_name, owned_value);
-        _ = interp;
     }
 
     /// Removes a binding from this environment only. Returns true when a
@@ -147,13 +144,12 @@ pub const Environment = struct {
     ///
     /// Parameters:
     /// - `self`: A pointer to the current environment.
-    /// - `interp`: A pointer to the interpreter instance, used for error reporting.
     /// - `name`: The name of the symbol to update.
     /// - `value`: The new `Value` for the symbol.
     ///
     /// Returns:
     /// `void` or `ElzError.SymbolNotFound` if the symbol is not bound in any accessible environment.
-    pub fn update(self: *Environment, interp: *interpreter.Interpreter, name: []const u8, value: Value) ElzError!void {
+    pub fn update(self: *Environment, name: []const u8, value: Value) ElzError!void {
         var current_env: ?*Environment = self;
         while (current_env) |env| {
             if (env.bindings.getEntry(name)) |entry| {
@@ -166,7 +162,6 @@ pub const Environment = struct {
             }
             current_env = env.outer;
         }
-        interp.last_error_message = std.fmt.allocPrint(self.allocator, "Cannot set! unbound symbol '{s}'.", .{name}) catch null;
         return ElzError.SymbolNotFound;
     }
 };
@@ -265,7 +260,7 @@ pub const Macro = struct {
 };
 
 /// One pattern/template pair from a `syntax-rules` form. The pattern starts with the
-/// macro keyword (or `_`) by R5RS convention.
+/// macro keyword (or `_`), as R7RS specifies.
 pub const SyntaxRule = struct {
     pattern: Value,
     template: Value,
@@ -720,6 +715,36 @@ pub const Promise = struct {
     forward: ?*Promise = null,
 };
 
+/// The Scheme-facing name of a value's type, for error messages such as
+/// "car: expected a pair, got string".
+pub fn typeName(v: Value) []const u8 {
+    return switch (v) {
+        .nil => "the empty list",
+        .pair => "a pair",
+        .boolean => "a boolean",
+        .number => "an inexact number",
+        .exact_integer, .bigint => "an integer",
+        .string => "a string",
+        .symbol => "a symbol",
+        .character => "a character",
+        .vector => "a vector",
+        .bytevector => "a bytevector",
+        .hash_map => "a hash map",
+        .port => "a port",
+        .promise => "a promise",
+        .record => "a record",
+        .record_type => "a record type",
+        .procedure, .vm_closure, .foreign_procedure => "a procedure",
+        .continuation, .escape => "a continuation",
+        .macro, .syntax_rules => "a macro",
+        .module => "a module",
+        .multi_values => "multiple values",
+        .eof => "the end-of-file object",
+        .unspecified => "an unspecified value",
+        else => @tagName(v),
+    };
+}
+
 /// `Value` is the core data type in the Elz interpreter.
 /// It is a tagged union that can represent all the different types of values in the Elz language.
 pub const Value = union(enum) {
@@ -904,34 +929,27 @@ test "core environment" {
     defer arena.deinit();
     const allocator = arena.allocator();
     const testing = std.testing;
-    var interp_stub: interpreter.Interpreter = .{
-        .allocator = allocator,
-        .io = std.Io.Threaded.global_single_threaded.io(),
-        .root_env = undefined,
-        .last_error_message = null,
-        .module_cache = undefined,
-    };
 
     // Test set and get in the same environment
     var env = try Environment.init(allocator, null);
-    try env.set(&interp_stub, "x", Value{ .number = 42 });
-    var value = try env.get("x", &interp_stub);
+    try env.set("x", Value{ .number = 42 });
+    var value = try env.get("x");
     try testing.expect(value == .number);
     try testing.expectEqual(@as(f64, 42), value.number);
 
     // Test get from outer environment
     var outer_env = try Environment.init(allocator, null);
-    try outer_env.set(&interp_stub, "y", (try makeString(allocator, "hello")));
+    try outer_env.set("y", (try makeString(allocator, "hello")));
     var inner_env = try Environment.init(allocator, outer_env);
-    value = try inner_env.get("y", &interp_stub);
+    value = try inner_env.get("y");
     try testing.expectEqualStrings("hello", value.string.bytes);
 
     // Test update on outer environment
-    try inner_env.update(&interp_stub, "y", (try makeString(allocator, "world")));
-    value = try outer_env.get("y", &interp_stub);
+    try inner_env.update("y", (try makeString(allocator, "world")));
+    value = try outer_env.get("y");
     try testing.expectEqualStrings("world", value.string.bytes);
 
     // Test update on symbol not found
-    const err = inner_env.update(&interp_stub, "z", Value{ .number = 0 });
+    const err = inner_env.update("z", Value{ .number = 0 });
     try testing.expectError(ElzError.SymbolNotFound, err);
 }

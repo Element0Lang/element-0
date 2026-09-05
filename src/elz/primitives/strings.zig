@@ -143,10 +143,10 @@ fn okGe(o: std.math.Order) bool {
     return o != .lt;
 }
 
-pub fn symbol_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn symbol_to_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const sym = args.items[0];
-    if (sym != .symbol) return ElzError.InvalidArgument;
+    if (sym != .symbol) return interp.fail(ElzError.InvalidArgument, "symbol->string: expected a symbol, got {s}", .{core.typeName(sym)});
     const str = try env.allocator.dupe(u8, sym.symbol);
     return (try core.makeString(env.allocator, str));
 }
@@ -155,10 +155,10 @@ pub fn symbol_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a single string.
-pub fn string_to_symbol(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_to_symbol(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    if (str != .string) return ElzError.InvalidArgument;
+    if (str != .string) return interp.fail(ElzError.InvalidArgument, "string->symbol: expected a string, got {s}", .{core.typeName(str)});
     const sym = try env.allocator.dupe(u8, str.string.bytes);
     return Value{ .symbol = sym };
 }
@@ -167,10 +167,10 @@ pub fn string_to_symbol(_: *interpreter.Interpreter, env: *core.Environment, arg
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a single string.
-pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    if (str != .string) return ElzError.InvalidArgument;
+    if (str != .string) return interp.fail(ElzError.InvalidArgument, "string-length: expected a string, got {s}", .{core.typeName(str)});
     const len = std.unicode.utf8CountCodepoints(str.string.bytes) catch return ElzError.InvalidArgument;
     return Value{ .exact_integer = @intCast(len) };
 }
@@ -241,58 +241,58 @@ pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     return chainChars(args, true, okGe);
 }
 
-pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_alphabetic_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-alphabetic?: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isAlphabetic) };
 }
 
-pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_numeric_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-numeric?: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isNumeric) };
 }
 
-pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_whitespace_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-whitespace?: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isWhitespace) };
 }
 
-pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_upper_case_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-upper-case?: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isUpper) };
 }
 
-pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_lower_case_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-lower-case?: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isLower) };
 }
 
-pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_upcase(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-upcase: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .character = unicodeUpcase(args.items[0].character) };
 }
 
-pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_downcase(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-downcase: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .character = unicodeDowncase(args.items[0].character) };
 }
 
-pub fn char_foldcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_foldcase(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "char-foldcase: expected a character, got {s}", .{core.typeName(args.items[0])});
     return Value{ .character = foldChar(args.items[0].character) };
 }
 
 /// `digit_value` returns the value of a decimal digit character, or #f.
-pub fn digit_value(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn digit_value(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .character) return interp.fail(ElzError.InvalidArgument, "digit-value: expected a character, got {s}", .{core.typeName(args.items[0])});
     const c = args.items[0].character;
     if (c > 0x10FFFF) return Value{ .boolean = false };
     if (unicode.digitValue(@intCast(c))) |d| return Value{ .exact_integer = d };
@@ -337,10 +337,10 @@ pub fn string_foldcase(_: *interpreter.Interpreter, env: *core.Environment, args
 }
 
 /// `char_to_integer` converts a character to its Unicode code point.
-pub fn char_to_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn char_to_integer(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const c = args.items[0];
-    if (c != .character) return ElzError.InvalidArgument;
+    if (c != .character) return interp.fail(ElzError.InvalidArgument, "char->integer: expected a character, got {s}", .{core.typeName(c)});
     return Value{ .exact_integer = @intCast(c.character) };
 }
 
@@ -357,10 +357,10 @@ pub fn integer_to_char(_: *interpreter.Interpreter, _: *core.Environment, args: 
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a string and an index.
-pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    if (str != .string) return ElzError.InvalidArgument;
+    if (str != .string) return interp.fail(ElzError.InvalidArgument, "string-ref: expected a string, got {s}", .{core.typeName(str)});
     const idx_usize = try toIndex(args.items[1]);
 
     // Iterate through UTF-8 codepoints to find the character at the given index
@@ -382,10 +382,10 @@ pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a string, start index, and end index.
-pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn substring(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    if (str != .string) return ElzError.InvalidArgument;
+    if (str != .string) return interp.fail(ElzError.InvalidArgument, "substring: expected a string, got {s}", .{core.typeName(str)});
     const start_idx = try toIndex(args.items[1]);
     const end_idx = try toIndex(args.items[2]);
 
@@ -437,10 +437,10 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 
 /// `number_to_string` converts a number to its string representation.
 /// Syntax: (number->string num) or (number->string num radix)
-pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn number_to_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const num_val = args.items[0];
-    if (!num_val.isNumeric()) return ElzError.InvalidArgument;
+    if (!num_val.isNumeric()) return interp.fail(ElzError.InvalidArgument, "number->string: expected a number, got {s}", .{core.typeName(num_val)});
 
     // With an explicit radix, convert integers to that base.
     if (args.items.len == 2) {
@@ -469,10 +469,10 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
 /// `string_to_number` converts a string to a number.
 /// Syntax: (string->number str) or (string->number str radix)
 /// Returns #f if the string cannot be parsed as a number.
-pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_to_number(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
-    if (str_val != .string) return ElzError.InvalidArgument;
+    if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "string->number: expected a string, got {s}", .{core.typeName(str_val)});
 
     const str = str_val.string.bytes;
     const parser = @import("../parser.zig");
@@ -508,13 +508,13 @@ fn normalizeRationalValue(n: i64, d: i64, alloc: std.mem.Allocator) Value {
 
 /// `string_split` splits a string by a delimiter into a list of strings.
 /// Syntax: (string-split str delim)
-pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_split(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
     const delim_val = args.items[1];
 
-    if (str_val != .string) return ElzError.InvalidArgument;
-    if (delim_val != .string) return ElzError.InvalidArgument;
+    if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "string-split: expected a string, got {s}", .{core.typeName(str_val)});
+    if (delim_val != .string) return interp.fail(ElzError.InvalidArgument, "string-split: expected a string, got {s}", .{core.typeName(delim_val)});
 
     const str = str_val.string.bytes;
     const delim = delim_val.string.bytes;
@@ -548,11 +548,11 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
 
 /// `string_from_chars` creates a string from one or more characters.
 /// Syntax: (string char ...)
-pub fn string_from_chars(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_from_chars(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     var bytes = std.ArrayListUnmanaged(u8).empty;
     defer bytes.deinit(env.allocator);
     for (args.items) |arg| {
-        if (arg != .character) return ElzError.InvalidArgument;
+        if (arg != .character) return interp.fail(ElzError.InvalidArgument, "string: expected a character, got {s}", .{core.typeName(arg)});
         const cp: u21 = @intCast(arg.character);
         if (!std.unicode.utf8ValidCodepoint(cp)) return ElzError.InvalidArgument;
         var buf: [4]u8 = undefined;
@@ -564,14 +564,14 @@ pub fn string_from_chars(_: *interpreter.Interpreter, env: *core.Environment, ar
 
 /// `make_string` creates a string of k characters.
 /// Syntax: (make-string k) or (make-string k char)
-pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn make_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
 
     const length = try toIndex(args.items[0]);
 
     if (args.items.len == 2) {
         const char_val = args.items[1];
-        if (char_val != .character) return ElzError.InvalidArgument;
+        if (char_val != .character) return interp.fail(ElzError.InvalidArgument, "make-string: expected a character, got {s}", .{core.typeName(char_val)});
 
         const codepoint = char_val.character;
         if (codepoint > 0x10FFFF) return ElzError.InvalidArgument;
@@ -682,16 +682,16 @@ pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: cor
     return chainStrings(args, true, okGe);
 }
 
-pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_copy(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "string-copy: expected a string, got {s}", .{core.typeName(args.items[0])});
     const slice = try sliceByChars(args.items[0].string.bytes, args.items, 1);
     return (try core.makeString(env.allocator, try env.allocator.dupe(u8, slice)));
 }
 
-pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_to_list(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "string->list: expected a string, got {s}", .{core.typeName(args.items[0])});
     const slice = try sliceByChars(args.items[0].string.bytes, args.items, 1);
     var it = std.unicode.Utf8View.initUnchecked(slice).iterator();
     var result: Value = .nil;
@@ -710,28 +710,28 @@ pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args:
     return result;
 }
 
-pub fn list_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_to_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     var bytes = std.ArrayListUnmanaged(u8).empty;
     defer bytes.deinit(env.allocator);
     var node = args.items[0];
     while (node == .pair) {
         const c = node.pair.car;
-        if (c != .character) return ElzError.InvalidArgument;
+        if (c != .character) return interp.fail(ElzError.InvalidArgument, "list->string: expected a character, got {s}", .{core.typeName(c)});
         const cp: u21 = @intCast(c.character);
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
         try bytes.appendSlice(env.allocator, buf[0..len]);
         node = node.pair.cdr;
     }
-    if (node != .nil) return ElzError.InvalidArgument;
+    if (node != .nil) return interp.fail(ElzError.InvalidArgument, "list->string: expected the empty list, got {s}", .{core.typeName(node)});
     return (try core.makeString(env.allocator, try bytes.toOwnedSlice(env.allocator)));
 }
 
-pub fn string_set_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_set_bang(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[2] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "string-set!: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[2] != .character) return interp.fail(ElzError.InvalidArgument, "string-set!: expected a character, got {s}", .{core.typeName(args.items[2])});
     const str = args.items[0].string;
     const s = str.bytes;
     const idx = try toIndex(args.items[1]);
@@ -770,10 +770,10 @@ pub fn string_set_bang(_: *interpreter.Interpreter, env: *core.Environment, args
     return Value.unspecified;
 }
 
-pub fn string_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_fill_bang(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[1] != .character) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "string-fill!: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[1] != .character) return interp.fail(ElzError.InvalidArgument, "string-fill!: expected a character, got {s}", .{core.typeName(args.items[1])});
     const str = args.items[0].string;
     const s = str.bytes;
     if (args.items[1].character > 0x10FFFF) return ElzError.InvalidArgument;
@@ -806,9 +806,9 @@ pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: co
         break :blk if (p == .string) p.string.bytes else p.symbol;
     } else "g";
 
-    interp.gensym_counter += 1;
+    interp.runtime.gensym_counter += 1;
     var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.gensym_counter }) catch return ElzError.OutOfMemory;
+    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.runtime.gensym_counter }) catch return ElzError.OutOfMemory;
 
     return Value{ .symbol = try env.allocator.dupe(u8, formatted) };
 }

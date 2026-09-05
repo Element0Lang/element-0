@@ -119,18 +119,29 @@ pub fn sqrtRem(alloc: std.mem.Allocator, a: Value) ElzError!struct { s: Value, r
 }
 
 pub fn order(a: Value, b: Value) std.math.Order {
-    var abuf: [1]Limb = undefined;
-    var bbuf: [1]Limb = undefined;
+    var abuf: [limbs_per_u64]Limb = undefined;
+    var bbuf: [limbs_per_u64]Limb = undefined;
     return constFor(a, &abuf).order(constFor(b, &bbuf));
 }
 
-fn constFor(v: Value, buf: *[1]Limb) Const {
+/// Limbs needed to hold an i64 magnitude: one on 64-bit targets, two on
+/// 32-bit targets such as wasm32.
+const limbs_per_u64 = @sizeOf(u64) / @sizeOf(Limb);
+
+fn constFor(v: Value, buf: *[limbs_per_u64]Limb) Const {
     switch (v) {
         .bigint => |b| return constOf(b),
         .exact_integer => |i| {
             const mag: u64 = if (i < 0) @as(u64, @intCast(-@as(i128, i))) else @intCast(i);
-            buf[0] = mag;
-            return .{ .limbs = buf[0..1], .positive = i >= 0 };
+            if (limbs_per_u64 == 1) {
+                buf[0] = @intCast(mag);
+                return .{ .limbs = buf[0..1], .positive = i >= 0 };
+            }
+            buf[0] = @truncate(mag);
+            buf[1] = @truncate(mag >> 32);
+            // `Const` expects no leading zero limb.
+            const len: usize = if (buf[1] == 0) 1 else 2;
+            return .{ .limbs = buf[0..len], .positive = i >= 0 };
         },
         else => unreachable,
     }

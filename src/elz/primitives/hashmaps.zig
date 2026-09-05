@@ -18,14 +18,14 @@ pub fn make_hash_map(_: *interpreter.Interpreter, env: *core.Environment, args: 
 
 /// `hash_map_set` sets a key-value pair in the hash map.
 /// Syntax: (hash-map-set! hm key value)
-pub fn hash_map_set(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn hash_map_set(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
 
     const hm_val = args.items[0];
     const key_val = args.items[1];
     const value = args.items[2];
 
-    if (hm_val != .hash_map) return ElzError.InvalidArgument;
+    if (hm_val != .hash_map) return interp.fail(ElzError.InvalidArgument, "hash-map-set!: expected a hash map, got {s}", .{core.typeName(hm_val)});
 
     // Convert key to string representation
     const key = getKeyString(key_val) orelse return ElzError.InvalidArgument;
@@ -37,13 +37,13 @@ pub fn hash_map_set(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 
 /// `hash_map_get` retrieves a value by key from the hash map.
 /// Syntax: (hash-map-ref hm key) or (hash-map-ref hm key default)
-pub fn hash_map_get(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn hash_map_get(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 2 or args.items.len > 3) return ElzError.WrongArgumentCount;
 
     const hm_val = args.items[0];
     const key_val = args.items[1];
 
-    if (hm_val != .hash_map) return ElzError.InvalidArgument;
+    if (hm_val != .hash_map) return interp.fail(ElzError.InvalidArgument, "hash-map-ref: expected a hash map, got {s}", .{core.typeName(hm_val)});
 
     const key = getKeyString(key_val) orelse return ElzError.InvalidArgument;
 
@@ -59,13 +59,13 @@ pub fn hash_map_get(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 
 /// `hash_map_remove` removes a key from the hash map.
 /// Syntax: (hash-map-remove! hm key)
-pub fn hash_map_remove(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn hash_map_remove(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
 
     const hm_val = args.items[0];
     const key_val = args.items[1];
 
-    if (hm_val != .hash_map) return ElzError.InvalidArgument;
+    if (hm_val != .hash_map) return interp.fail(ElzError.InvalidArgument, "hash-map-remove!: expected a hash map, got {s}", .{core.typeName(hm_val)});
 
     const key = getKeyString(key_val) orelse return ElzError.InvalidArgument;
 
@@ -75,13 +75,13 @@ pub fn hash_map_remove(_: *interpreter.Interpreter, _: *core.Environment, args: 
 
 /// `hash_map_contains` checks if a key exists in the hash map.
 /// Syntax: (hash-map-contains? hm key)
-pub fn hash_map_contains(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn hash_map_contains(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
 
     const hm_val = args.items[0];
     const key_val = args.items[1];
 
-    if (hm_val != .hash_map) return ElzError.InvalidArgument;
+    if (hm_val != .hash_map) return interp.fail(ElzError.InvalidArgument, "hash-map-contains?: expected a hash map, got {s}", .{core.typeName(hm_val)});
 
     const key = getKeyString(key_val) orelse return ElzError.InvalidArgument;
 
@@ -90,11 +90,11 @@ pub fn hash_map_contains(_: *interpreter.Interpreter, _: *core.Environment, args
 
 /// `hash_map_count` returns the number of entries in the hash map.
 /// Syntax: (hash-map-count hm)
-pub fn hash_map_count(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn hash_map_count(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const hm_val = args.items[0];
-    if (hm_val != .hash_map) return ElzError.InvalidArgument;
+    if (hm_val != .hash_map) return interp.fail(ElzError.InvalidArgument, "hash-map-count: expected a hash map, got {s}", .{core.typeName(hm_val)});
 
     return Value{ .exact_integer = @intCast(hm_val.hash_map.count()) };
 }

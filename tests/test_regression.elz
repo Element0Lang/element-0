@@ -657,4 +657,32 @@
 (test-case "a let-syntax body is its own scope for definitions"
   (= 1 (let () (define x 1) (let-syntax () (define x 2) #f) x)))
 
+;; Error messages name the operation and the offending operand.
+(define (%error-message thunk)
+  (try (begin (thunk) #f) (catch e (if (error-object? e) (error-object-message e) e))))
+(test-case "car names the operand type in its message"
+  (equal? "car: expected a pair, got an integer" (%error-message (lambda () (car 1)))))
+(test-case "arithmetic names the operator and the operand type"
+  (equal? "+: expected a number, got a string" (%error-message (lambda () (+ 1 "a")))))
+(test-case "vector-ref reports the index and the length"
+  (equal? "vector-ref: index 5 is out of range for a vector of length 2"
+          (%error-message (lambda () (vector-ref (vector 1 2) 5)))))
+(test-case "a closure arity error names the procedure and the counts"
+  (begin
+    (define (%two-args a b) a)
+    (equal? "%two-args: expected 2 arguments, got 1" (%error-message (lambda () (%two-args 1))))))
+(test-case "a variadic closure arity error says at least"
+  (begin
+    (define (%one-plus a . r) a)
+    (equal? "%one-plus: expected at least 1 argument, got 0" (%error-message (lambda () (%one-plus))))))
+(test-case "a primitive without its own message still gets named"
+  (equal? "string-length: wrong number of arguments (got 2)"
+          (%error-message (lambda () (string-length "a" "b")))))
+(test-case "a message from a callback is not overwritten by the caller"
+  (equal? "car: expected a pair, got an integer" (%error-message (lambda () (map car (list 1))))))
+(test-case "a caught error leaves no stale message behind"
+  (begin
+    (try (car 1) (catch e #f))
+    (equal? "cdr: expected a pair, got a string" (%error-message (lambda () (cdr "x"))))))
+
 (report-summary)

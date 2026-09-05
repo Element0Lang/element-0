@@ -595,7 +595,7 @@ test "ElzCallback: apply closure twice via FFI" {
 
     var fuel: u64 = 10000;
     const wrapped = makeForeignFunc(applyTwice);
-    try interp.root_env.set(&interp, "apply-twice", core.Value{ .foreign_procedure = wrapped });
+    try interp.root_env.set("apply-twice", core.Value{ .foreign_procedure = wrapped });
 
     // (apply-twice (lambda (x) (* x 2)) 3) → 12 (3*2=6, 6*2=12)
     const result = try interp.evalString("(apply-twice (lambda (x) (* x 2)) 3)", &fuel);
@@ -610,7 +610,7 @@ test "ElzCallback: map list via variadic FFI" {
 
     var fuel: u64 = 10000;
     const wrapped = makeForeignFunc(applyToList);
-    try interp.root_env.set(&interp, "native-map", core.Value{ .foreign_procedure = wrapped });
+    try interp.root_env.set("native-map", core.Value{ .foreign_procedure = wrapped });
 
     // (native-map (lambda (x) (+ x 1)) '(1 2 3)) → (2 3 4)
     const result = try interp.evalString("(native-map (lambda (x) (+ x 1)) '(1 2 3))", &fuel);

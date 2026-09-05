@@ -59,13 +59,15 @@ You can download the release binaries for Elz from the [release page](https://gi
 
 2. Build and run the REPL
    ```sh
-   zig build repl && ./zig-out/bin/elz-repl
+   zig build && ./zig-out/bin/elz-repl
    ```
 
 3. Run an Element 0 script file
     ```sh
-    ./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+    ./zig-out/bin/elz-repl examples/elz/e13-hello-world.elz
     ```
+
+   Run `./zig-out/bin/elz-repl --help` for the other flags, and type `.help` in the REPL for its commands.
 
 #### Embedding Elz in Zig Projects
 
@@ -95,9 +97,11 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "your-app",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // 1. Get the Elz dependency object from the builder.
@@ -139,7 +143,7 @@ pub fn main() !void {
 
     var buffer: [4096]u8 = undefined;
     const stdout_file = std.Io.File.stdout();
-    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+    var stdout_writer = stdout_file.writerStreaming(interpreter.io, &buffer);
     const stdout = &stdout_writer.interface;
 
     // --- Example 1: Evaluate a simple string of Elz code ---
@@ -183,8 +187,10 @@ When you build and run this program, the output will be:
 Result of (* 10 5) is: 50
 
 --- Calling a Zig function from Elz ---
-Result of (zig-mul 7 6) is: 42
+Result of (zig-mul 7 6) is: 42.0
 ```
+
+The result is `42.0` rather than `42` because `zig_multiply` returns an `f64`, which becomes an inexact number.
 
 ##### Restricting What a Script Can Do
 

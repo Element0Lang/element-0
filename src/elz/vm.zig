@@ -265,7 +265,8 @@ pub const VM = struct {
                 // the callee under the same fuel budget as this VM.
                 var unlimited: u64 = std.math.maxInt(u64);
                 const fuel_ptr: *u64 = self.fuel orelse &unlimited;
-                const result = try prim(self.interp, self.interp.root_env, args, fuel_ptr);
+                const result = prim(self.interp, self.interp.root_env, args, fuel_ptr) catch |err|
+                    return self.interp.describePrimitiveFailure(err, prim, args.items.len);
                 try self.push(result);
             },
             .foreign_procedure => |ff| {
@@ -275,10 +276,8 @@ pub const VM = struct {
                 const prev = ffi_mod.active_interp;
                 ffi_mod.active_interp = self.interp;
                 defer ffi_mod.active_interp = prev;
-                const result = ff(self.interp.root_env, args) catch |err| {
-                    self.interp.last_error_message = @errorName(err);
-                    return ElzError.ForeignFunctionError;
-                };
+                const result = ff(self.interp.root_env, args) catch |err|
+                    return self.interp.failWith(ElzError.ForeignFunctionError, @errorName(err));
                 try self.push(result);
             },
             .continuation => |cont| {
@@ -319,11 +318,10 @@ pub const VM = struct {
                 const v = self.pop();
                 _ = self.pop(); // the escape procedure itself
                 if (!esc.active) {
-                    self.interp.last_error_message = "escape continuation invoked outside its dynamic extent";
-                    return ElzError.InvalidArgument;
+                    return self.interp.failWith(ElzError.InvalidArgument, "escape continuation invoked outside its dynamic extent");
                 }
-                self.interp.cps.escape_value = v;
-                self.interp.cps.escape_id = esc.id;
+                self.interp.runtime.cps.escape_value = v;
+                self.interp.runtime.cps.escape_id = esc.id;
                 return ElzError.EscapeContinuationInvoked;
             },
             .syntax_rules, .macro => {
@@ -331,8 +329,7 @@ pub const VM = struct {
                 return ElzError.NotAFunction;
             },
             else => {
-                self.interp.last_error_message = "attempt to call a non-procedure";
-                return ElzError.NotAFunction;
+                return self.interp.failWith(ElzError.NotAFunction, "attempt to call a non-procedure");
             },
         }
     }
@@ -342,8 +339,12 @@ pub const VM = struct {
         const expected = proto.arity;
         const variadic = proto.variadic;
 
-        if (!variadic and argc != expected) return ElzError.WrongArgumentCount;
-        if (variadic and argc < expected) return ElzError.WrongArgumentCount;
+        if (!variadic and argc != expected) {
+            return self.interp.fail(ElzError.WrongArgumentCount, "{s}: expected {d} argument{s}, got {d}", .{ proto.name, expected, if (expected == 1) "" else "s", argc });
+        }
+        if (variadic and argc < expected) {
+            return self.interp.fail(ElzError.WrongArgumentCount, "{s}: expected at least {d} argument{s}, got {d}", .{ proto.name, expected, if (expected == 1) "" else "s", argc });
+        }
 
         if (tail and self.frame_count > 0) {
             // Tail call: reuse current frame.
@@ -489,7 +490,8 @@ pub const VM = struct {
                             name = base;
                             if (self.interp.root_env.lookup(name)) |v| break :blk v;
                         }
-                        break :blk try self.interp.root_env.get(name_val.symbol, self.interp);
+                        break :blk self.interp.root_env.get(name_val.symbol) catch
+                            return self.interp.fail(ElzError.SymbolNotFound, "Symbol '{s}' not found.", .{name_val.symbol});
                     };
                     try self.push(val);
                 },
@@ -503,13 +505,14 @@ pub const VM = struct {
                         name = @import("macros.zig").hygieneBase(name) orelse break;
                     }
                     if (!self.interp.root_env.contains(name)) name = name_val.symbol;
-                    try self.interp.root_env.update(self.interp, name, self.peek(0));
+                    self.interp.root_env.update(name, self.peek(0)) catch
+                        return self.interp.fail(ElzError.SymbolNotFound, "Cannot set! unbound symbol '{s}'.", .{name});
                 },
                 .define_global => {
                     const name_val = proto.constants.items[instr.bx];
                     if (name_val != .symbol) return ElzError.InvalidArgument;
                     const val = self.pop();
-                    try self.interp.root_env.set(self.interp, name_val.symbol, val);
+                    try self.interp.root_env.set(name_val.symbol, val);
                     try self.push(.unspecified);
                 },
 
@@ -571,8 +574,7 @@ pub const VM = struct {
                 .shift_capture => {
                     const handler = self.pop();
                     if (self.prompts.items.len == 0) {
-                        self.interp.last_error_message = "shift: no enclosing reset in this extent (prompts do not cross native frames)";
-                        return ElzError.InvalidArgument;
+                        return self.interp.failWith(ElzError.InvalidArgument, "shift: no enclosing reset in this extent (prompts do not cross native frames)");
                     }
                     const p = self.prompts.items[self.prompts.items.len - 1];
                     const alloc = self.interp.allocator;
@@ -735,6 +737,23 @@ pub const VM = struct {
     // Execute a top-level FuncProto
     // -----------------------------------------------------------------------
 
+    fn recordBacktrace(self: *VM) void {
+        const interp = self.interp;
+        const max = @import("interpreter.zig").MAX_BACKTRACE_FRAMES;
+        var i = self.frame_count;
+        while (i > 0 and interp.last_error.backtrace.items.len < max) {
+            i -= 1;
+            const fr = self.frames[i];
+            const ip = if (fr.ip > 0) fr.ip - 1 else 0;
+            const lines = fr.closure.proto.lines.items;
+            interp.last_error.backtrace.append(interp.allocator, .{
+                .name = fr.closure.proto.name,
+                .file = fr.closure.proto.source_file,
+                .line = if (ip < lines.len) lines[ip] else 0,
+            }) catch return;
+        }
+    }
+
     pub fn runProto(self: *VM, proto: *FuncProto, fuel: ?*u64) ElzError!Value {
         self.fuel = fuel;
         const cl = try self.interp.allocator.create(VmClosure);
@@ -748,15 +767,18 @@ pub const VM = struct {
         const result = self.run() catch |err| {
             // Record the source location of the failing instruction. Keep the
             // innermost location when nested VM runs propagate the error.
-            if (self.frame_count > 0 and self.interp.last_error_line == null) {
+            if (self.frame_count > 0 and self.interp.last_error.line == null) {
                 const fr = self.frames[self.frame_count - 1];
                 const ip = if (fr.ip > 0) fr.ip - 1 else 0;
                 const lines = fr.closure.proto.lines.items;
                 if (ip < lines.len and lines[ip] != 0) {
-                    self.interp.last_error_line = lines[ip];
-                    self.interp.last_error_file = fr.closure.proto.source_file;
+                    self.interp.last_error.line = lines[ip];
+                    self.interp.last_error.file = fr.closure.proto.source_file;
                 }
             }
+            // Nested VM runs unwind innermost first, so appending here keeps
+            // the whole backtrace ordered from the failure outwards.
+            if (self.interp.last_error.collect_backtrace) self.recordBacktrace();
             self.closeUpvaluesAbove(0);
             return err;
         };
@@ -786,7 +808,7 @@ const MAX_NATIVE_DEPTH: u32 = 600;
 const VM_POOL_LIMIT = 8;
 
 fn acquireVm(interp: *@import("interpreter.zig").Interpreter) ElzError!*VM {
-    if (interp.vm_pool.pop()) |machine| {
+    if (interp.runtime.vm_pool.pop()) |machine| {
         machine.reset();
         return machine;
     }
@@ -797,12 +819,12 @@ fn acquireVm(interp: *@import("interpreter.zig").Interpreter) ElzError!*VM {
 
 fn releaseVm(interp: *@import("interpreter.zig").Interpreter, machine: *VM) void {
     machine.reset();
-    if (interp.vm_pool.items.len >= VM_POOL_LIMIT) {
+    if (interp.runtime.vm_pool.items.len >= VM_POOL_LIMIT) {
         machine.deinit();
         interp.allocator.destroy(machine);
         return;
     }
-    interp.vm_pool.append(interp.allocator, machine) catch {
+    interp.runtime.vm_pool.append(interp.allocator, machine) catch {
         machine.deinit();
         interp.allocator.destroy(machine);
     };
@@ -861,26 +883,25 @@ pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, ar
     switch (proc) {
         .procedure => |prim| {
             var unlimited: u64 = std.math.maxInt(u64);
-            return prim(interp, interp.root_env, args, fuel orelse &unlimited);
+            return prim(interp, interp.root_env, args, fuel orelse &unlimited) catch |err|
+                return interp.describePrimitiveFailure(err, prim, args.items.len);
         },
         .foreign_procedure => |ff| {
             const ffi_mod = @import("ffi.zig");
             const prev = ffi_mod.active_interp;
             ffi_mod.active_interp = interp;
             defer ffi_mod.active_interp = prev;
-            return ff(interp.root_env, args) catch |err| {
-                interp.last_error_message = @errorName(err);
-                return ElzError.ForeignFunctionError;
-            };
+            return ff(interp.root_env, args) catch |err|
+                return interp.failWith(ElzError.ForeignFunctionError, @errorName(err));
         },
         else => {},
     }
     // Each nested VM run consumes native stack; bound the nesting so deep
     // recursion through a primitive callback reports StackOverflow instead
     // of crashing the host.
-    if (interp.native_depth >= MAX_NATIVE_DEPTH) return ElzError.StackOverflow;
-    interp.native_depth += 1;
-    defer interp.native_depth -= 1;
+    if (interp.runtime.native_depth >= MAX_NATIVE_DEPTH) return ElzError.StackOverflow;
+    interp.runtime.native_depth += 1;
+    defer interp.runtime.native_depth -= 1;
     const machine = try acquireVm(interp);
     defer releaseVm(interp, machine);
     machine.fuel = fuel;

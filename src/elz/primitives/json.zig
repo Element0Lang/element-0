@@ -383,11 +383,11 @@ pub fn json_serialize(_: *interpreter.Interpreter, env: *core.Environment, args:
 /// `json-deserialize` parses a JSON string into a Value.
 ///
 /// Syntax: (json-deserialize json-string)
-pub fn json_deserialize(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn json_deserialize(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const str_val = args.items[0];
-    if (str_val != .string) return ElzError.InvalidArgument;
+    if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "json-deserialize: expected a string, got {s}", .{core.typeName(str_val)});
 
     const result = parseJsonValue(str_val.string.bytes, 0, env.allocator) catch return ElzError.InvalidArgument;
     return result.value;

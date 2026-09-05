@@ -38,10 +38,10 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The `car` of the pair.
-pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn car(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "car: expected a pair, got {s}", .{core.typeName(p)});
     return p.pair.car;
 }
 
@@ -52,10 +52,10 @@ pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
 ///
 /// Returns:
 /// The `cdr` of the pair.
-pub fn cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn cdr(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "cdr: expected a pair, got {s}", .{core.typeName(p)});
     return p.pair.cdr;
 }
 
@@ -91,7 +91,7 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 pub fn list_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     // A circular list has no length (R7RS: it is an error).
-    if (!predicates.isProperList(args.items[0])) return ElzError.InvalidArgument;
+    if (!predicates.isProperList(args.items[0])) return interp.fail(ElzError.InvalidArgument, "length: expected a proper list, got {s}", .{core.typeName(args.items[0])});
     var count: i64 = 0;
     var current = args.items[0];
     while (current != .nil) {
@@ -224,7 +224,7 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
         call_args.items.len = 0;
         for (0..num_lists) |i| {
             const cur = cursors[i];
-            if (cur != .pair) return ElzError.InvalidArgument;
+            if (cur != .pair) return interp.fail(ElzError.InvalidArgument, "map: expected a pair, got {s}", .{core.typeName(cur)});
             try call_args.append(cur.pair.car);
             cursors[i] = cur.pair.cdr;
         }
@@ -251,10 +251,10 @@ pub fn list_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: co
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
         try tick(interp, fuel);
-        if (current != .pair) return ElzError.InvalidArgument;
+        if (current != .pair) return interp.fail(ElzError.InvalidArgument, "list-ref: expected a pair, got {s}", .{core.typeName(current)});
         current = current.pair.cdr;
     }
-    if (current != .pair) return ElzError.InvalidArgument;
+    if (current != .pair) return interp.fail(ElzError.InvalidArgument, "list-ref: expected a pair, got {s}", .{core.typeName(current)});
     return current.pair.car;
 }
 
@@ -267,7 +267,7 @@ pub fn list_tail(interp: *interpreter.Interpreter, _: *core.Environment, args: c
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
         try tick(interp, fuel);
-        if (current != .pair) return ElzError.InvalidArgument;
+        if (current != .pair) return interp.fail(ElzError.InvalidArgument, "list-tail: expected a pair, got {s}", .{core.typeName(current)});
         current = current.pair.cdr;
     }
     return current;
@@ -282,7 +282,7 @@ pub fn memq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
     while (current != .nil) {
         try tick(interp, fuel);
-        if (current != .pair) return ElzError.InvalidArgument;
+        if (current != .pair) return interp.fail(ElzError.InvalidArgument, "memq: expected a pair, got {s}", .{core.typeName(current)});
         const p = current.pair;
         // eq? comparison - pointer/value equality
         if (eqCheck(obj, p.car)) {
@@ -308,7 +308,7 @@ pub fn assq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
     while (current != .nil) {
         try tick(interp, fuel);
-        if (current != .pair) return ElzError.InvalidArgument;
+        if (current != .pair) return interp.fail(ElzError.InvalidArgument, "assq: expected a pair, got {s}", .{core.typeName(current)});
         const p = current.pair;
         if (p.car != .pair) return ElzError.InvalidArgument;
         if (eqCheck(obj, p.car.pair.car)) {
@@ -328,36 +328,36 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 
 /// `set_car` modifies the car of a pair.
 /// Syntax: (set-car! pair obj)
-pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_car(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "set-car!: expected a pair, got {s}", .{core.typeName(p)});
     p.pair.car = args.items[1];
     return Value.unspecified;
 }
 
 /// `list_set_bang` stores a value in element k of a list, in place.
 /// Syntax: (list-set! list k obj)
-pub fn list_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_set_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     if (args.items[1] != .exact_integer or args.items[1].exact_integer < 0) return ElzError.InvalidArgument;
     var cur = args.items[0];
     var k = args.items[1].exact_integer;
     while (k > 0) : (k -= 1) {
-        if (cur != .pair) return ElzError.InvalidArgument;
+        if (cur != .pair) return interp.fail(ElzError.InvalidArgument, "list-set!: expected a pair, got {s}", .{core.typeName(cur)});
         cur = cur.pair.cdr;
     }
-    if (cur != .pair) return ElzError.InvalidArgument;
+    if (cur != .pair) return interp.fail(ElzError.InvalidArgument, "list-set!: expected a pair, got {s}", .{core.typeName(cur)});
     cur.pair.car = args.items[2];
     return Value.unspecified;
 }
 
 /// `set_cdr` modifies the cdr of a pair.
 /// Syntax: (set-cdr! pair obj)
-pub fn set_cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_cdr(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "set-cdr!: expected a pair, got {s}", .{core.typeName(p)});
     p.pair.cdr = args.items[1];
     return Value.unspecified;
 }

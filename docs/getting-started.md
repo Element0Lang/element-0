@@ -29,33 +29,92 @@ This produces `zig-out/bin/elz-repl` and the FFI example programs. Prebuilt bina
 make repl
 ```
 
-The prompt evaluates one or more forms per line and prints the value of the last one. History is kept in `history.txt` in the current directory. Type `.exit` or press Ctrl-D to leave.
+The prompt shows the input number. It reads forms and prints each value with `write`, so strings show their quotes. A form that is still open at the end of a line continues on the next line behind a `...` prompt. The last three printed values are bound to `$1`, `$2`, and `$3`. Type `.exit` or press Ctrl-D to leave.
 
 ```scheme
-> (define (square x) (* x x))
-> (map square '(1 2 3))
+[1]> (define (square x)
+...    (* x x))
+[2]> (map square '(1 2 3))
 (1 4 9)
-> (expt 2 100)
+[3]> (apply + $1)
+14
+[4]> (expt 2 100)
 1267650600228229401496703205376
+```
+
+An error prints its message, the input and line it came from, and the chain of calls that led to it. The session continues with all definitions intact, and `.error` shows the last report again.
+
+```scheme
+[5]> (define (g x) (car x))
+[6]> (define (f x) (+ 1 (g x)))
+[7]> (f 5)
+Error: car: expected a pair, got an integer
+At: [5]:1
+Backtrace:
+  0: g  ([5]:1)
+  1: f  ([6]:1)
+  2: <top level>  ([7]:1)
+```
+
+On Linux and macOS the REPL has line editing, a history file at `~/.elz_history`, and Tab completion of global names and special forms. Ctrl-C discards the input typed so far. The Windows build reads plain lines from the console without these features.
+
+If `~/.elzrc` exists, the REPL runs it before the first prompt, which is the place for personal helper definitions. Pass `--no-rc` to skip it, and `--quiet` to suppress the banner.
+
+Lines that start with a dot and a letter are REPL commands.
+
+| Command | Effect |
+| --- | --- |
+| `.help` | Show the command list. |
+| `.load <file>` | Run a source file in the current session. Definitions stay available afterwards. |
+| `.time <expr>` | Evaluate an expression and print how long it took. |
+| `.apropos <prefix>` | List the global names that start with a prefix. |
+| `.error` | Show the last error report again. |
+| `.clear` | Clear the screen. |
+| `.exit` | Leave the REPL. |
+
+The `--eval` flag evaluates an expression from the command line, and `--interactive` drops into the REPL after running a file or expression, with its definitions loaded.
+
+```bash
+./zig-out/bin/elz-repl --eval '(expt 2 64)'
+./zig-out/bin/elz-repl --interactive examples/elz/e14-greetings-lib.elz
 ```
 
 ## Running a Script
 
 ```bash
-./zig-out/bin/elz-repl --file examples/elz/e13-hello-world.elz
+./zig-out/bin/elz-repl examples/elz/e13-hello-world.elz
+```
+
+The file can also be given with `--file`. Arguments after the file belong to the script, and `(command-line)` returns the file name followed by those arguments. Put `--` before an argument that starts with a dash.
+
+```bash
+./zig-out/bin/elz-repl script.elz input.txt -- --fast
 ```
 
 The value of the last top-level form is displayed unless it is unspecified. An uncaught error stops the run, prints the error code, message, and source location, and exits with status 1:
 
 ```
 --- Runtime Error ---
-ErrorCode: InvalidArgument
+ErrorCode: SymbolNotFound
 Message: Symbol 'undefined-name' not found.
 At: script.elz:3
 In form: (display (undefined-name 1))
 ```
 
+When the failure happens inside a procedure, a `Backtrace:` section lists the calls that led to it.
+
 `--bench N` runs the file N times and prints timing statistics, and `--verbose` prints what the program is doing.
+
+## Building for WebAssembly
+
+The library and the FFI examples build for `wasm32-wasi`. The REPL does not, since it needs a terminal.
+
+```bash
+zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
+node tools/run_wasi.mjs zig-out/wasm/bin/e1_ffi_pow.wasm
+```
+
+WebAssembly gives a program no view of its own stack, which the Boehm collector needs, so wasm builds allocate from an arena instead and never free until the interpreter is torn down. A script that runs to completion behaves exactly as it does natively. A long-lived interpreter that keeps evaluating will grow without bound, so create a fresh one per unit of work.
 
 ## Using Elz from Zig
 
@@ -93,7 +152,7 @@ pub fn main() !void {
     const result = try interpreter.evalString("(zig-mul 7 6)", &fuel);
 
     var buffer: [256]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(interpreter.io, &buffer);
+    var writer = std.Io.File.stdout().writerStreaming(interpreter.io, &buffer);
     try elz.write(result, &writer.interface);
     try writer.interface.writeAll("\n");
     try writer.interface.flush();
