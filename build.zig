@@ -7,69 +7,76 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const io = b.graph.io;
 
+    // WebAssembly cannot host the Boehm collector (it scans the native stack),
+    // so wasm builds skip the C library and gc.zig falls back to an arena.
+    const is_wasm = target.result.cpu.arch.isWasm();
+
     // --- GC dependency ---
-    const gc_module = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-    });
+    const gc: ?*std.Build.Step.Compile = if (is_wasm) null else blk: {
+        const gc_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        });
 
-    const gc = b.addLibrary(.{
-        .name = "gc",
-        .root_module = gc_module,
-    });
-    {
-        var cflags: std.ArrayListUnmanaged([]const u8) = .empty;
-        var src_files: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer cflags.deinit(b.allocator);
-        defer src_files.deinit(b.allocator);
+        const gc_lib = b.addLibrary(.{
+            .name = "gc",
+            .root_module = gc_module,
+        });
+        {
+            var cflags: std.ArrayListUnmanaged([]const u8) = .empty;
+            var src_files: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer cflags.deinit(b.allocator);
+            defer src_files.deinit(b.allocator);
 
-        cflags.appendSlice(b.allocator, &.{
-            "-DNO_EXECUTE_PERMISSION",
-            "-DGC_THREADS", // Enable threading support
-            "-DGC_BUILTIN_ATOMIC", // Use the compiler's built-in atomic functions
-        }) catch unreachable;
+            cflags.appendSlice(b.allocator, &.{
+                "-DNO_EXECUTE_PERMISSION",
+                "-DGC_THREADS", // Enable threading support
+                "-DGC_BUILTIN_ATOMIC", // Use the compiler's built-in atomic functions
+            }) catch unreachable;
 
-        if (optimize != .Debug) {
-            cflags.append(b.allocator, "-DNDEBUG") catch unreachable;
+            if (optimize != .Debug) {
+                cflags.append(b.allocator, "-DNDEBUG") catch unreachable;
+            }
+
+            // Add base GC source files (matching official bdwgc build)
+            src_files.appendSlice(b.allocator, &.{
+                "allchblk.c", "alloc.c",    "blacklst.c", "dbg_mlc.c",  "dyn_load.c",
+                "finalize.c", "headers.c",  "mach_dep.c", "malloc.c",   "mallocx.c",
+                "mark.c",     "mark_rts.c", "misc.c",     "new_hblk.c", "obj_map.c",
+                "os_dep.c",   "ptr_chck.c", "reclaim.c",  "typd_mlc.c",
+            }) catch unreachable;
+
+            // Add platform-specific source files for threading
+            // Note: Use target.result.os.tag (resolved target) instead of target.query.os_tag
+            // because query.os_tag is null for native builds
+            const os_tag = target.result.os.tag;
+            switch (os_tag) {
+                .windows => {
+                    cflags.append(b.allocator, "-D_WIN32") catch unreachable;
+                    src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
+                    gc_module.linkSystemLibrary("user32", .{});
+                },
+                .macos => {
+                    // Required flags for POSIX/Darwin threading
+                    cflags.append(b.allocator, "-D_REENTRANT") catch unreachable;
+                    // Add threading source files (matching official bdwgc build)
+                    src_files.appendSlice(b.allocator, &.{ "gc_dlopen.c", "pthread_start.c", "pthread_support.c", "darwin_stop_world.c" }) catch unreachable;
+                },
+                else => { // Assume other POSIX-like systems
+                    src_files.appendSlice(b.allocator, &.{ "pthread_stop_world.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
+                },
+            }
+
+            gc_module.linkSystemLibrary("c", .{});
+            // Use bdwgc from Zig dependencies
+            const bdwgc_dep = b.dependency("bdwgc", .{});
+            gc_module.addIncludePath(bdwgc_dep.path("include"));
+            for (src_files.items) |src| {
+                gc_module.addCSourceFile(.{ .file = bdwgc_dep.path(src), .flags = cflags.items });
+            }
         }
-
-        // Add base GC source files (matching official bdwgc build)
-        src_files.appendSlice(b.allocator, &.{
-            "allchblk.c", "alloc.c",    "blacklst.c", "dbg_mlc.c",  "dyn_load.c",
-            "finalize.c", "headers.c",  "mach_dep.c", "malloc.c",   "mallocx.c",
-            "mark.c",     "mark_rts.c", "misc.c",     "new_hblk.c", "obj_map.c",
-            "os_dep.c",   "ptr_chck.c", "reclaim.c",  "typd_mlc.c",
-        }) catch unreachable;
-
-        // Add platform-specific source files for threading
-        // Note: Use target.result.os.tag (resolved target) instead of target.query.os_tag
-        // because query.os_tag is null for native builds
-        const os_tag = target.result.os.tag;
-        switch (os_tag) {
-            .windows => {
-                cflags.append(b.allocator, "-D_WIN32") catch unreachable;
-                src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
-                gc_module.linkSystemLibrary("user32", .{});
-            },
-            .macos => {
-                // Required flags for POSIX/Darwin threading
-                cflags.append(b.allocator, "-D_REENTRANT") catch unreachable;
-                // Add threading source files (matching official bdwgc build)
-                src_files.appendSlice(b.allocator, &.{ "gc_dlopen.c", "pthread_start.c", "pthread_support.c", "darwin_stop_world.c" }) catch unreachable;
-            },
-            else => { // Assume other POSIX-like systems
-                src_files.appendSlice(b.allocator, &.{ "pthread_stop_world.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
-            },
-        }
-
-        gc_module.linkSystemLibrary("c", .{});
-        // Use bdwgc from Zig dependencies
-        const bdwgc_dep = b.dependency("bdwgc", .{});
-        gc_module.addIncludePath(bdwgc_dep.path("include"));
-        for (src_files.items) |src| {
-            gc_module.addCSourceFile(.{ .file = bdwgc_dep.path(src), .flags = cflags.items });
-        }
-    }
+        break :blk gc_lib;
+    };
 
     // --- Library Setup ---
     const lib_source = b.path("src/lib.zig");
@@ -87,7 +94,7 @@ pub fn build(b: *std.Build) void {
     // Use bdwgc from Zig dependencies
     const bdwgc_dep_lib = b.dependency("bdwgc", .{});
     lib_module.addIncludePath(bdwgc_dep_lib.path("include"));
-    lib_module.linkLibrary(gc);
+    if (gc) |g| lib_module.linkLibrary(g);
     lib_module.linkSystemLibrary("c", .{});
     b.installArtifact(lib);
 
@@ -99,44 +106,49 @@ pub fn build(b: *std.Build) void {
     });
 
     // --- REPL Executable ---
-    const repl_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    repl_module.addImport("elz", lib_module);
+    // The REPL needs a terminal, signals, and process arguments, none of which
+    // exist on wasm, so only the library and the examples are built there.
+    const repl_exe: ?*std.Build.Step.Compile = if (is_wasm) null else blk: {
+        const repl_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        repl_module.addImport("elz", lib_module);
 
-    const repl_exe = b.addExecutable(.{
-        .name = "elz-repl",
-        .root_module = repl_module,
-    });
+        const exe = b.addExecutable(.{
+            .name = "elz-repl",
+            .root_module = repl_module,
+        });
 
-    // Expose the package version to the REPL so `--version` cannot drift from
-    // build.zig.zon.
-    const repl_options = b.addOptions();
-    repl_options.addOption([]const u8, "version", manifest.version);
-    repl_module.addOptions("build_options", repl_options);
+        // Expose the package version to the REPL so `--version` cannot drift from
+        // build.zig.zon.
+        const repl_options = b.addOptions();
+        repl_options.addOption([]const u8, "version", manifest.version);
+        repl_module.addOptions("build_options", repl_options);
 
-    // --- Bestline dependency (line editing on POSIX terminals) ---
-    // Bestline needs poll.h and termios, so the Windows REPL falls back to a
-    // plain stdin reader (see src/main.zig).
-    if (target.result.os.tag != .windows) {
-        const bestline_dep = b.dependency("bestline", .{});
-        repl_module.addIncludePath(bestline_dep.path(""));
-        repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
-    }
-    repl_module.linkSystemLibrary("c", .{});
+        // --- Bestline dependency (line editing on POSIX terminals) ---
+        // Bestline needs poll.h and termios, so the Windows REPL falls back to a
+        // plain stdin reader (see src/main.zig).
+        if (target.result.os.tag != .windows) {
+            const bestline_dep = b.dependency("bestline", .{});
+            repl_module.addIncludePath(bestline_dep.path(""));
+            repl_module.addCSourceFile(.{ .file = bestline_dep.path("bestline.c") });
+        }
+        repl_module.linkSystemLibrary("c", .{});
 
-    // Add dependency on 'chilli' library
-    const chilli_dep = b.dependency("chilli", .{});
-    const chilli_module = b.createModule(.{ .root_source_file = chilli_dep.path("src/lib.zig") });
-    repl_exe.root_module.addImport("chilli", chilli_module);
+        // Add dependency on 'chilli' library
+        const chilli_dep = b.dependency("chilli", .{});
+        const chilli_module = b.createModule(.{ .root_source_file = chilli_dep.path("src/lib.zig") });
+        exe.root_module.addImport("chilli", chilli_module);
 
-    b.installArtifact(repl_exe);
+        b.installArtifact(exe);
 
-    const run_repl_cmd = b.addRunArtifact(repl_exe);
-    const run_repl_step = b.step("repl", "Run the REPL");
-    run_repl_step.dependOn(&run_repl_cmd.step);
+        const run_repl_cmd = b.addRunArtifact(exe);
+        const run_repl_step = b.step("repl", "Run the REPL");
+        run_repl_step.dependOn(&run_repl_cmd.step);
+        break :blk exe;
+    };
 
     // --- Docs Setup ---
     const docs_step = b.step("docs", "Generate API documentation");
@@ -165,7 +177,7 @@ pub fn build(b: *std.Build) void {
     // Use bdwgc from Zig dependencies for tests
     const bdwgc_dep_test = b.dependency("bdwgc", .{});
     test_module.addIncludePath(bdwgc_dep_test.path("include"));
-    test_module.linkLibrary(gc);
+    if (gc) |g| test_module.linkLibrary(g);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     const test_step = b.step("test", "Run unit tests");
@@ -209,7 +221,7 @@ pub fn build(b: *std.Build) void {
             const t = b.addTest(.{ .root_module = t_module });
             const bdwgc_dep_t = b.dependency("bdwgc", .{});
             t_module.addIncludePath(bdwgc_dep_t.path("include"));
-            t_module.linkLibrary(gc);
+            if (gc) |g| t_module.linkLibrary(g);
 
             const run_t = b.addRunArtifact(t);
             if (is_prop_test) {
@@ -272,7 +284,7 @@ pub fn build(b: *std.Build) void {
             if (!std.mem.startsWith(u8, entry.name, "test_")) continue;
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
 
-            const run_elz_test_cmd = b.addRunArtifact(repl_exe);
+            const run_elz_test_cmd = b.addRunArtifact(repl_exe orelse break);
             run_elz_test_cmd.addArg("--file");
             run_elz_test_cmd.addArg(b.fmt("{s}/{s}", .{ tests_path, entry.name }));
             test_elz_step.dependOn(&run_elz_test_cmd.step);
@@ -303,7 +315,7 @@ pub fn build(b: *std.Build) void {
         while (bench_iter.next(io) catch @panic("Failed to iterate benches")) |entry| {
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
 
-            const run_bench_cmd = b.addRunArtifact(repl_exe);
+            const run_bench_cmd = b.addRunArtifact(repl_exe orelse break);
             run_bench_cmd.addArg("--bench");
             run_bench_cmd.addArg(b.fmt("{d}", .{bench_iters}));
             run_bench_cmd.addArg("--file");

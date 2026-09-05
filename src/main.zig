@@ -31,7 +31,7 @@ const Out = struct {
     writer: std.Io.File.Writer = undefined,
 
     fn init(self: *Out, io: std.Io) *std.Io.Writer {
-        self.writer = std.Io.File.stdout().writer(io, &self.buffer);
+        self.writer = std.Io.File.stdout().writerStreaming(io, &self.buffer);
         return &self.writer.interface;
     }
 

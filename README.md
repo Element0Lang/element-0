@@ -143,7 +143,7 @@ pub fn main() !void {
 
     var buffer: [4096]u8 = undefined;
     const stdout_file = std.Io.File.stdout();
-    var stdout_writer = stdout_file.writer(interpreter.io, &buffer);
+    var stdout_writer = stdout_file.writerStreaming(interpreter.io, &buffer);
     const stdout = &stdout_writer.interface;
 
     // --- Example 1: Evaluate a simple string of Elz code ---

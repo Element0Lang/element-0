@@ -206,3 +206,7 @@ the capture point.
   standard procedures, extensions, and deviations (removed pending a rewrite). The
   embedding API is covered by the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
+* [x] WebAssembly: the library and examples build for `wasm32-wasi`, with an
+  arena in place of the Boehm collector (memory is reclaimed only at `deinit`).
+* [ ] A precise garbage collector, which would remove the C dependency, make
+  memory use predictable, and give wasm builds real collection.

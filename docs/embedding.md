@@ -13,7 +13,7 @@ defer interp.deinit();
 
 `Interpreter.init` takes a `SandboxFlags` value (see [Sandboxing](#sandboxing)), sets up the garbage collector, builds the global environment with every enabled primitive, and loads the standard library. Creating an interpreter is not free (the standard library is compiled on every `init`), so keep one per script context rather than one per evaluation.
 
-All memory that scripts allocate is managed by the Boehm-Demers-Weiser collector. The collector scans the stack and registers of the calling thread, so values held in Zig locals stay alive while they are in use. If you store an `Interpreter` or Element 0 values in memory the collector cannot see, such as a heap allocation from a different allocator, register that region with `elz.gc_add_roots`, or allocate it with `elz.gc_allocator` as the REPL does.
+All memory that scripts allocate is managed by the Boehm-Demers-Weiser collector. On `wasm32` targets the collector is replaced by an arena that frees nothing until `deinit`, because WebAssembly does not let a program scan its own stack; see [Building for WebAssembly](getting-started.md#building-for-webassembly). The collector scans the stack and registers of the calling thread, so values held in Zig locals stay alive while they are in use. If you store an `Interpreter` or Element 0 values in memory the collector cannot see, such as a heap allocation from a different allocator, register that region with `elz.gc_add_roots`, or allocate it with `elz.gc_allocator` as the REPL does.
 
 ## Evaluating Code
 

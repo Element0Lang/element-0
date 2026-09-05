@@ -65,7 +65,7 @@ pub fn main() !void {
     const result = try interpreter.evalString("(zig-pow 2 8)", &fuel);
 
     var buffer: [4096]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(interpreter.io, &buffer);
+    var writer = std.Io.File.stdout().writerStreaming(interpreter.io, &buffer);
     try writer.interface.writeAll("Result: ");
     try elz.write(result, &writer.interface);
     try writer.interface.writeAll("\n");

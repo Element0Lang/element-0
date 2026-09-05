@@ -105,6 +105,17 @@ When the failure happens inside a procedure, a `Backtrace:` section lists the ca
 
 `--bench N` runs the file N times and prints timing statistics, and `--verbose` prints what the program is doing.
 
+## Building for WebAssembly
+
+The library and the FFI examples build for `wasm32-wasi`. The REPL does not, since it needs a terminal.
+
+```bash
+zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
+node tools/run_wasi.mjs zig-out/wasm/bin/e1_ffi_pow.wasm
+```
+
+WebAssembly gives a program no view of its own stack, which the Boehm collector needs, so wasm builds allocate from an arena instead and never free until the interpreter is torn down. A script that runs to completion behaves exactly as it does natively. A long-lived interpreter that keeps evaluating will grow without bound, so create a fresh one per unit of work.
+
 ## Using Elz from Zig
 
 Add Elz as a dependency of your project. Replace `<branch_or_tag>` with a branch such as `main` or a release tag:
@@ -141,7 +152,7 @@ pub fn main() !void {
     const result = try interpreter.evalString("(zig-mul 7 6)", &fuel);
 
     var buffer: [256]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(interpreter.io, &buffer);
+    var writer = std.Io.File.stdout().writerStreaming(interpreter.io, &buffer);
     try elz.write(result, &writer.interface);
     try writer.interface.writeAll("\n");
     try writer.interface.flush();
