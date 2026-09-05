@@ -265,7 +265,8 @@ pub const VM = struct {
                 // the callee under the same fuel budget as this VM.
                 var unlimited: u64 = std.math.maxInt(u64);
                 const fuel_ptr: *u64 = self.fuel orelse &unlimited;
-                const result = try prim(self.interp, self.interp.root_env, args, fuel_ptr);
+                const result = prim(self.interp, self.interp.root_env, args, fuel_ptr) catch |err|
+                    return self.interp.describePrimitiveFailure(err, prim, args.items.len);
                 try self.push(result);
             },
             .foreign_procedure => |ff| {
@@ -882,7 +883,8 @@ pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, ar
     switch (proc) {
         .procedure => |prim| {
             var unlimited: u64 = std.math.maxInt(u64);
-            return prim(interp, interp.root_env, args, fuel orelse &unlimited);
+            return prim(interp, interp.root_env, args, fuel orelse &unlimited) catch |err|
+                return interp.describePrimitiveFailure(err, prim, args.items.len);
         },
         .foreign_procedure => |ff| {
             const ffi_mod = @import("ffi.zig");

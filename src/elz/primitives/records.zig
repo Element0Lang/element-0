@@ -7,9 +7,9 @@ const interpreter = @import("../interpreter.zig");
 
 /// `%make-record-type` creates a record type descriptor.
 /// Syntax: (%make-record-type name-symbol field-names-list)
-pub fn make_record_type(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn make_record_type(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .symbol) return ElzError.InvalidArgument;
+    if (args.items[0] != .symbol) return interp.fail(ElzError.InvalidArgument, "%make-record-type: expected a symbol, got {s}", .{core.typeName(args.items[0])});
 
     var names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer names.deinit(env.allocator);
@@ -19,7 +19,7 @@ pub fn make_record_type(_: *interpreter.Interpreter, env: *core.Environment, arg
         try names.append(env.allocator, try env.allocator.dupe(u8, cur.pair.car.symbol));
         cur = cur.pair.cdr;
     }
-    if (cur != .nil) return ElzError.InvalidArgument;
+    if (cur != .nil) return interp.fail(ElzError.InvalidArgument, "%make-record-type: expected the empty list, got {s}", .{core.typeName(cur)});
 
     const rtd = env.allocator.create(core.RecordType) catch return ElzError.OutOfMemory;
     rtd.* = .{
@@ -31,9 +31,9 @@ pub fn make_record_type(_: *interpreter.Interpreter, env: *core.Environment, arg
 
 /// `%make-record` creates a record instance from a full list of field values.
 /// Syntax: (%make-record rtd values-list)
-pub fn make_record(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn make_record(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .record_type) return ElzError.InvalidArgument;
+    if (args.items[0] != .record_type) return interp.fail(ElzError.InvalidArgument, "%make-record: expected a record type, got {s}", .{core.typeName(args.items[0])});
     const rtd = args.items[0].record_type;
 
     const fields = env.allocator.alloc(Value, rtd.field_names.len) catch return ElzError.OutOfMemory;
@@ -52,9 +52,9 @@ pub fn make_record(_: *interpreter.Interpreter, env: *core.Environment, args: co
 
 /// `%record-of-type?` reports whether a value is a record of the given type.
 /// Syntax: (%record-of-type? x rtd)
-pub fn record_of_type_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn record_of_type_p(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[1] != .record_type) return ElzError.InvalidArgument;
+    if (args.items[1] != .record_type) return interp.fail(ElzError.InvalidArgument, "%record-of-type?: expected a record type, got {s}", .{core.typeName(args.items[1])});
     const v = args.items[0];
     return Value{ .boolean = v == .record and v.record.rtd == args.items[1].record_type };
 }

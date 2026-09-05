@@ -56,11 +56,11 @@ pub fn vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 
 /// `vector_length` returns the length of a vector.
 /// Syntax: (vector-length vec)
-pub fn vector_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
-    if (vec_val != .vector) return ElzError.InvalidArgument;
+    if (vec_val != .vector) return interp.fail(ElzError.InvalidArgument, "vector-length: expected a vector, got {s}", .{core.typeName(vec_val)});
 
     return Value{ .exact_integer = @intCast(vec_val.vector.items.len) };
 }
@@ -104,7 +104,7 @@ pub fn is_vector(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
 /// `list_to_vector` converts a list to a vector.
 /// Syntax: (list->vector list)
-pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_to_vector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const list = args.items[0];
@@ -113,7 +113,7 @@ pub fn list_to_vector(_: *interpreter.Interpreter, env: *core.Environment, args:
     var length: usize = 0;
     var current = list;
     while (current != .nil) {
-        if (current != .pair) return ElzError.InvalidArgument;
+        if (current != .pair) return interp.fail(ElzError.InvalidArgument, "list->vector: expected a pair, got {s}", .{core.typeName(current)});
         length += 1;
         current = current.pair.cdr;
     }
@@ -153,10 +153,10 @@ fn rangeArgs(args: []const Value, from: usize, len: usize) ElzError!struct { sta
     return .{ .start = start, .end = end };
 }
 
-pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_fill_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 2) return ElzError.WrongArgumentCount;
     const vec_val = args.items[0];
-    if (vec_val != .vector) return ElzError.InvalidArgument;
+    if (vec_val != .vector) return interp.fail(ElzError.InvalidArgument, "vector-fill!: expected a vector, got {s}", .{core.typeName(vec_val)});
     const fill = args.items[1];
     const vec = vec_val.vector;
     const r = try rangeArgs(args.items, 2, vec.items.len);
@@ -168,11 +168,11 @@ pub fn vector_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args:
 
 /// `vector_to_list` converts a vector to a list.
 /// Syntax: (vector->list vec)
-pub fn vector_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_to_list(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
-    if (vec_val != .vector) return ElzError.InvalidArgument;
+    if (vec_val != .vector) return interp.fail(ElzError.InvalidArgument, "vector->list: expected a vector, got {s}", .{core.typeName(vec_val)});
 
     const vec = vec_val.vector;
     const r = try rangeArgs(args.items, 1, vec.items.len);

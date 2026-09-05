@@ -58,9 +58,9 @@ pub fn bytevector_p(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 }
 
 /// Syntax: (bytevector-length bv)
-pub fn bytevector_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn bytevector_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "bytevector-length: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     return Value{ .exact_integer = @intCast(args.items[0].bytevector.items.len) };
 }
 
@@ -86,9 +86,9 @@ pub fn bytevector_u8_set_bang(_: *interpreter.Interpreter, _: *core.Environment,
 }
 
 /// Syntax: (bytevector-copy bv [start [end]])
-pub fn bytevector_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn bytevector_copy(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "bytevector-copy: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     const src = args.items[0].bytevector.items;
     const r = try rangeArgs(args.items[1..], src.len);
     const items = env.allocator.dupe(u8, src[r.start..r.end]) catch return ElzError.OutOfMemory;
@@ -116,10 +116,10 @@ pub fn bytevector_copy_bang(_: *interpreter.Interpreter, _: *core.Environment, a
 }
 
 /// Syntax: (bytevector-append bv ...)
-pub fn bytevector_append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn bytevector_append(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     var total: usize = 0;
     for (args.items) |arg| {
-        if (arg != .bytevector) return ElzError.InvalidArgument;
+        if (arg != .bytevector) return interp.fail(ElzError.InvalidArgument, "bytevector-append: expected a bytevector, got {s}", .{core.typeName(arg)});
         total += arg.bytevector.items.len;
     }
     const items = env.allocator.alloc(u8, total) catch return ElzError.OutOfMemory;
@@ -133,9 +133,9 @@ pub fn bytevector_append(_: *interpreter.Interpreter, env: *core.Environment, ar
 }
 
 /// Syntax: (utf8->string bv [start [end]])
-pub fn utf8_to_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn utf8_to_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .bytevector) return ElzError.InvalidArgument;
+    if (args.items[0] != .bytevector) return interp.fail(ElzError.InvalidArgument, "utf8->string: expected a bytevector, got {s}", .{core.typeName(args.items[0])});
     const src = args.items[0].bytevector.items;
     const r = try rangeArgs(args.items[1..], src.len);
     const slice = src[r.start..r.end];
@@ -146,9 +146,9 @@ pub fn utf8_to_string(_: *interpreter.Interpreter, env: *core.Environment, args:
 
 /// Syntax: (string->utf8 str [start [end]])
 /// start and end are character indexes, per R7RS.
-pub fn string_to_utf8(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_to_utf8(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "string->utf8: expected a string, got {s}", .{core.typeName(args.items[0])});
     const str = args.items[0].string.bytes;
     const char_len = std.unicode.utf8CountCodepoints(str) catch return ElzError.InvalidArgument;
     const r = try rangeArgs(args.items[1..], char_len);

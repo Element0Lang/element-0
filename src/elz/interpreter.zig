@@ -174,6 +174,10 @@ pub const RuntimeState = struct {
     stdin_port: ?*core.Port = null,
     stdout_port: ?*core.Port = null,
     stderr_port: ?*core.Port = null,
+    /// The Scheme name each primitive was first registered under, keyed by
+    /// function address, so a failure inside a primitive can be attributed
+    /// even when the primitive supplied no message of its own.
+    primitive_names: std.AutoHashMapUnmanaged(usize, []const u8) = .empty,
 };
 
 /// `Interpreter` is the top-level handle for the Elz scripting engine.
@@ -212,6 +216,33 @@ pub const Interpreter = struct {
     pub fn failWith(self: *Interpreter, err: core.ElzError, message: []const u8) core.ElzError {
         self.last_error.message = message;
         return err;
+    }
+
+    /// Binds a Zig primitive under `name` and remembers the name for error
+    /// reports. All built-ins are registered this way (see `env_setup.zig`).
+    pub fn definePrimitive(self: *Interpreter, name: []const u8, f: core.PrimitiveFn) !void {
+        try self.root_env.set(name, core.Value{ .procedure = f });
+        const entry = try self.runtime.primitive_names.getOrPut(self.allocator, @intFromPtr(f));
+        if (!entry.found_existing) entry.value_ptr.* = name;
+    }
+
+    /// The name `f` was first registered under, if it is a known primitive.
+    pub fn primitiveName(self: *const Interpreter, f: core.PrimitiveFn) ?[]const u8 {
+        return self.runtime.primitive_names.get(@intFromPtr(f));
+    }
+
+    /// Called by the VM when a primitive returns `err` without recording a
+    /// message. Supplies a generic one naming the primitive for the error
+    /// kinds where that is meaningful, and passes the error on.
+    pub fn describePrimitiveFailure(self: *Interpreter, err: core.ElzError, f: core.PrimitiveFn, argc: usize) core.ElzError {
+        if (self.last_error.message != null) return err;
+        const name = self.primitiveName(f) orelse return err;
+        return switch (err) {
+            error.WrongArgumentCount => self.fail(err, "{s}: wrong number of arguments (got {d})", .{ name, argc }),
+            error.InvalidArgument => self.fail(err, "{s}: invalid argument", .{name}),
+            error.DivisionByZero => self.fail(err, "{s}: division by zero", .{name}),
+            else => err,
+        };
     }
 
     /// Initializes a new `Interpreter` instance.

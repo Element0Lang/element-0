@@ -290,10 +290,10 @@ fn addState(set: *std.AutoHashMapUnmanaged(usize, void), regex: Regex, state: us
 // Element 0 Primitives
 // ============================================================================
 
-pub fn regex_match(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn regex_match(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[1] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "regex-match?: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[1] != .string) return interp.fail(ElzError.InvalidArgument, "regex-match?: expected a string, got {s}", .{core.typeName(args.items[1])});
 
     const pattern = args.items[0].string.bytes;
     const input = args.items[1].string.bytes;
@@ -311,10 +311,10 @@ pub fn regex_match(_: *interpreter.Interpreter, env: *core.Environment, args: co
     return Value{ .boolean = result != null };
 }
 
-pub fn regex_search(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn regex_search(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[1] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "regex-search: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[1] != .string) return interp.fail(ElzError.InvalidArgument, "regex-search: expected a string, got {s}", .{core.typeName(args.items[1])});
 
     const pattern = args.items[0].string.bytes;
     const input = args.items[1].string.bytes;
@@ -333,11 +333,11 @@ pub fn regex_search(_: *interpreter.Interpreter, env: *core.Environment, args: c
     return Value{ .boolean = false };
 }
 
-pub fn regex_replace(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn regex_replace(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[1] != .string) return ElzError.InvalidArgument;
-    if (args.items[2] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "regex-replace: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[1] != .string) return interp.fail(ElzError.InvalidArgument, "regex-replace: expected a string, got {s}", .{core.typeName(args.items[1])});
+    if (args.items[2] != .string) return interp.fail(ElzError.InvalidArgument, "regex-replace: expected a string, got {s}", .{core.typeName(args.items[2])});
 
     const pattern = args.items[0].string.bytes;
     const replacement = args.items[1].string.bytes;
@@ -378,10 +378,10 @@ pub fn regex_replace(_: *interpreter.Interpreter, env: *core.Environment, args: 
     return (try core.makeString(env.allocator, result.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory));
 }
 
-pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn regex_split(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    if (args.items[0] != .string) return ElzError.InvalidArgument;
-    if (args.items[1] != .string) return ElzError.InvalidArgument;
+    if (args.items[0] != .string) return interp.fail(ElzError.InvalidArgument, "regex-split: expected a string, got {s}", .{core.typeName(args.items[0])});
+    if (args.items[1] != .string) return interp.fail(ElzError.InvalidArgument, "regex-split: expected a string, got {s}", .{core.typeName(args.items[1])});
 
     const pattern = args.items[0].string.bytes;
     const input = args.items[1].string.bytes;

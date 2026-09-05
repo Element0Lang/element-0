@@ -152,7 +152,7 @@ pub fn apply(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     while (current_node != .nil) {
         const p = switch (current_node) {
             .pair => |pair_val| pair_val,
-            else => return ElzError.InvalidArgument,
+            else => return interp.fail(ElzError.InvalidArgument, "apply: the last argument must be a list, got {s}", .{core.typeName(last_arg)}),
         };
         try final_args.append(p.car);
         current_node = p.cdr;

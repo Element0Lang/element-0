@@ -25,68 +25,68 @@ const interpreter = @import("interpreter.zig");
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_math(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("+", core.Value{ .procedure = math.add });
-    try interp.root_env.set("-", core.Value{ .procedure = math.sub });
-    try interp.root_env.set("*", core.Value{ .procedure = math.mul });
-    try interp.root_env.set("/", core.Value{ .procedure = math.div });
-    try interp.root_env.set("<=", core.Value{ .procedure = math.le });
-    try interp.root_env.set("<", core.Value{ .procedure = math.lt });
-    try interp.root_env.set(">=", core.Value{ .procedure = math.ge });
-    try interp.root_env.set(">", core.Value{ .procedure = math.gt });
-    try interp.root_env.set("=", core.Value{ .procedure = math.eq_num });
-    try interp.root_env.set("sqrt", core.Value{ .procedure = math.sqrt });
-    try interp.root_env.set("sin", core.Value{ .procedure = math.sin });
-    try interp.root_env.set("cos", core.Value{ .procedure = math.cos });
-    try interp.root_env.set("tan", core.Value{ .procedure = math.tan });
-    try interp.root_env.set("asin", core.Value{ .procedure = math.asin });
-    try interp.root_env.set("acos", core.Value{ .procedure = math.acos });
-    try interp.root_env.set("atan", core.Value{ .procedure = math.atan });
-    try interp.root_env.set("log", core.Value{ .procedure = math.log });
-    try interp.root_env.set("max", core.Value{ .procedure = math.max });
-    try interp.root_env.set("min", core.Value{ .procedure = math.min });
-    try interp.root_env.set("%", core.Value{ .procedure = math.mod });
-    try interp.root_env.set("exact", core.Value{ .procedure = math.inexact_to_exact });
-    try interp.root_env.set("inexact", core.Value{ .procedure = math.exact_to_inexact });
-    try interp.root_env.set("exact-integer?", core.Value{ .procedure = math.exact_integer_p });
-    try interp.root_env.set("exact-integer-sqrt", core.Value{ .procedure = math.exact_integer_sqrt });
-    try interp.root_env.set("square", core.Value{ .procedure = math.square_fn });
-    try interp.root_env.set("finite?", core.Value{ .procedure = math.finite_p });
-    try interp.root_env.set("infinite?", core.Value{ .procedure = math.infinite_p });
-    try interp.root_env.set("nan?", core.Value{ .procedure = math.nan_p });
-    try interp.root_env.set("floor/", core.Value{ .procedure = math.floor_div });
-    try interp.root_env.set("floor-quotient", core.Value{ .procedure = math.floor_quotient });
-    try interp.root_env.set("floor-remainder", core.Value{ .procedure = math.floor_remainder });
-    try interp.root_env.set("truncate/", core.Value{ .procedure = math.truncate_div });
-    try interp.root_env.set("truncate-quotient", core.Value{ .procedure = math.truncate_quotient });
-    try interp.root_env.set("truncate-remainder", core.Value{ .procedure = math.truncate_remainder });
-    try interp.root_env.set("numerator", core.Value{ .procedure = math.numerator_fn });
-    try interp.root_env.set("denominator", core.Value{ .procedure = math.denominator_fn });
-    try interp.root_env.set("rationalize", core.Value{ .procedure = math.rationalize_fn });
-    try interp.root_env.set("make-rectangular", core.Value{ .procedure = math.make_rectangular });
-    try interp.root_env.set("make-polar", core.Value{ .procedure = math.make_polar });
-    try interp.root_env.set("real-part", core.Value{ .procedure = math.real_part });
-    try interp.root_env.set("imag-part", core.Value{ .procedure = math.imag_part });
-    try interp.root_env.set("magnitude", core.Value{ .procedure = math.magnitude });
-    try interp.root_env.set("angle", core.Value{ .procedure = math.angle });
-    try interp.root_env.set("floor", core.Value{ .procedure = math.floor_fn });
-    try interp.root_env.set("ceiling", core.Value{ .procedure = math.ceiling });
-    try interp.root_env.set("round", core.Value{ .procedure = math.round_fn });
-    try interp.root_env.set("truncate", core.Value{ .procedure = math.truncate });
-    try interp.root_env.set("expt", core.Value{ .procedure = math.expt });
-    try interp.root_env.set("exp", core.Value{ .procedure = math.exp_fn });
-    try interp.root_env.set("even?", core.Value{ .procedure = math.even_p });
-    try interp.root_env.set("odd?", core.Value{ .procedure = math.odd_p });
-    try interp.root_env.set("zero?", core.Value{ .procedure = math.zero_p });
-    try interp.root_env.set("positive?", core.Value{ .procedure = math.positive_p });
-    try interp.root_env.set("negative?", core.Value{ .procedure = math.negative_p });
-    try interp.root_env.set("abs", core.Value{ .procedure = math.abs_fn });
-    try interp.root_env.set("exact->inexact", core.Value{ .procedure = math.exact_to_inexact });
-    try interp.root_env.set("inexact->exact", core.Value{ .procedure = math.inexact_to_exact });
-    try interp.root_env.set("quotient", core.Value{ .procedure = math.quotient });
-    try interp.root_env.set("remainder", core.Value{ .procedure = math.remainder });
-    try interp.root_env.set("modulo", core.Value{ .procedure = math.modulo });
-    try interp.root_env.set("gcd", core.Value{ .procedure = math.gcd_fn });
-    try interp.root_env.set("lcm", core.Value{ .procedure = math.lcm_fn });
+    try interp.definePrimitive("+", math.add);
+    try interp.definePrimitive("-", math.sub);
+    try interp.definePrimitive("*", math.mul);
+    try interp.definePrimitive("/", math.div);
+    try interp.definePrimitive("<=", math.le);
+    try interp.definePrimitive("<", math.lt);
+    try interp.definePrimitive(">=", math.ge);
+    try interp.definePrimitive(">", math.gt);
+    try interp.definePrimitive("=", math.eq_num);
+    try interp.definePrimitive("sqrt", math.sqrt);
+    try interp.definePrimitive("sin", math.sin);
+    try interp.definePrimitive("cos", math.cos);
+    try interp.definePrimitive("tan", math.tan);
+    try interp.definePrimitive("asin", math.asin);
+    try interp.definePrimitive("acos", math.acos);
+    try interp.definePrimitive("atan", math.atan);
+    try interp.definePrimitive("log", math.log);
+    try interp.definePrimitive("max", math.max);
+    try interp.definePrimitive("min", math.min);
+    try interp.definePrimitive("%", math.mod);
+    try interp.definePrimitive("exact", math.inexact_to_exact);
+    try interp.definePrimitive("inexact", math.exact_to_inexact);
+    try interp.definePrimitive("exact-integer?", math.exact_integer_p);
+    try interp.definePrimitive("exact-integer-sqrt", math.exact_integer_sqrt);
+    try interp.definePrimitive("square", math.square_fn);
+    try interp.definePrimitive("finite?", math.finite_p);
+    try interp.definePrimitive("infinite?", math.infinite_p);
+    try interp.definePrimitive("nan?", math.nan_p);
+    try interp.definePrimitive("floor/", math.floor_div);
+    try interp.definePrimitive("floor-quotient", math.floor_quotient);
+    try interp.definePrimitive("floor-remainder", math.floor_remainder);
+    try interp.definePrimitive("truncate/", math.truncate_div);
+    try interp.definePrimitive("truncate-quotient", math.truncate_quotient);
+    try interp.definePrimitive("truncate-remainder", math.truncate_remainder);
+    try interp.definePrimitive("numerator", math.numerator_fn);
+    try interp.definePrimitive("denominator", math.denominator_fn);
+    try interp.definePrimitive("rationalize", math.rationalize_fn);
+    try interp.definePrimitive("make-rectangular", math.make_rectangular);
+    try interp.definePrimitive("make-polar", math.make_polar);
+    try interp.definePrimitive("real-part", math.real_part);
+    try interp.definePrimitive("imag-part", math.imag_part);
+    try interp.definePrimitive("magnitude", math.magnitude);
+    try interp.definePrimitive("angle", math.angle);
+    try interp.definePrimitive("floor", math.floor_fn);
+    try interp.definePrimitive("ceiling", math.ceiling);
+    try interp.definePrimitive("round", math.round_fn);
+    try interp.definePrimitive("truncate", math.truncate);
+    try interp.definePrimitive("expt", math.expt);
+    try interp.definePrimitive("exp", math.exp_fn);
+    try interp.definePrimitive("even?", math.even_p);
+    try interp.definePrimitive("odd?", math.odd_p);
+    try interp.definePrimitive("zero?", math.zero_p);
+    try interp.definePrimitive("positive?", math.positive_p);
+    try interp.definePrimitive("negative?", math.negative_p);
+    try interp.definePrimitive("abs", math.abs_fn);
+    try interp.definePrimitive("exact->inexact", math.exact_to_inexact);
+    try interp.definePrimitive("inexact->exact", math.inexact_to_exact);
+    try interp.definePrimitive("quotient", math.quotient);
+    try interp.definePrimitive("remainder", math.remainder);
+    try interp.definePrimitive("modulo", math.modulo);
+    try interp.definePrimitive("gcd", math.gcd_fn);
+    try interp.definePrimitive("lcm", math.lcm_fn);
 }
 
 /// Populates the interpreter's root environment with list manipulation primitive functions.
@@ -94,22 +94,22 @@ pub fn populate_math(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_lists(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("cons", core.Value{ .procedure = lists.cons });
-    try interp.root_env.set("car", core.Value{ .procedure = lists.car });
-    try interp.root_env.set("cdr", core.Value{ .procedure = lists.cdr });
-    try interp.root_env.set("list", core.Value{ .procedure = lists.list });
-    try interp.root_env.set("length", core.Value{ .procedure = lists.list_length });
-    try interp.root_env.set("append", core.Value{ .procedure = lists.append });
-    try interp.root_env.set("reverse", core.Value{ .procedure = lists.reverse });
-    try interp.root_env.set("map", core.Value{ .procedure = lists.map });
-    try interp.root_env.set("list-ref", core.Value{ .procedure = lists.list_ref });
-    try interp.root_env.set("list-tail", core.Value{ .procedure = lists.list_tail });
-    try interp.root_env.set("list-set!", core.Value{ .procedure = lists.list_set_bang });
-    try interp.root_env.set("memq", core.Value{ .procedure = lists.memq });
-    try interp.root_env.set("assq", core.Value{ .procedure = lists.assq });
-    try interp.root_env.set("pair?", core.Value{ .procedure = lists.is_pair });
-    try interp.root_env.set("set-car!", core.Value{ .procedure = lists.set_car });
-    try interp.root_env.set("set-cdr!", core.Value{ .procedure = lists.set_cdr });
+    try interp.definePrimitive("cons", lists.cons);
+    try interp.definePrimitive("car", lists.car);
+    try interp.definePrimitive("cdr", lists.cdr);
+    try interp.definePrimitive("list", lists.list);
+    try interp.definePrimitive("length", lists.list_length);
+    try interp.definePrimitive("append", lists.append);
+    try interp.definePrimitive("reverse", lists.reverse);
+    try interp.definePrimitive("map", lists.map);
+    try interp.definePrimitive("list-ref", lists.list_ref);
+    try interp.definePrimitive("list-tail", lists.list_tail);
+    try interp.definePrimitive("list-set!", lists.list_set_bang);
+    try interp.definePrimitive("memq", lists.memq);
+    try interp.definePrimitive("assq", lists.assq);
+    try interp.definePrimitive("pair?", lists.is_pair);
+    try interp.definePrimitive("set-car!", lists.set_car);
+    try interp.definePrimitive("set-cdr!", lists.set_cdr);
 }
 
 /// Populates the interpreter's root environment with predicate primitive functions.
@@ -117,25 +117,25 @@ pub fn populate_lists(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_predicates(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("null?", core.Value{ .procedure = predicates.is_null });
-    try interp.root_env.set("boolean?", core.Value{ .procedure = predicates.is_boolean });
-    try interp.root_env.set("symbol?", core.Value{ .procedure = predicates.is_symbol });
-    try interp.root_env.set("number?", core.Value{ .procedure = predicates.is_number });
-    try interp.root_env.set("string?", core.Value{ .procedure = predicates.is_string });
-    try interp.root_env.set("list?", core.Value{ .procedure = predicates.is_list });
-    try interp.root_env.set("pair?", core.Value{ .procedure = predicates.is_pair });
-    try interp.root_env.set("procedure?", core.Value{ .procedure = predicates.is_procedure });
-    try interp.root_env.set("eq?", core.Value{ .procedure = predicates.is_eq });
-    try interp.root_env.set("eqv?", core.Value{ .procedure = predicates.is_eqv });
-    try interp.root_env.set("equal?", core.Value{ .procedure = predicates.is_equal });
-    try interp.root_env.set("char?", core.Value{ .procedure = predicates.is_char });
-    try interp.root_env.set("integer?", core.Value{ .procedure = predicates.is_integer });
-    try interp.root_env.set("exact?", core.Value{ .procedure = predicates.exact_p });
-    try interp.root_env.set("inexact?", core.Value{ .procedure = predicates.inexact_p });
-    try interp.root_env.set("rational?", core.Value{ .procedure = predicates.rational_p });
-    try interp.root_env.set("real?", core.Value{ .procedure = predicates.real_p });
-    try interp.root_env.set("complex?", core.Value{ .procedure = predicates.complex_p });
-    try interp.root_env.set("not", core.Value{ .procedure = predicates.logical_not });
+    try interp.definePrimitive("null?", predicates.is_null);
+    try interp.definePrimitive("boolean?", predicates.is_boolean);
+    try interp.definePrimitive("symbol?", predicates.is_symbol);
+    try interp.definePrimitive("number?", predicates.is_number);
+    try interp.definePrimitive("string?", predicates.is_string);
+    try interp.definePrimitive("list?", predicates.is_list);
+    try interp.definePrimitive("pair?", predicates.is_pair);
+    try interp.definePrimitive("procedure?", predicates.is_procedure);
+    try interp.definePrimitive("eq?", predicates.is_eq);
+    try interp.definePrimitive("eqv?", predicates.is_eqv);
+    try interp.definePrimitive("equal?", predicates.is_equal);
+    try interp.definePrimitive("char?", predicates.is_char);
+    try interp.definePrimitive("integer?", predicates.is_integer);
+    try interp.definePrimitive("exact?", predicates.exact_p);
+    try interp.definePrimitive("inexact?", predicates.inexact_p);
+    try interp.definePrimitive("rational?", predicates.rational_p);
+    try interp.definePrimitive("real?", predicates.real_p);
+    try interp.definePrimitive("complex?", predicates.complex_p);
+    try interp.definePrimitive("not", predicates.logical_not);
 }
 
 /// Populates the interpreter's root environment with string manipulation primitive functions.
@@ -143,57 +143,57 @@ pub fn populate_predicates(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_strings(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("symbol->string", core.Value{ .procedure = strings.symbol_to_string });
-    try interp.root_env.set("string->symbol", core.Value{ .procedure = strings.string_to_symbol });
-    try interp.root_env.set("string-length", core.Value{ .procedure = strings.string_length });
-    try interp.root_env.set("string-append", core.Value{ .procedure = strings.string_append });
-    try interp.root_env.set("char=?", core.Value{ .procedure = strings.char_eq });
-    try interp.root_env.set("char<?", core.Value{ .procedure = strings.char_lt });
-    try interp.root_env.set("char>?", core.Value{ .procedure = strings.char_gt });
-    try interp.root_env.set("char<=?", core.Value{ .procedure = strings.char_le });
-    try interp.root_env.set("char>=?", core.Value{ .procedure = strings.char_ge });
-    try interp.root_env.set("char-ci=?", core.Value{ .procedure = strings.char_ci_eq });
-    try interp.root_env.set("char-ci<?", core.Value{ .procedure = strings.char_ci_lt });
-    try interp.root_env.set("char-ci>?", core.Value{ .procedure = strings.char_ci_gt });
-    try interp.root_env.set("char-ci<=?", core.Value{ .procedure = strings.char_ci_le });
-    try interp.root_env.set("char-ci>=?", core.Value{ .procedure = strings.char_ci_ge });
-    try interp.root_env.set("char-alphabetic?", core.Value{ .procedure = strings.char_alphabetic_p });
-    try interp.root_env.set("char-numeric?", core.Value{ .procedure = strings.char_numeric_p });
-    try interp.root_env.set("char-whitespace?", core.Value{ .procedure = strings.char_whitespace_p });
-    try interp.root_env.set("char-upper-case?", core.Value{ .procedure = strings.char_upper_case_p });
-    try interp.root_env.set("char-lower-case?", core.Value{ .procedure = strings.char_lower_case_p });
-    try interp.root_env.set("char-upcase", core.Value{ .procedure = strings.char_upcase });
-    try interp.root_env.set("char-foldcase", core.Value{ .procedure = strings.char_foldcase });
-    try interp.root_env.set("digit-value", core.Value{ .procedure = strings.digit_value });
-    try interp.root_env.set("string-upcase", core.Value{ .procedure = strings.string_upcase });
-    try interp.root_env.set("string-downcase", core.Value{ .procedure = strings.string_downcase });
-    try interp.root_env.set("string-foldcase", core.Value{ .procedure = strings.string_foldcase });
-    try interp.root_env.set("char-downcase", core.Value{ .procedure = strings.char_downcase });
-    try interp.root_env.set("char->integer", core.Value{ .procedure = strings.char_to_integer });
-    try interp.root_env.set("integer->char", core.Value{ .procedure = strings.integer_to_char });
-    try interp.root_env.set("string-ref", core.Value{ .procedure = strings.string_ref });
-    try interp.root_env.set("substring", core.Value{ .procedure = strings.substring });
-    try interp.root_env.set("number->string", core.Value{ .procedure = strings.number_to_string });
-    try interp.root_env.set("string->number", core.Value{ .procedure = strings.string_to_number });
-    try interp.root_env.set("string-split", core.Value{ .procedure = strings.string_split });
-    try interp.root_env.set("make-string", core.Value{ .procedure = strings.make_string });
-    try interp.root_env.set("string=?", core.Value{ .procedure = strings.string_eq });
-    try interp.root_env.set("string<?", core.Value{ .procedure = strings.string_lt });
-    try interp.root_env.set("string>?", core.Value{ .procedure = strings.string_gt });
-    try interp.root_env.set("string<=?", core.Value{ .procedure = strings.string_le });
-    try interp.root_env.set("string>=?", core.Value{ .procedure = strings.string_ge });
-    try interp.root_env.set("string-ci=?", core.Value{ .procedure = strings.string_ci_eq });
-    try interp.root_env.set("string-ci<?", core.Value{ .procedure = strings.string_ci_lt });
-    try interp.root_env.set("string-ci<=?", core.Value{ .procedure = strings.string_ci_le });
-    try interp.root_env.set("string-ci>?", core.Value{ .procedure = strings.string_ci_gt });
-    try interp.root_env.set("string-ci>=?", core.Value{ .procedure = strings.string_ci_ge });
-    try interp.root_env.set("string-copy", core.Value{ .procedure = strings.string_copy });
-    try interp.root_env.set("string->list", core.Value{ .procedure = strings.string_to_list });
-    try interp.root_env.set("list->string", core.Value{ .procedure = strings.list_to_string });
-    try interp.root_env.set("string-set!", core.Value{ .procedure = strings.string_set_bang });
-    try interp.root_env.set("string-fill!", core.Value{ .procedure = strings.string_fill_bang });
-    try interp.root_env.set("gensym", core.Value{ .procedure = strings.gensym });
-    try interp.root_env.set("string", core.Value{ .procedure = strings.string_from_chars });
+    try interp.definePrimitive("symbol->string", strings.symbol_to_string);
+    try interp.definePrimitive("string->symbol", strings.string_to_symbol);
+    try interp.definePrimitive("string-length", strings.string_length);
+    try interp.definePrimitive("string-append", strings.string_append);
+    try interp.definePrimitive("char=?", strings.char_eq);
+    try interp.definePrimitive("char<?", strings.char_lt);
+    try interp.definePrimitive("char>?", strings.char_gt);
+    try interp.definePrimitive("char<=?", strings.char_le);
+    try interp.definePrimitive("char>=?", strings.char_ge);
+    try interp.definePrimitive("char-ci=?", strings.char_ci_eq);
+    try interp.definePrimitive("char-ci<?", strings.char_ci_lt);
+    try interp.definePrimitive("char-ci>?", strings.char_ci_gt);
+    try interp.definePrimitive("char-ci<=?", strings.char_ci_le);
+    try interp.definePrimitive("char-ci>=?", strings.char_ci_ge);
+    try interp.definePrimitive("char-alphabetic?", strings.char_alphabetic_p);
+    try interp.definePrimitive("char-numeric?", strings.char_numeric_p);
+    try interp.definePrimitive("char-whitespace?", strings.char_whitespace_p);
+    try interp.definePrimitive("char-upper-case?", strings.char_upper_case_p);
+    try interp.definePrimitive("char-lower-case?", strings.char_lower_case_p);
+    try interp.definePrimitive("char-upcase", strings.char_upcase);
+    try interp.definePrimitive("char-foldcase", strings.char_foldcase);
+    try interp.definePrimitive("digit-value", strings.digit_value);
+    try interp.definePrimitive("string-upcase", strings.string_upcase);
+    try interp.definePrimitive("string-downcase", strings.string_downcase);
+    try interp.definePrimitive("string-foldcase", strings.string_foldcase);
+    try interp.definePrimitive("char-downcase", strings.char_downcase);
+    try interp.definePrimitive("char->integer", strings.char_to_integer);
+    try interp.definePrimitive("integer->char", strings.integer_to_char);
+    try interp.definePrimitive("string-ref", strings.string_ref);
+    try interp.definePrimitive("substring", strings.substring);
+    try interp.definePrimitive("number->string", strings.number_to_string);
+    try interp.definePrimitive("string->number", strings.string_to_number);
+    try interp.definePrimitive("string-split", strings.string_split);
+    try interp.definePrimitive("make-string", strings.make_string);
+    try interp.definePrimitive("string=?", strings.string_eq);
+    try interp.definePrimitive("string<?", strings.string_lt);
+    try interp.definePrimitive("string>?", strings.string_gt);
+    try interp.definePrimitive("string<=?", strings.string_le);
+    try interp.definePrimitive("string>=?", strings.string_ge);
+    try interp.definePrimitive("string-ci=?", strings.string_ci_eq);
+    try interp.definePrimitive("string-ci<?", strings.string_ci_lt);
+    try interp.definePrimitive("string-ci<=?", strings.string_ci_le);
+    try interp.definePrimitive("string-ci>?", strings.string_ci_gt);
+    try interp.definePrimitive("string-ci>=?", strings.string_ci_ge);
+    try interp.definePrimitive("string-copy", strings.string_copy);
+    try interp.definePrimitive("string->list", strings.string_to_list);
+    try interp.definePrimitive("list->string", strings.list_to_string);
+    try interp.definePrimitive("string-set!", strings.string_set_bang);
+    try interp.definePrimitive("string-fill!", strings.string_fill_bang);
+    try interp.definePrimitive("gensym", strings.gensym);
+    try interp.definePrimitive("string", strings.string_from_chars);
 }
 
 /// Populates the interpreter's root environment with control-related primitive functions.
@@ -201,26 +201,26 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
-    try interp.root_env.set("apply", core.Value{ .procedure = control.apply });
-    try interp.root_env.set("eval", core.Value{ .procedure = control.eval_proc });
-    try interp.root_env.set("call-with-escape-continuation", core.Value{ .procedure = control.call_with_escape_continuation });
-    try interp.root_env.set("call/ec", core.Value{ .procedure = control.call_with_escape_continuation });
-    try interp.root_env.set("call-with-current-continuation", core.Value{ .procedure = control.call_with_current_continuation });
-    try interp.root_env.set("call/cc", core.Value{ .procedure = control.call_with_current_continuation });
-    try interp.root_env.set("dynamic-wind", core.Value{ .procedure = control.dynamic_wind });
-    try interp.root_env.set("force", core.Value{ .procedure = control.force });
-    try interp.root_env.set("make-promise", core.Value{ .procedure = control.make_promise });
-    try interp.root_env.set("%%make-delayed%%", core.Value{ .procedure = control.make_delayed });
-    try interp.root_env.set("values", core.Value{ .procedure = control.values });
-    try interp.root_env.set("error", core.Value{ .procedure = control.error_fn });
-    try interp.root_env.set("raise", core.Value{ .procedure = control.raise_fn });
+    try interp.definePrimitive("apply", control.apply);
+    try interp.definePrimitive("eval", control.eval_proc);
+    try interp.definePrimitive("call-with-escape-continuation", control.call_with_escape_continuation);
+    try interp.definePrimitive("call/ec", control.call_with_escape_continuation);
+    try interp.definePrimitive("call-with-current-continuation", control.call_with_current_continuation);
+    try interp.definePrimitive("call/cc", control.call_with_current_continuation);
+    try interp.definePrimitive("dynamic-wind", control.dynamic_wind);
+    try interp.definePrimitive("force", control.force);
+    try interp.definePrimitive("make-promise", control.make_promise);
+    try interp.definePrimitive("%%make-delayed%%", control.make_delayed);
+    try interp.definePrimitive("values", control.values);
+    try interp.definePrimitive("error", control.error_fn);
+    try interp.definePrimitive("raise", control.raise_fn);
     if (flags.enable_process) {
-        try interp.root_env.set("get-environment-variables", core.Value{ .procedure = os.get_environment_variables });
+        try interp.definePrimitive("get-environment-variables", os.get_environment_variables);
     }
-    try interp.root_env.set("command-line", core.Value{ .procedure = os.command_line });
-    try interp.root_env.set("promise?", core.Value{ .procedure = predicates.promise_p });
-    try interp.root_env.set("raise-continuable", core.Value{ .procedure = control.raise_continuable_fn });
-    try interp.root_env.set("with-exception-handler", core.Value{ .procedure = control.with_exception_handler });
+    try interp.definePrimitive("command-line", os.command_line);
+    try interp.definePrimitive("promise?", predicates.promise_p);
+    try interp.definePrimitive("raise-continuable", control.raise_continuable_fn);
+    try interp.definePrimitive("with-exception-handler", control.with_exception_handler);
     // The built-in record type behind error objects; accessors live in std.elz.
     {
         const rtd = try interp.allocator.create(core.RecordType);
@@ -232,9 +232,9 @@ pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.San
         interp.runtime.error_rtd = rtd;
         try interp.root_env.set("%error-rtd", core.Value{ .record_type = rtd });
     }
-    try interp.root_env.set("call-with-values", core.Value{ .procedure = control.call_with_values });
+    try interp.definePrimitive("call-with-values", control.call_with_values);
     // Internal primitive backing the try/catch special form; not user-facing.
-    try interp.root_env.set("%%try%%", core.Value{ .procedure = control.prim_try });
+    try interp.definePrimitive("%%try%%", control.prim_try);
 }
 
 /// Populates the interpreter's root environment with I/O primitive functions.
@@ -242,16 +242,16 @@ pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.San
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_io(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
-    try interp.root_env.set("display", core.Value{ .procedure = io.display });
-    try interp.root_env.set("write", core.Value{ .procedure = io.write_proc });
-    try interp.root_env.set("write-shared", core.Value{ .procedure = io.write_shared_proc });
-    try interp.root_env.set("write-simple", core.Value{ .procedure = io.write_simple_proc });
-    try interp.root_env.set("newline", core.Value{ .procedure = io.newline });
+    try interp.definePrimitive("display", io.display);
+    try interp.definePrimitive("write", io.write_proc);
+    try interp.definePrimitive("write-shared", io.write_shared_proc);
+    try interp.definePrimitive("write-simple", io.write_simple_proc);
+    try interp.definePrimitive("newline", io.newline);
     // `load` reads and runs a file, so it also needs filesystem access.
     if (flags.enable_filesystem) {
-        try interp.root_env.set("load", core.Value{ .procedure = io.load });
+        try interp.definePrimitive("load", io.load);
     }
-    try interp.root_env.set("read-string", core.Value{ .procedure = io.read_string });
+    try interp.definePrimitive("read-string", io.read_string);
 }
 
 /// Populates the interpreter's root environment with module-related primitive functions.
@@ -259,7 +259,7 @@ pub fn populate_io(interp: *interpreter.Interpreter, flags: interpreter.SandboxF
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_modules(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("module-ref", core.Value{ .procedure = modules.module_ref });
+    try interp.definePrimitive("module-ref", modules.module_ref);
 }
 
 /// Populates the interpreter's root environment with process-related primitive functions.
@@ -270,7 +270,7 @@ pub fn populate_process(interp: *interpreter.Interpreter, flags: interpreter.San
     // `exit` terminates the host process, so it is unavailable when process
     // access is disabled.
     if (!flags.enable_process) return;
-    try interp.root_env.set("exit", core.Value{ .procedure = process.exit });
+    try interp.definePrimitive("exit", process.exit);
 }
 
 /// Populates the interpreter's root environment with OS/filesystem primitive functions.
@@ -279,14 +279,14 @@ pub fn populate_process(interp: *interpreter.Interpreter, flags: interpreter.San
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_os(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     if (flags.enable_process) {
-        try interp.root_env.set("getenv", core.Value{ .procedure = os.getenv });
+        try interp.definePrimitive("getenv", os.getenv);
     }
     if (flags.enable_filesystem) {
-        try interp.root_env.set("file-exists?", core.Value{ .procedure = os.file_exists });
-        try interp.root_env.set("delete-file", core.Value{ .procedure = os.delete_file });
-        try interp.root_env.set("current-directory", core.Value{ .procedure = os.current_directory });
-        try interp.root_env.set("directory-list", core.Value{ .procedure = os.directory_list });
-        try interp.root_env.set("rename-file", core.Value{ .procedure = os.rename_file });
+        try interp.definePrimitive("file-exists?", os.file_exists);
+        try interp.definePrimitive("delete-file", os.delete_file);
+        try interp.definePrimitive("current-directory", os.current_directory);
+        try interp.definePrimitive("directory-list", os.directory_list);
+        try interp.definePrimitive("rename-file", os.rename_file);
     }
 }
 
@@ -295,10 +295,10 @@ pub fn populate_os(interp: *interpreter.Interpreter, flags: interpreter.SandboxF
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_datetime(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("current-time", core.Value{ .procedure = datetime.current_time });
-    try interp.root_env.set("current-time-ms", core.Value{ .procedure = datetime.current_time_ms });
-    try interp.root_env.set("time->components", core.Value{ .procedure = datetime.time_to_components });
-    try interp.root_env.set("sleep-ms", core.Value{ .procedure = datetime.sleep_ms });
+    try interp.definePrimitive("current-time", datetime.current_time);
+    try interp.definePrimitive("current-time-ms", datetime.current_time_ms);
+    try interp.definePrimitive("time->components", datetime.time_to_components);
+    try interp.definePrimitive("sleep-ms", datetime.sleep_ms);
 }
 
 /// Populates the interpreter's root environment with vector manipulation primitive functions.
@@ -306,31 +306,31 @@ pub fn populate_datetime(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_vectors(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("make-vector", core.Value{ .procedure = vectors.make_vector });
-    try interp.root_env.set("vector", core.Value{ .procedure = vectors.vector });
-    try interp.root_env.set("vector-length", core.Value{ .procedure = vectors.vector_length });
-    try interp.root_env.set("vector-ref", core.Value{ .procedure = vectors.vector_ref });
-    try interp.root_env.set("vector-set!", core.Value{ .procedure = vectors.vector_set });
-    try interp.root_env.set("vector?", core.Value{ .procedure = vectors.is_vector });
-    try interp.root_env.set("list->vector", core.Value{ .procedure = vectors.list_to_vector });
-    try interp.root_env.set("vector->list", core.Value{ .procedure = vectors.vector_to_list });
-    try interp.root_env.set("vector-fill!", core.Value{ .procedure = vectors.vector_fill_bang });
-    try interp.root_env.set("bytevector", core.Value{ .procedure = bytevectors.bytevector });
-    try interp.root_env.set("make-bytevector", core.Value{ .procedure = bytevectors.make_bytevector });
-    try interp.root_env.set("bytevector?", core.Value{ .procedure = bytevectors.bytevector_p });
-    try interp.root_env.set("bytevector-length", core.Value{ .procedure = bytevectors.bytevector_length });
-    try interp.root_env.set("bytevector-u8-ref", core.Value{ .procedure = bytevectors.bytevector_u8_ref });
-    try interp.root_env.set("bytevector-u8-set!", core.Value{ .procedure = bytevectors.bytevector_u8_set_bang });
-    try interp.root_env.set("bytevector-copy", core.Value{ .procedure = bytevectors.bytevector_copy });
-    try interp.root_env.set("bytevector-copy!", core.Value{ .procedure = bytevectors.bytevector_copy_bang });
-    try interp.root_env.set("bytevector-append", core.Value{ .procedure = bytevectors.bytevector_append });
-    try interp.root_env.set("utf8->string", core.Value{ .procedure = bytevectors.utf8_to_string });
-    try interp.root_env.set("string->utf8", core.Value{ .procedure = bytevectors.string_to_utf8 });
-    try interp.root_env.set("%make-record-type", core.Value{ .procedure = records.make_record_type });
-    try interp.root_env.set("%make-record", core.Value{ .procedure = records.make_record });
-    try interp.root_env.set("%record-of-type?", core.Value{ .procedure = records.record_of_type_p });
-    try interp.root_env.set("%record-ref", core.Value{ .procedure = records.record_ref });
-    try interp.root_env.set("%record-set!", core.Value{ .procedure = records.record_set_bang });
+    try interp.definePrimitive("make-vector", vectors.make_vector);
+    try interp.definePrimitive("vector", vectors.vector);
+    try interp.definePrimitive("vector-length", vectors.vector_length);
+    try interp.definePrimitive("vector-ref", vectors.vector_ref);
+    try interp.definePrimitive("vector-set!", vectors.vector_set);
+    try interp.definePrimitive("vector?", vectors.is_vector);
+    try interp.definePrimitive("list->vector", vectors.list_to_vector);
+    try interp.definePrimitive("vector->list", vectors.vector_to_list);
+    try interp.definePrimitive("vector-fill!", vectors.vector_fill_bang);
+    try interp.definePrimitive("bytevector", bytevectors.bytevector);
+    try interp.definePrimitive("make-bytevector", bytevectors.make_bytevector);
+    try interp.definePrimitive("bytevector?", bytevectors.bytevector_p);
+    try interp.definePrimitive("bytevector-length", bytevectors.bytevector_length);
+    try interp.definePrimitive("bytevector-u8-ref", bytevectors.bytevector_u8_ref);
+    try interp.definePrimitive("bytevector-u8-set!", bytevectors.bytevector_u8_set_bang);
+    try interp.definePrimitive("bytevector-copy", bytevectors.bytevector_copy);
+    try interp.definePrimitive("bytevector-copy!", bytevectors.bytevector_copy_bang);
+    try interp.definePrimitive("bytevector-append", bytevectors.bytevector_append);
+    try interp.definePrimitive("utf8->string", bytevectors.utf8_to_string);
+    try interp.definePrimitive("string->utf8", bytevectors.string_to_utf8);
+    try interp.definePrimitive("%make-record-type", records.make_record_type);
+    try interp.definePrimitive("%make-record", records.make_record);
+    try interp.definePrimitive("%record-of-type?", records.record_of_type_p);
+    try interp.definePrimitive("%record-ref", records.record_ref);
+    try interp.definePrimitive("%record-set!", records.record_set_bang);
 }
 
 /// Populates the interpreter's root environment with hash map primitive functions.
@@ -338,13 +338,13 @@ pub fn populate_vectors(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_hashmaps(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("make-hash-map", core.Value{ .procedure = hashmaps.make_hash_map });
-    try interp.root_env.set("hash-map-set!", core.Value{ .procedure = hashmaps.hash_map_set });
-    try interp.root_env.set("hash-map-ref", core.Value{ .procedure = hashmaps.hash_map_get });
-    try interp.root_env.set("hash-map-remove!", core.Value{ .procedure = hashmaps.hash_map_remove });
-    try interp.root_env.set("hash-map-contains?", core.Value{ .procedure = hashmaps.hash_map_contains });
-    try interp.root_env.set("hash-map-count", core.Value{ .procedure = hashmaps.hash_map_count });
-    try interp.root_env.set("hash-map?", core.Value{ .procedure = hashmaps.is_hash_map });
+    try interp.definePrimitive("make-hash-map", hashmaps.make_hash_map);
+    try interp.definePrimitive("hash-map-set!", hashmaps.hash_map_set);
+    try interp.definePrimitive("hash-map-ref", hashmaps.hash_map_get);
+    try interp.definePrimitive("hash-map-remove!", hashmaps.hash_map_remove);
+    try interp.definePrimitive("hash-map-contains?", hashmaps.hash_map_contains);
+    try interp.definePrimitive("hash-map-count", hashmaps.hash_map_count);
+    try interp.definePrimitive("hash-map?", hashmaps.is_hash_map);
 }
 
 /// Populates the interpreter's root environment with formatting primitive functions.
@@ -352,22 +352,22 @@ pub fn populate_hashmaps(interp: *interpreter.Interpreter) !void {
 /// Parameters:
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_format(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("format", core.Value{ .procedure = format_mod.format });
-    try interp.root_env.set("value->string", core.Value{ .procedure = format_mod.value_to_string });
+    try interp.definePrimitive("format", format_mod.format);
+    try interp.definePrimitive("value->string", format_mod.value_to_string);
 }
 
 /// Populates the interpreter's root environment with JSON serialization primitive functions.
 pub fn populate_json(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("json-serialize", core.Value{ .procedure = json_mod.json_serialize });
-    try interp.root_env.set("json-deserialize", core.Value{ .procedure = json_mod.json_deserialize });
+    try interp.definePrimitive("json-serialize", json_mod.json_serialize);
+    try interp.definePrimitive("json-deserialize", json_mod.json_deserialize);
 }
 
 /// Populates the interpreter's root environment with regex primitive functions.
 pub fn populate_regex(interp: *interpreter.Interpreter) !void {
-    try interp.root_env.set("regex-match?", core.Value{ .procedure = regex_mod.regex_match });
-    try interp.root_env.set("regex-search", core.Value{ .procedure = regex_mod.regex_search });
-    try interp.root_env.set("regex-replace", core.Value{ .procedure = regex_mod.regex_replace });
-    try interp.root_env.set("regex-split", core.Value{ .procedure = regex_mod.regex_split });
+    try interp.definePrimitive("regex-match?", regex_mod.regex_match);
+    try interp.definePrimitive("regex-search", regex_mod.regex_search);
+    try interp.definePrimitive("regex-replace", regex_mod.regex_replace);
+    try interp.definePrimitive("regex-split", regex_mod.regex_split);
 }
 
 /// Populates the interpreter's root environment with all primitive functions.
@@ -392,49 +392,49 @@ pub fn populate_globals(interp: *interpreter.Interpreter) !void {
 /// - `interp`: A pointer to the interpreter instance.
 pub fn populate_ports(interp: *interpreter.Interpreter, flags: interpreter.SandboxFlags) !void {
     if (flags.enable_filesystem) {
-        try interp.root_env.set("open-input-file", core.Value{ .procedure = ports.open_input_file });
-        try interp.root_env.set("open-output-file", core.Value{ .procedure = ports.open_output_file });
-        try interp.root_env.set("open-binary-input-file", core.Value{ .procedure = ports.open_binary_input_file });
-        try interp.root_env.set("open-binary-output-file", core.Value{ .procedure = ports.open_binary_output_file });
+        try interp.definePrimitive("open-input-file", ports.open_input_file);
+        try interp.definePrimitive("open-output-file", ports.open_output_file);
+        try interp.definePrimitive("open-binary-input-file", ports.open_binary_input_file);
+        try interp.definePrimitive("open-binary-output-file", ports.open_binary_output_file);
     }
-    try interp.root_env.set("eof-object", core.Value{ .procedure = ports.eof_object });
-    try interp.root_env.set("open-input-bytevector", core.Value{ .procedure = ports.open_input_bytevector });
-    try interp.root_env.set("open-output-bytevector", core.Value{ .procedure = ports.open_output_bytevector });
-    try interp.root_env.set("get-output-bytevector", core.Value{ .procedure = ports.get_output_bytevector });
-    try interp.root_env.set("read-u8", core.Value{ .procedure = ports.read_u8 });
-    try interp.root_env.set("peek-u8", core.Value{ .procedure = ports.peek_u8 });
-    try interp.root_env.set("u8-ready?", core.Value{ .procedure = ports.u8_ready_p });
-    try interp.root_env.set("write-u8", core.Value{ .procedure = ports.write_u8 });
-    try interp.root_env.set("read-bytevector", core.Value{ .procedure = ports.read_bytevector });
-    try interp.root_env.set("read-bytevector!", core.Value{ .procedure = ports.read_bytevector_bang });
-    try interp.root_env.set("write-bytevector", core.Value{ .procedure = ports.write_bytevector });
-    try interp.root_env.set("binary-port?", core.Value{ .procedure = ports.binary_port_p });
-    try interp.root_env.set("textual-port?", core.Value{ .procedure = ports.textual_port_p });
-    try interp.root_env.set("close-port", core.Value{ .procedure = ports.close_port });
-    try interp.root_env.set("input-port-open?", core.Value{ .procedure = ports.input_port_open_p });
-    try interp.root_env.set("output-port-open?", core.Value{ .procedure = ports.output_port_open_p });
-    try interp.root_env.set("flush-output-port", core.Value{ .procedure = ports.flush_output_port });
-    try interp.root_env.set("current-error-port", core.Value{ .procedure = ports.current_error_port });
-    try interp.root_env.set("open-input-string", core.Value{ .procedure = ports.open_input_string });
-    try interp.root_env.set("open-output-string", core.Value{ .procedure = ports.open_output_string });
-    try interp.root_env.set("get-output-string", core.Value{ .procedure = ports.get_output_string });
-    try interp.root_env.set("close-input-port", core.Value{ .procedure = ports.close_input_port });
-    try interp.root_env.set("close-output-port", core.Value{ .procedure = ports.close_output_port });
-    try interp.root_env.set("read-line", core.Value{ .procedure = ports.read_line });
-    try interp.root_env.set("read-char", core.Value{ .procedure = ports.read_char });
-    try interp.root_env.set("write-port", core.Value{ .procedure = ports.write_to_port });
-    try interp.root_env.set("input-port?", core.Value{ .procedure = ports.is_input_port });
-    try interp.root_env.set("output-port?", core.Value{ .procedure = ports.is_output_port });
-    try interp.root_env.set("port?", core.Value{ .procedure = ports.is_port });
-    try interp.root_env.set("eof-object?", core.Value{ .procedure = ports.eof_object_p });
-    try interp.root_env.set("write-char", core.Value{ .procedure = ports.write_char });
-    try interp.root_env.set("current-input-port", core.Value{ .procedure = ports.current_input_port });
-    try interp.root_env.set("current-output-port", core.Value{ .procedure = ports.current_output_port });
-    try interp.root_env.set("peek-char", core.Value{ .procedure = ports.peek_char });
-    try interp.root_env.set("char-ready?", core.Value{ .procedure = ports.char_ready_p });
-    try interp.root_env.set("set-current-output-port!", core.Value{ .procedure = ports.set_current_output_port_bang });
-    try interp.root_env.set("set-current-input-port!", core.Value{ .procedure = ports.set_current_input_port_bang });
-    try interp.root_env.set("read", core.Value{ .procedure = ports.read });
+    try interp.definePrimitive("eof-object", ports.eof_object);
+    try interp.definePrimitive("open-input-bytevector", ports.open_input_bytevector);
+    try interp.definePrimitive("open-output-bytevector", ports.open_output_bytevector);
+    try interp.definePrimitive("get-output-bytevector", ports.get_output_bytevector);
+    try interp.definePrimitive("read-u8", ports.read_u8);
+    try interp.definePrimitive("peek-u8", ports.peek_u8);
+    try interp.definePrimitive("u8-ready?", ports.u8_ready_p);
+    try interp.definePrimitive("write-u8", ports.write_u8);
+    try interp.definePrimitive("read-bytevector", ports.read_bytevector);
+    try interp.definePrimitive("read-bytevector!", ports.read_bytevector_bang);
+    try interp.definePrimitive("write-bytevector", ports.write_bytevector);
+    try interp.definePrimitive("binary-port?", ports.binary_port_p);
+    try interp.definePrimitive("textual-port?", ports.textual_port_p);
+    try interp.definePrimitive("close-port", ports.close_port);
+    try interp.definePrimitive("input-port-open?", ports.input_port_open_p);
+    try interp.definePrimitive("output-port-open?", ports.output_port_open_p);
+    try interp.definePrimitive("flush-output-port", ports.flush_output_port);
+    try interp.definePrimitive("current-error-port", ports.current_error_port);
+    try interp.definePrimitive("open-input-string", ports.open_input_string);
+    try interp.definePrimitive("open-output-string", ports.open_output_string);
+    try interp.definePrimitive("get-output-string", ports.get_output_string);
+    try interp.definePrimitive("close-input-port", ports.close_input_port);
+    try interp.definePrimitive("close-output-port", ports.close_output_port);
+    try interp.definePrimitive("read-line", ports.read_line);
+    try interp.definePrimitive("read-char", ports.read_char);
+    try interp.definePrimitive("write-port", ports.write_to_port);
+    try interp.definePrimitive("input-port?", ports.is_input_port);
+    try interp.definePrimitive("output-port?", ports.is_output_port);
+    try interp.definePrimitive("port?", ports.is_port);
+    try interp.definePrimitive("eof-object?", ports.eof_object_p);
+    try interp.definePrimitive("write-char", ports.write_char);
+    try interp.definePrimitive("current-input-port", ports.current_input_port);
+    try interp.definePrimitive("current-output-port", ports.current_output_port);
+    try interp.definePrimitive("peek-char", ports.peek_char);
+    try interp.definePrimitive("char-ready?", ports.char_ready_p);
+    try interp.definePrimitive("set-current-output-port!", ports.set_current_output_port_bang);
+    try interp.definePrimitive("set-current-input-port!", ports.set_current_input_port_bang);
+    try interp.definePrimitive("read", ports.read);
 }
 
 /// Defines a foreign function in the given environment.
