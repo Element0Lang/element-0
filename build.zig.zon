@@ -1,6 +1,6 @@
 .{
     .name = .elz,
-    .version = "0.1.0-alpha.7",
+    .version = "0.1.0-alpha.8",
     .fingerprint = 0xc8c56c5048e5528a, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
