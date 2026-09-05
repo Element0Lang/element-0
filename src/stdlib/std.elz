@@ -674,38 +674,6 @@
             (string-set! to i (car cs))
             (loop (+ i 1) (cdr cs)))))))
 
-;;; (string-upcase str)
-;;;
-;;; Returns a new string with every character upcased.
-(define (string-upcase str)
-  (string-map char-upcase str))
-
-;;; (string-downcase str)
-;;;
-;;; Returns a new string with every character downcased.
-(define (string-downcase str)
-  (string-map char-downcase str))
-
-;;; (string-foldcase str)
-;;;
-;;; Returns a new string case-folded for caseless comparison.
-(define (string-foldcase str)
-  (string-downcase str))
-
-;;; (char-foldcase char)
-;;;
-;;; Returns the case-folded form of char.
-(define (char-foldcase c)
-  (char-downcase c))
-
-;;; (digit-value char)
-;;;
-;;; Returns the numeric value of a decimal digit character, or #f.
-(define (digit-value c)
-  (if (char-numeric? c)
-      (- (char->integer c) (char->integer #\0))
-      #f))
-
 ;;; (vector-map proc vec1 vec2 ...)
 ;;;
 ;;; Applies proc element-wise to the vectors and returns a new vector of the
@@ -1063,6 +1031,14 @@
 ;;; Returns the environment eval uses by default. Elz has a single global
 ;;; environment, so this is an opaque marker accepted by eval.
 (define (interaction-environment) '%interaction-environment)
+
+;;; (null-environment version)
+;;; (scheme-report-environment version)
+;;;
+;;; R5RS environment specifiers. Elz has a single global environment, so both
+;;; resolve to the interaction environment.
+(define (null-environment . version) '%interaction-environment)
+(define (scheme-report-environment . version) '%interaction-environment)
 
 ;;; (environment import-spec ...)
 ;;;

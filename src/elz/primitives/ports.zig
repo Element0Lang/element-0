@@ -66,6 +66,8 @@ fn inputPortArg(interp: *interpreter.Interpreter, args: core.ValueList) ElzError
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const port_val = args.items[0];
     if (port_val != .port) return ElzError.InvalidArgument;
+    // Reading from a closed port is an error (R7RS 6.13.1), not end of file.
+    if (!port_val.port.is_open) return ElzError.InvalidArgument;
     return port_val.port;
 }
 

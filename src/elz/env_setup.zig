@@ -163,6 +163,11 @@ pub fn populate_strings(interp: *interpreter.Interpreter) !void {
     try interp.root_env.set(interp, "char-upper-case?", core.Value{ .procedure = strings.char_upper_case_p });
     try interp.root_env.set(interp, "char-lower-case?", core.Value{ .procedure = strings.char_lower_case_p });
     try interp.root_env.set(interp, "char-upcase", core.Value{ .procedure = strings.char_upcase });
+    try interp.root_env.set(interp, "char-foldcase", core.Value{ .procedure = strings.char_foldcase });
+    try interp.root_env.set(interp, "digit-value", core.Value{ .procedure = strings.digit_value });
+    try interp.root_env.set(interp, "string-upcase", core.Value{ .procedure = strings.string_upcase });
+    try interp.root_env.set(interp, "string-downcase", core.Value{ .procedure = strings.string_downcase });
+    try interp.root_env.set(interp, "string-foldcase", core.Value{ .procedure = strings.string_foldcase });
     try interp.root_env.set(interp, "char-downcase", core.Value{ .procedure = strings.char_downcase });
     try interp.root_env.set(interp, "char->integer", core.Value{ .procedure = strings.char_to_integer });
     try interp.root_env.set(interp, "integer->char", core.Value{ .procedure = strings.integer_to_char });

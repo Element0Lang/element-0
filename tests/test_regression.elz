@@ -562,4 +562,35 @@
 (test-case "eqv? on strings is identity"
   (let ((s (string-copy "abc"))) (and (eqv? s s) (not (eqv? s (string-copy "abc"))))))
 
+;; --- Reader: datum labels, fold-case, comments, escapes ---
+(test-case "datum label builds a cyclic list"
+  (let ((x (read (open-input-string "#0=(1 . #0#)")))) (and (= 1 (cadr x)) (eq? x (cdr x)))))
+(test-case "datum label shares structure"
+  (let ((x (read (open-input-string "(#0=(1 2 3) #0#)")))) (eq? (car x) (cadr x))))
+(test-case "datum label inside a vector"
+  (let ((v (read (open-input-string "#1=#(a #1#)")))) (eq? v (vector-ref v 1))))
+(test-case "fold-case directive lowercases symbols"
+  (and (eq? 'abc (read (open-input-string "#!fold-case ABC")))
+       (eq? 'ABC (read (open-input-string "#!fold-case #!no-fold-case ABC")))))
+(test-case "datum comment after a dotted tail"
+  (equal? '(a . b) (read (open-input-string "(a . b #;c)"))))
+(test-case "a commented-out dot is a read error"
+  (eq? 'err (guard (e (#t 'err)) (read (open-input-string "(a #;. b)")))))
+(test-case "backslash bar escapes a bar in a string"
+  (= 124 (char->integer (string-ref (read (open-input-string "\"\\|\"")) 0))))
+(test-case "reading from a closed port is an error"
+  (let ((in (open-input-string "abc"))) (close-input-port in) (eq? 'error (guard (e (#t 'error)) (read-char in)))))
+
+;; --- Unicode character data ---
+(test-case "character predicates cover non-ASCII letters and digits"
+  (and (char-alphabetic? #\Λ) (char-upper-case? #\Λ) (char-lower-case? #\λ) (char-numeric? #\๐) (char-whitespace? #\x3000)))
+(test-case "digit-value knows every decimal digit block"
+  (and (= 4 (digit-value #\٤)) (= 0 (digit-value #\૦)) (not (digit-value #\a))))
+(test-case "string case mappings may change length"
+  (and (string=? "SSA" (string-upcase "ßa")) (string=? "mass" (string-foldcase "Maß")) (string=? "s" (string-foldcase "ſ"))))
+(test-case "char-upcase uses the simple mapping"
+  (and (char=? #\ß (char-upcase #\ß)) (char=? #\Λ (char-upcase #\λ)) (char=? #\σ (char-foldcase #\ς))))
+(test-case "string-ci=? compares full case foldings"
+  (and (string-ci=? "Straße" "STRASSE") (string-ci=? "ΣΑΣ" "σας") (not (string-ci=? "a" "ab"))))
+
 (report-summary)

@@ -106,6 +106,12 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                     }
                     try tokens.append(allocator, source[i..j]);
                     i = j;
+                } else if (char == '#' and i + 1 < source.len and std.ascii.isDigit(source[i + 1]) and datumLabelEnd(source, i) != null) {
+                    // Datum label `#n=` or reference `#n#`: its own token, so
+                    // `#0=(...)` and `#0=a` split before the labelled datum.
+                    const end = datumLabelEnd(source, i).?;
+                    try tokens.append(allocator, source[i..end]);
+                    i = end;
                 } else if (char == '#' and i + 3 < source.len and std.mem.eql(u8, source[i .. i + 4], "#u8(")) {
                     try tokens.append(allocator, source[i .. i + 4]);
                     i += 4;
@@ -129,6 +135,16 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
     return tokens;
 }
 
+/// If `source[i..]` starts a datum label (`#n=`) or reference (`#n#`), returns
+/// the index just past it.
+fn datumLabelEnd(source: []const u8, i: usize) ?usize {
+    var j = i + 1;
+    while (j < source.len and std.ascii.isDigit(source[j])) j += 1;
+    if (j == i + 1 or j >= source.len) return null;
+    if (source[j] == '=' or source[j] == '#') return j + 1;
+    return null;
+}
+
 /// The parser for Element 0 source code.
 /// It holds the state of the parsing process.
 /// A source location attached to a parsed form.
@@ -149,6 +165,10 @@ const Parser = struct {
     position: usize,
     allocator: std.mem.Allocator,
     depth: usize = 0,
+    /// Set by the `#!fold-case` directive: symbols read after it are lowercased.
+    fold_case: bool = false,
+    /// Datum labels (`#n=`) seen so far, by label number.
+    labels: std.AutoHashMapUnmanaged(usize, Value) = .empty,
     /// Set when tracking locations: the original source and its file name.
     source: []const u8 = "",
     file: []const u8 = "",
@@ -189,6 +209,35 @@ const Parser = struct {
             // Datum comment: discard the next form, return the one after it.
             _ = try self.parse_form();
             return self.parse_form();
+        }
+        if (std.mem.eql(u8, token, "#!fold-case")) {
+            self.fold_case = true;
+            return self.parse_form();
+        }
+        if (std.mem.eql(u8, token, "#!no-fold-case")) {
+            self.fold_case = false;
+            return self.parse_form();
+        }
+        // Datum labels: `#n=<datum>` defines label n, `#n#` refers to it.
+        if (token.len >= 3 and token[0] == '#' and std.ascii.isDigit(token[1])) {
+            const last = token[token.len - 1];
+            if (last == '=' or last == '#') {
+                const n = std.fmt.parseInt(usize, token[1 .. token.len - 1], 10) catch return parse_atom(token, self.allocator);
+                if (last == '#') {
+                    return self.labels.get(n) orelse ElzError.InvalidArgument;
+                }
+                // The datum may refer to itself: bind the label to a placeholder
+                // first, then replace every reference to it with the datum.
+                const placeholder = try self.allocator.create(core.Pair);
+                placeholder.* = .{ .car = .nil, .cdr = .nil };
+                try self.labels.put(self.allocator, n, Value{ .pair = placeholder });
+                const datum = try self.parse_form();
+                try self.labels.put(self.allocator, n, datum);
+                var seen: std.AutoHashMapUnmanaged(usize, void) = .empty;
+                defer seen.deinit(self.allocator);
+                try self.patchLabel(datum, placeholder, datum, &seen);
+                return datum;
+            }
         }
         // Quote and quasiquote-family shorthand: each wraps the next form in a one-arg
         // application of the corresponding special form.
@@ -288,6 +337,11 @@ const Parser = struct {
                     self.position += 1;
                     if (values.items.len == 0) return ElzError.InvalidDottedPair;
                     const cdr = try self.parse_form();
+                    // Datum comments may follow the tail: `(a . b #;c)`.
+                    while (self.position < self.tokens.items.len and std.mem.eql(u8, self.tokens.items[self.position], "#;")) {
+                        self.position += 1;
+                        _ = try self.parse_form();
+                    }
                     if (self.position >= self.tokens.items.len or !std.mem.eql(u8, self.tokens.items[self.position], ")")) {
                         return ElzError.InvalidDottedPair;
                     }
@@ -306,8 +360,36 @@ const Parser = struct {
             }
         } else if (std.mem.eql(u8, token, ")")) {
             return ElzError.UnexpectedCloseParen;
+        } else if (std.mem.eql(u8, token, ".")) {
+            // A lone dot is only valid inside a list, where the list loop consumes it.
+            return ElzError.InvalidDottedPair;
         } else {
-            return parse_atom(token, self.allocator);
+            const atom = try parse_atom(token, self.allocator);
+            if (self.fold_case and atom == .symbol) {
+                const folded = try self.allocator.dupe(u8, atom.symbol);
+                for (folded) |*c| c.* = std.ascii.toLower(c.*);
+                return Value{ .symbol = folded };
+            }
+            return atom;
+        }
+    }
+
+    /// Replaces every reference to `placeholder` inside `value` with `target`.
+    fn patchLabel(self: *Parser, value: Value, placeholder: *core.Pair, target: Value, seen: *std.AutoHashMapUnmanaged(usize, void)) ElzError!void {
+        switch (value) {
+            .pair => |p| {
+                if (p == placeholder) return;
+                if ((try seen.getOrPut(self.allocator, @intFromPtr(p))).found_existing) return;
+                if (p.car == .pair and p.car.pair == placeholder) p.car = target else try self.patchLabel(p.car, placeholder, target, seen);
+                if (p.cdr == .pair and p.cdr.pair == placeholder) p.cdr = target else try self.patchLabel(p.cdr, placeholder, target, seen);
+            },
+            .vector => |v| {
+                if ((try seen.getOrPut(self.allocator, @intFromPtr(v))).found_existing) return;
+                for (v.items) |*item| {
+                    if (item.* == .pair and item.*.pair == placeholder) item.* = target else try self.patchLabel(item.*, placeholder, target, seen);
+                }
+            },
+            else => {},
         }
     }
 };
@@ -389,6 +471,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
                     '0' => try unescaped.append(allocator, 0),
                     '\\' => try unescaped.append(allocator, '\\'),
                     '"' => try unescaped.append(allocator, '"'),
+                    '|' => try unescaped.append(allocator, '|'),
                     'x', 'X' => {
                         // \xHH...; hex escape, terminated by a semicolon.
                         const semi = std.mem.indexOfScalarPos(u8, token, i + 2, ';') orelse return ElzError.UnterminatedString;
@@ -691,6 +774,7 @@ pub fn read(source: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         .position = 0,
         .allocator = allocator,
     };
+    defer parser.labels.deinit(allocator);
     return parser.parse_form();
 }
 
@@ -707,6 +791,7 @@ pub fn readOne(source: []const u8, allocator: std.mem.Allocator) ElzError!?struc
         .allocator = allocator,
         .source = source,
     };
+    defer p.labels.deinit(allocator);
     const v = try p.parse_form();
     const consumed = if (p.position < p.tokens.items.len) blk: {
         const next_tok = p.tokens.items[p.position];
@@ -745,6 +830,7 @@ pub fn readAllTracked(source: []const u8, allocator: std.mem.Allocator, file: []
         .file = file,
         .locations = locations,
     };
+    defer parser.labels.deinit(allocator);
 
     var forms = std.ArrayListUnmanaged(Value).empty;
     while (parser.position < parser.tokens.items.len) {

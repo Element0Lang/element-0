@@ -38,38 +38,16 @@ fn toI64(v: Value) ElzError!i64 {
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a single symbol.
-/// Simple one-to-one Unicode case mapping covering ASCII, Latin-1, Greek,
-/// and Cyrillic. Multi-character special casings (like the German sharp s
-/// to "SS") are not applied.
+const unicode = @import("../unicode.zig");
+
 fn unicodeUpcase(c: u32) u32 {
-    if (c < 128) return std.ascii.toUpper(@intCast(c));
-    return switch (c) {
-        0x00E0...0x00F6, 0x00F8...0x00FE => c - 0x20, // Latin-1
-        0x03B1...0x03C1, 0x03C3...0x03C9 => c - 0x20, // Greek alpha to omega
-        0x03C2 => 0x03A3, // final sigma
-        0x03AC => 0x0386,
-        0x03AD...0x03AF => c - 0x25,
-        0x03CC => 0x038C,
-        0x03CD...0x03CE => c - 0x3F,
-        0x0430...0x044F => c - 0x20, // Cyrillic
-        0x0450...0x045F => c - 0x50,
-        else => c,
-    };
+    if (c > 0x10FFFF) return c;
+    return unicode.toUpper(@intCast(c));
 }
 
 fn unicodeDowncase(c: u32) u32 {
-    if (c < 128) return std.ascii.toLower(@intCast(c));
-    return switch (c) {
-        0x00C0...0x00D6, 0x00D8...0x00DE => c + 0x20, // Latin-1
-        0x0391...0x03A1, 0x03A3...0x03A9 => c + 0x20, // Greek
-        0x0386 => 0x03AC,
-        0x0388...0x038A => c + 0x25,
-        0x038C => 0x03CC,
-        0x038E...0x038F => c + 0x3F,
-        0x0410...0x042F => c + 0x20, // Cyrillic
-        0x0400...0x040F => c + 0x50,
-        else => c,
-    };
+    if (c > 0x10FFFF) return c;
+    return unicode.toLower(@intCast(c));
 }
 
 /// Resolves optional character-indexed [start [end]] arguments (starting at
@@ -114,13 +92,14 @@ fn sliceByChars(str: []const u8, args: []const Value, from: usize) ElzError![]co
     return str[byte_start..byte_end];
 }
 
-/// Case-folds a character using the simple Unicode case mapping.
+/// Case-folds a character using the simple Unicode case folding.
 fn foldChar(c: u32) u32 {
-    return unicodeDowncase(c);
+    if (c > 0x10FFFF) return c;
+    return unicode.foldCase(@intCast(c));
 }
 
-fn isAsciiClass(c: u32, comptime pred: fn (u8) bool) bool {
-    if (c >= 128) return false;
+fn unicodeClass(c: u32, comptime pred: fn (u21) bool) bool {
+    if (c > 0x10FFFF) return false;
     return pred(@intCast(c));
 }
 
@@ -265,31 +244,31 @@ pub fn char_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 pub fn char_alphabetic_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isAlphabetic) };
+    return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isAlphabetic) };
 }
 
 pub fn char_numeric_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isDigit) };
+    return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isNumeric) };
 }
 
 pub fn char_whitespace_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isWhitespace) };
+    return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isWhitespace) };
 }
 
 pub fn char_upper_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isUpper) };
+    return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isUpper) };
 }
 
 pub fn char_lower_case_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
-    return Value{ .boolean = isAsciiClass(args.items[0].character, std.ascii.isLower) };
+    return Value{ .boolean = unicodeClass(args.items[0].character, unicode.isLower) };
 }
 
 pub fn char_upcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -302,6 +281,59 @@ pub fn char_downcase(_: *interpreter.Interpreter, _: *core.Environment, args: co
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .character) return ElzError.InvalidArgument;
     return Value{ .character = unicodeDowncase(args.items[0].character) };
+}
+
+pub fn char_foldcase(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    return Value{ .character = foldChar(args.items[0].character) };
+}
+
+/// `digit_value` returns the value of a decimal digit character, or #f.
+pub fn digit_value(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .character) return ElzError.InvalidArgument;
+    const c = args.items[0].character;
+    if (c > 0x10FFFF) return Value{ .boolean = false };
+    if (unicode.digitValue(@intCast(c))) |d| return Value{ .exact_integer = d };
+    return Value{ .boolean = false };
+}
+
+const CaseOp = enum { upper, lower, fold };
+
+/// Applies a full (possibly one-to-many) case mapping to every character.
+fn mapStringCase(env: *core.Environment, args: core.ValueList, comptime op: CaseOp) ElzError!Value {
+    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .string) return ElzError.InvalidArgument;
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(env.allocator);
+    var it = std.unicode.Utf8View.initUnchecked(args.items[0].string.bytes).iterator();
+    while (it.nextCodepoint()) |cp| {
+        var one: [1]u21 = undefined;
+        const mapped = switch (op) {
+            .upper => unicode.fullUpper(cp, &one),
+            .lower => unicode.fullLower(cp, &one),
+            .fold => unicode.fullFold(cp, &one),
+        };
+        for (mapped) |m| {
+            var buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(m, &buf) catch return ElzError.InvalidArgument;
+            try out.appendSlice(env.allocator, buf[0..len]);
+        }
+    }
+    return core.makeString(env.allocator, try out.toOwnedSlice(env.allocator));
+}
+
+pub fn string_upcase(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    return mapStringCase(env, args, .upper);
+}
+
+pub fn string_downcase(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    return mapStringCase(env, args, .lower);
+}
+
+pub fn string_foldcase(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    return mapStringCase(env, args, .fold);
 }
 
 /// `char_to_integer` converts a character to its Unicode code point.
@@ -593,19 +625,36 @@ pub fn string_ge(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     return chainStrings(args, false, okGe);
 }
 
+/// Yields the full case folding of a string one code point at a time, so
+/// `string-ci=?` compares as if both strings had been passed through
+/// `string-foldcase` (R7RS 6.7).
+const FoldIter = struct {
+    it: std.unicode.Utf8Iterator,
+    pending: []const u21 = &.{},
+    one: [1]u21 = undefined,
+
+    fn next(self: *FoldIter) ?u21 {
+        if (self.pending.len == 0) {
+            const cp = self.it.nextCodepoint() orelse return null;
+            self.pending = unicode.fullFold(cp, &self.one);
+        }
+        const c = self.pending[0];
+        self.pending = self.pending[1..];
+        return c;
+    }
+};
+
 fn string_ci_compare(a: []const u8, b: []const u8) std.math.Order {
-    var ia = std.unicode.Utf8View.initUnchecked(a).iterator();
-    var ib = std.unicode.Utf8View.initUnchecked(b).iterator();
+    var ia = FoldIter{ .it = std.unicode.Utf8View.initUnchecked(a).iterator() };
+    var ib = FoldIter{ .it = std.unicode.Utf8View.initUnchecked(b).iterator() };
     while (true) {
-        const ca = ia.nextCodepoint();
-        const cb = ib.nextCodepoint();
+        const ca = ia.next();
+        const cb = ib.next();
         if (ca == null and cb == null) return .eq;
         if (ca == null) return .lt;
         if (cb == null) return .gt;
-        const la: u32 = foldChar(ca.?);
-        const lb: u32 = foldChar(cb.?);
-        if (la < lb) return .lt;
-        if (la > lb) return .gt;
+        if (ca.? < cb.?) return .lt;
+        if (ca.? > cb.?) return .gt;
     }
 }
 
