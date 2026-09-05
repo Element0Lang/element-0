@@ -22,18 +22,18 @@ A small embeddable Lisp for the Zig ecosystem λ
 Element 0 is a small scripting language that can be embedded in Zig applications.
 It is a new Lisp dialect inspired by Scheme with features like first-class functions, macros, and a simple syntax.
 
-This project provides an implmenation of Element 0 (a compiler and virtual machine).
+This project provides an implementation of Element 0 (a compiler and virtual machine).
 The implementation is named Elz (pronounced "el-zee") and can be easily integrated into Zig applications as a scripting engine.
 
 ### Key Features
 
-* Small langauge with a growing standard library (see [std.elz](src/stdlib/std.elz))
+* Small language with a growing standard library (see [std.elz](src/stdlib/std.elz))
 * Easy to integrate into Zig projects as a lightweight scripting engine
 * Easy to extend with Zig functions via the use of FFI or directly writing Element 0 code
-* A ggod tradeoff between performance and simplicity
+* A good tradeoff between performance and simplicity
 
-See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features, and the
-[language reference](docs/language-reference.md) for the language as implemented.
+See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features. The language follows R7RS-small;
+the vendored conformance suite (`make test-conformance`) shows the current coverage.
 
 > [!IMPORTANT]
 > This project is in early development, so bugs and breaking changes are expected.
@@ -237,6 +237,6 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 
 * The logo is made by [Conrad Barski, M.D.](https://www.lisperati.com/logo.html) with a few changes.
 * [Bestline](https://github.com/jart/bestline) is used for the REPL's line editing and history features.
-* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) R5RS test suite is used for compliance testing.
+* [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) R7RS test suite is used for conformance testing.
 * [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
 * [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.

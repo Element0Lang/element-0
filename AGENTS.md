@@ -46,6 +46,9 @@ Priorities, in order:
 - `src/lib.zig`: Main public API export module for embedding Elz as a library.
 - `src/main.zig`: REPL entry point (`elz-repl` binary).
 - `src/elz/core.zig`: Core value types, Environment, and Module definitions.
+- `src/elz/bigint.zig`: Arbitrary-precision exact integers over `std.math.big`.
+- `src/elz/unicode.zig`: Generated Unicode tables for character predicates and case mappings (regenerate with
+  `python3 tools/gen_unicode.py`).
 - `src/elz/interpreter.zig`: Main `Interpreter` struct.
 - `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
 - `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
@@ -58,13 +61,14 @@ Priorities, in order:
 - `src/elz/errors.zig`: Error types.
 - `src/elz/writer.zig`: Value serialization and display.
 - `src/elz/api_helpers.zig`: Public API helper functions.
-- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, hashmaps, io, ports, datetime,
-  os, modules, and process).
+- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, bytevectors,
+  records, hashmaps, io, ports, format, json, regex, datetime, os, modules, and process).
 - `src/stdlib/std.elz`: Standard library written in Element 0 itself.
 - `examples/zig/`: FFI examples showing how to call Zig functions from Element 0.
 - `examples/elz/`: Element 0 script examples.
-- `tests/`: Element 0 language-level tests (`test_stdlib.elz`, `test_advanced.elz`, `test_edge_cases.elz`, `test_regression.elz`,
-  `test_module_lib.elz`).
+- `tests/`: Element 0 language-level tests (`test_*.elz`), Zig property tests (`*_prop_test.zig`), Zig integration tests
+  (`*_integ_test.zig`), and the R7RS conformance harness (`r7rs_conformance.elz` over the suite vendored in `tests/vendor/`).
+- `tools/`: Development scripts, currently the Unicode table generator and its template.
 - `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
 - `Makefile`: GNU Make wrapper around `zig build`.
@@ -101,10 +105,10 @@ Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. 
 
 Managed via Zig's package manager (`build.zig.zon`):
 
-- Chilli: CLI framework for the REPL.
+- Chilli (v0.3.1): CLI framework for the REPL.
 - BDWGC (v8.2.12): Garbage collector.
-- Linenoise (v2.0): Line editing for the REPL (POSIX only).
-- Minish: Property-based testing framework.
+- Bestline: Line editing and history for the REPL.
+- Minish (v0.3.0): Property-based testing framework.
 
 ## Zig Conventions
 

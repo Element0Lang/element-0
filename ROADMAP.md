@@ -9,14 +9,14 @@ It outlines the features to be implemented and their current status.
 ### Design Decisions
 
 * Continuations are delimited, not first-class. Elz provides escape continuations
-  (`call/ec`, with `call-with-current-continuation` as an alias) and will add delimited
-  continuations (`shift`/`reset`, Phase 5) instead of full re-entrant `call/cc`. Full
+  (`call/ec`, with `call-with-current-continuation` as an alias) and delimited
+  continuations (`shift`/`reset`) instead of full re-entrant `call/cc`. Full
   `call/cc` interacts badly with the Zig FFI boundary because native frames cannot be
   captured. Delimited continuations cover the practical use cases, such as generators,
   early exit, and async patterns. This is a deliberate, permanent departure from the
   standard, and it matches what practical embedded Schemes do.
-* The numeric tower is kept. Exact integers, exact rationals, complex numbers, and
-  exact/inexact tagging are already implemented.
+* The numeric tower is kept. Exact integers of arbitrary size, exact rationals, complex
+  numbers, and exact/inexact tagging are implemented.
 
 ---
 
@@ -43,9 +43,9 @@ The R5RS core is complete and verified by the test suite.
   `and`, `or`, `when`, `unless`, `do`, `delay`, and internal definitions.
 * Bytecode VM: stack-based with call frames and upvalues. Proper tail calls are
   implemented with a dedicated `tail_call` opcode that reuses the current frame.
-* Macros: `define-syntax`, `let-syntax`, `letrec-syntax`, and `syntax-rules` with tail
-  ellipsis and identifier-renaming hygiene, plus `define-macro` for procedural macros.
-  Nested and mid-list ellipsis are not yet supported; see Phase 2.
+* Macros: `define-syntax`, `let-syntax`, `letrec-syntax`, and `syntax-rules` with nested
+  and mid-list ellipsis, custom ellipsis identifiers, and hygiene (introduced identifiers
+  resolve from the definition scope), plus `define-macro` for procedural macros.
 * Standard procedures: equivalence and type predicates, the full pair and list section,
   numeric operations with radix-aware `number->string` and `string->number`, the full
   string and character sections (including all `-ci` comparisons), vectors, hash maps,
@@ -151,8 +151,8 @@ This phase aligns existing machinery (`try`/`catch`, modules, `getenv`, and
     * [x] `guard`
     * [x] `error` (raises an error object through the try/catch channel)
     * [x] `error-object?`, `error-object-message`, `error-object-irritants`
-    * [x] `read-error?`, `file-error?` (predicates exist; internal read and file
-      errors are not yet raised as kinded error objects)
+    * [x] `read-error?`, `file-error?` (read and file errors raised by the runtime are
+      error objects of the matching kind)
 * Dynamic binding
     * [x] `make-parameter`, `parameterize`
 * Process context (`(scheme process-context)`)
@@ -186,8 +186,8 @@ the capture point.
   do not re-fire when a captured segment is reinstated)
 * [x] FFI boundary rule (prompts are per VM run, so a shift inside a nested
   native call raises instead of capturing across the boundary)
-* [x] Documentation of the `call/cc` = `call/ec` semantics in the manual
-  (see `docs/language-reference.md`)
+* [ ] Documentation of the `call/cc` = `call/ec` semantics (the language reference was
+  removed pending a rewrite; see the design decisions above)
 
 ---
 
@@ -197,9 +197,10 @@ the capture point.
   the compiler carries them into a per-instruction line table, and uncaught
   runtime errors report `At: file:line`. Stack traces remain future work.
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
-  `tests/vendor/` and runs via `make test-conformance`. Current score: 888 of
-  977 checks pass (91 percent). The suite reports but does not gate the build.
-* [x] Documentation: `docs/language-reference.md` covers the lexical syntax, special
-  forms, standard procedures, extensions, and deviations. The embedding API is
-  covered by the generated API documentation.
+  `tests/vendor/` and runs via `make test-conformance`. Current score: 976 of
+  977 checks pass. The remaining case re-enters a `dynamic-wind` through a full
+  continuation. The suite reports but does not gate the build.
+* [ ] Documentation: a language reference covering the lexical syntax, special forms,
+  standard procedures, extensions, and deviations (removed pending a rewrite). The
+  embedding API is covered by the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
