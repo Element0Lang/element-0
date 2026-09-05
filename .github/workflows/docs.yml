@@ -1,4 +1,4 @@
-name: Publish Documentation
+name: Publish Documentation (MkDocs and Zig API)
 
 on:
   workflow_dispatch:
