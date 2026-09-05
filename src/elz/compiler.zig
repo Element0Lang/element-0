@@ -419,7 +419,7 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, sym, "include-ci")) return self.compileInclude(args, env, tail, true, fuel);
         if (std.mem.eql(u8, sym, "syntax-error")) {
             if (args == .pair and args.pair.car == .string) {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string}) catch null;
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "syntax-error: {s}", .{args.pair.car.string.bytes}) catch null;
             } else {
                 self.interp.last_error_message = "syntax-error";
             }
@@ -1556,13 +1556,13 @@ pub const Compiler = struct {
         while (cur == .pair) : (cur = cur.pair.cdr) {
             const filename_val = cur.pair.car;
             if (filename_val != .string) return ElzError.InvalidArgument;
-            if (!self.interp.beginLoading(filename_val.string)) {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: '{s}' includes itself", .{filename_val.string}) catch null;
+            if (!self.interp.beginLoading(filename_val.string.bytes)) {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: '{s}' includes itself", .{filename_val.string.bytes}) catch null;
                 return ElzError.InvalidArgument;
             }
-            defer self.interp.endLoading(filename_val.string);
-            const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, filename_val.string, self.allocator, .limited(1 * 1024 * 1024)) catch {
-                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: cannot read '{s}'", .{filename_val.string}) catch null;
+            defer self.interp.endLoading(filename_val.string.bytes);
+            const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, filename_val.string.bytes, self.allocator, .limited(1 * 1024 * 1024)) catch {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: cannot read '{s}'", .{filename_val.string.bytes}) catch null;
                 return ElzError.FileNotFound;
             };
             var forms = @import("parser.zig").readAll(source, self.allocator) catch |e| return e;
@@ -1928,7 +1928,7 @@ pub const Compiler = struct {
                 var f = clause.pair.cdr;
                 while (f == .pair) : (f = f.pair.cdr) {
                     if (f.pair.car != .string) return ElzError.InvalidArgument;
-                    const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, f.pair.car.string, self.allocator, .limited(1 * 1024 * 1024)) catch return ElzError.FileNotFound;
+                    const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, f.pair.car.string.bytes, self.allocator, .limited(1 * 1024 * 1024)) catch return ElzError.FileNotFound;
                     var forms = @import("parser.zig").readAll(source, self.allocator) catch |e| return e;
                     defer forms.deinit(self.allocator);
                     for (forms.items) |form| {

@@ -109,7 +109,7 @@ pub fn is_hash_map(_: *interpreter.Interpreter, _: *core.Environment, args: core
 /// Helper function to get a string key from a value.
 fn getKeyString(val: Value) ?[]const u8 {
     return switch (val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         .symbol => |s| s,
         else => null,
     };
@@ -130,14 +130,14 @@ test "hash_map primitives" {
     // Test hash_map_set and hash_map_get
     args.clearRetainingCapacity();
     try args.append(hm_val);
-    try args.append(Value{ .string = "key1" });
+    try args.append((try core.makeString(interp.allocator, "key1")));
     try args.append(Value{ .number = 42 });
     _ = try hash_map_set(&interp, interp.root_env, args, &fuel);
 
     // Test hash_map_get
     args.clearRetainingCapacity();
     try args.append(hm_val);
-    try args.append(Value{ .string = "key1" });
+    try args.append((try core.makeString(interp.allocator, "key1")));
     const get_result = try hash_map_get(&interp, interp.root_env, args, &fuel);
     try testing.expect(get_result == .number);
     try testing.expectEqual(get_result.number, 42);
@@ -162,7 +162,7 @@ test "hash_map primitives" {
     // Test hash_map_remove
     args.clearRetainingCapacity();
     try args.append(hm_val);
-    try args.append(Value{ .string = "key1" });
+    try args.append((try core.makeString(interp.allocator, "key1")));
     const remove_result = try hash_map_remove(&interp, interp.root_env, args, &fuel);
     try testing.expect(remove_result == .boolean);
     try testing.expect(remove_result.boolean == true);

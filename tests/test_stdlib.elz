@@ -1205,9 +1205,10 @@
     (= (string-length (read-line port)) 5000)))
 
 ;; --- string-fill! keeps the character count ---
-(test-case "string-fill! refuses a fill of a different byte width"
+(test-case "string-fill! accepts a fill of a different byte width"
   (let ((s (string-copy "a\xe9;b")))
-    (eq? 'caught (try (begin (string-fill! s #\x) 'filled) (catch e 'caught)))))
+    (string-fill! s #\x)
+    (and (string=? "xxx" s) (= 3 (string-length s)))))
 (test-case "string-fill! works on same-width characters"
   (let ((s (string-copy "abc")))
     (string-fill! s #\z)

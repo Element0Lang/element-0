@@ -14,7 +14,7 @@ pub fn open_input_file(interp: *interpreter.Interpreter, env: *core.Environment,
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openInput(env.allocator, interp.io, filename_val.string) catch return ElzError.FileNotFound;
+    port.* = core.Port.openInput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotFound;
 
     return Value{ .port = port };
 }
@@ -28,7 +28,7 @@ pub fn open_output_file(interp: *interpreter.Interpreter, env: *core.Environment
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    port.* = core.Port.openOutput(env.allocator, interp.io, filename_val.string) catch return ElzError.FileNotWritable;
+    port.* = core.Port.openOutput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotWritable;
 
     return Value{ .port = port };
 }
@@ -75,7 +75,7 @@ pub fn read_line(interp: *interpreter.Interpreter, env: *core.Environment, args:
     const port = try inputPortArg(interp, args);
     const line = port.readLine(env.allocator) catch return ElzError.IOError;
     if (line) |l| {
-        return Value{ .string = l };
+        return (try core.makeString(env.allocator, l));
     }
     return EOF_VALUE;
 }
@@ -121,7 +121,7 @@ pub fn read_string_k(interp: *interpreter.Interpreter, env: *core.Environment, a
         out.appendSlice(env.allocator, buf[0..len]) catch return ElzError.OutOfMemory;
     }
     if (count == 0 and k > 0) return EOF_VALUE;
-    return Value{ .string = out.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory };
+    return (try core.makeString(env.allocator, out.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory));
 }
 
 /// `char_ready_p` reports whether a character is available on an input port.
@@ -169,7 +169,7 @@ pub fn write_to_port(_: *interpreter.Interpreter, _: *core.Environment, args: co
     if (str_val != .string) return ElzError.InvalidArgument;
     if (port_val != .port) return ElzError.InvalidArgument;
 
-    port_val.port.writeString(str_val.string) catch return ElzError.IOError;
+    port_val.port.writeString(str_val.string.bytes) catch return ElzError.IOError;
     return Value.unspecified;
 }
 
@@ -397,7 +397,7 @@ pub fn open_input_string(_: *interpreter.Interpreter, env: *core.Environment, ar
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
-    const source = env.allocator.dupe(u8, str_val.string) catch return ElzError.OutOfMemory;
+    const source = env.allocator.dupe(u8, str_val.string.bytes) catch return ElzError.OutOfMemory;
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.fromString(env.allocator, source) catch return ElzError.OutOfMemory;
     return Value{ .port = port };
@@ -419,7 +419,7 @@ pub fn get_output_string(_: *interpreter.Interpreter, env: *core.Environment, ar
     const port_val = args.items[0];
     if (port_val != .port) return ElzError.InvalidArgument;
     const s = port_val.port.getString(env.allocator) catch return ElzError.InvalidArgument;
-    return Value{ .string = s };
+    return (try core.makeString(env.allocator, s));
 }
 
 /// `set_current_input_port_bang` replaces the interpreter's current input port.
@@ -469,7 +469,7 @@ test "port primitives" {
 
     // Test is_input_port with non-port
     args.clearRetainingCapacity();
-    try args.append(Value{ .string = "not a port" });
+    try args.append((try core.makeString(interp.allocator, "not a port")));
     const is_input_result = try is_input_port(&interp, interp.root_env, args, &fuel);
     try testing.expect(is_input_result == .boolean);
     try testing.expect(is_input_result.boolean == false);
@@ -488,7 +488,7 @@ test "string port primitives" {
 
     // open-input-string / read-char
     var args = core.ValueList.init(interp.allocator);
-    try args.append(Value{ .string = "hi" });
+    try args.append((try core.makeString(interp.allocator, "hi")));
     const in_port_val = try open_input_string(&interp, interp.root_env, args, &fuel);
     try testing.expect(in_port_val == .port);
     try testing.expect(in_port_val.port.is_input);
@@ -518,7 +518,7 @@ test "string port primitives" {
     try args.append(out_port_val);
     const str_val = try get_output_string(&interp, interp.root_env, args, &fuel);
     try testing.expect(str_val == .string);
-    try testing.expectEqualStrings("hello world", str_val.string);
+    try testing.expectEqualStrings("hello world", str_val.string.bytes);
 }
 
 // ---------------------------------------------------------------------------

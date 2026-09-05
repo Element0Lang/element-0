@@ -96,7 +96,7 @@ pub fn Caster(comptime T: type) type {
                     if (ptr_info.size == .slice and ptr_info.child == u8) {
                         // []const u8 - extract from string value
                         return switch (v) {
-                            .string => |s| s,
+                            .string => |s| s.bytes,
                             .symbol => |s| s,
                             else => ElzError.InvalidArgument,
                         };
@@ -287,7 +287,7 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
         .bool => core.Value{ .boolean = value },
         .pointer => |ptr_info| {
             if (ptr_info.size == .slice and ptr_info.child == u8) {
-                return core.Value{ .string = allocator.dupe(u8, value) catch return core.Value.nil };
+                return core.copyString(allocator, value) catch return core.Value.nil;
             } else {
                 @compileError("Unsupported pointer return type for FFI: " ++ @typeName(T));
             }
@@ -423,7 +423,8 @@ test "Caster bool from non-boolean" {
 }
 
 test "Caster string from string value" {
-    const result = try Caster([]const u8).cast(core.Value{ .string = "hello" });
+    var hello = core.MString{ .bytes = @constCast("hello") };
+    const result = try Caster([]const u8).cast(core.Value{ .string = &hello });
     try std.testing.expectEqualStrings("hello", result);
 }
 
@@ -452,8 +453,9 @@ test "valueFromNative string" {
     const allocator = std.testing.allocator;
     const result = valueFromNative(allocator, @as([]const u8, "hello"));
     try std.testing.expect(result == .string);
-    try std.testing.expectEqualStrings("hello", result.string);
-    allocator.free(result.string);
+    try std.testing.expectEqualStrings("hello", result.string.bytes);
+    allocator.free(result.string.bytes);
+    allocator.destroy(result.string);
 }
 
 test "valueFromNative optional some" {

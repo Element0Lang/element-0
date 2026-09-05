@@ -422,7 +422,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
                 i += 1;
             }
         }
-        return Value{ .string = try unescaped.toOwnedSlice(allocator) };
+        return (try core.makeString(allocator, try unescaped.toOwnedSlice(allocator)));
     }
     if (token.len >= 2 and token[0] == '|' and token[token.len - 1] == '|') {
         var name = std.ArrayListUnmanaged(u8).empty;
@@ -774,7 +774,7 @@ test "parser" {
     // Test parsing a string
     value = try read("\"hello world\"", allocator);
     try testing.expect(value == .string);
-    try testing.expectEqualStrings("hello world", value.string);
+    try testing.expectEqualStrings("hello world", value.string.bytes);
 
     // Test parsing a list
     value = try read("(+ 1 2)", allocator);

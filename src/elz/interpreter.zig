@@ -252,7 +252,7 @@ pub const Interpreter = struct {
             self.last_error_message = "import: filesystem access is disabled";
             return core.ElzError.PermissionDenied;
         }
-        const path_str = path_val.string;
+        const path_str = path_val.string.bytes;
 
         if (self.module_cache.get(path_str)) |cached_mod_ptr| {
             return core.Value{ .module = cached_mod_ptr };

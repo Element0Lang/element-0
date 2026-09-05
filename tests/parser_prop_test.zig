@@ -105,7 +105,7 @@ test "property: simple string parse-write roundtrip" {
 
                 const value = elz.parser.read(source[0 .. 2 + len], alloc) catch return error.TestUnexpectedResult;
                 if (value != .string) return error.TestUnexpectedResult;
-                if (value.string.len != len) return error.TestUnexpectedResult;
+                if (value.string.bytes.len != len) return error.TestUnexpectedResult;
             }
         }.property,
         .{ .num_runs = 100 },

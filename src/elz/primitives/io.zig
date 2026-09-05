@@ -120,7 +120,7 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     const filename_val = args.items[0];
     if (filename_val != .string) return ElzError.InvalidArgument;
 
-    const filename = filename_val.string;
+    const filename = filename_val.string.bytes;
     if (!interp.beginLoading(filename)) {
         interp.last_error_message = std.fmt.allocPrint(interp.allocator, "load: '{s}' loads itself", .{filename}) catch null;
         return ElzError.InvalidArgument;
@@ -163,7 +163,7 @@ pub fn read_string(interp: *interpreter.Interpreter, env: *core.Environment, arg
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
 
-    const source = str_val.string;
+    const source = str_val.string.bytes;
     return parser.read(source, env.allocator) catch |err| switch (err) {
         // Match the port-based `read` and produce the eof object for empty input rather
         // than surfacing a parser-internal error.
@@ -186,7 +186,7 @@ test "io primitives" {
     file.writeStreamingAll(interp.io, "(define x 42)") catch unreachable;
 
     var args = core.ValueList.init(interp.allocator);
-    try args.append(Value{ .string = filename });
+    try args.append((try core.makeString(interp.allocator, filename)));
 
     _ = try load(&interp, interp.root_env, args, &fuel);
 

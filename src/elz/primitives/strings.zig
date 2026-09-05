@@ -142,7 +142,7 @@ fn chainStrings(args: core.ValueList, comptime ci: bool, comptime ok: fn (std.ma
     if (args.items.len < 2) return ElzError.WrongArgumentCount;
     for (args.items[0 .. args.items.len - 1], args.items[1..]) |a, b| {
         if (a != .string or b != .string) return ElzError.InvalidArgument;
-        const o = if (ci) string_ci_compare(a.string, b.string) else std.mem.order(u8, a.string, b.string);
+        const o = if (ci) string_ci_compare(a.string.bytes, b.string.bytes) else std.mem.order(u8, a.string.bytes, b.string.bytes);
         if (!ok(o)) return Value{ .boolean = false };
     }
     return Value{ .boolean = true };
@@ -169,7 +169,7 @@ pub fn symbol_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
     const sym = args.items[0];
     if (sym != .symbol) return ElzError.InvalidArgument;
     const str = try env.allocator.dupe(u8, sym.symbol);
-    return Value{ .string = str };
+    return (try core.makeString(env.allocator, str));
 }
 
 /// `string_to_symbol` converts a string to a symbol.
@@ -180,7 +180,7 @@ pub fn string_to_symbol(_: *interpreter.Interpreter, env: *core.Environment, arg
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str = args.items[0];
     if (str != .string) return ElzError.InvalidArgument;
-    const sym = try env.allocator.dupe(u8, str.string);
+    const sym = try env.allocator.dupe(u8, str.string.bytes);
     return Value{ .symbol = sym };
 }
 
@@ -192,7 +192,7 @@ pub fn string_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str = args.items[0];
     if (str != .string) return ElzError.InvalidArgument;
-    const len = std.unicode.utf8CountCodepoints(str.string) catch return ElzError.InvalidArgument;
+    const len = std.unicode.utf8CountCodepoints(str.string.bytes) catch return ElzError.InvalidArgument;
     return Value{ .exact_integer = @intCast(len) };
 }
 
@@ -206,12 +206,12 @@ pub fn string_append(_: *interpreter.Interpreter, env: *core.Environment, args: 
 
     for (args.items) |arg| {
         switch (arg) {
-            .string => |s| try buffer.appendSlice(env.allocator, s),
+            .string => |s| try buffer.appendSlice(env.allocator, s.bytes),
             else => return ElzError.InvalidArgument,
         }
     }
 
-    return Value{ .string = try buffer.toOwnedSlice(env.allocator) };
+    return (try core.makeString(env.allocator, try buffer.toOwnedSlice(env.allocator)));
 }
 
 /// `char_eq` checks if two characters are equal.
@@ -332,7 +332,7 @@ pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     const idx_usize = try toIndex(args.items[1]);
 
     // Iterate through UTF-8 codepoints to find the character at the given index
-    var it = std.unicode.Utf8View.initUnchecked(str.string).iterator();
+    var it = std.unicode.Utf8View.initUnchecked(str.string.bytes).iterator();
     var current_idx: usize = 0;
     while (it.nextCodepoint()) |cp| {
         if (current_idx == idx_usize) {
@@ -361,14 +361,14 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 
     // Handle special case: empty substring from start
     if (start_idx == 0 and end_idx == 0) {
-        return Value{ .string = try env.allocator.dupe(u8, "") };
+        return (try core.makeString(env.allocator, try env.allocator.dupe(u8, "")));
     }
 
     // Find byte offsets for the character indices
-    var it = std.unicode.Utf8View.initUnchecked(str.string).iterator();
+    var it = std.unicode.Utf8View.initUnchecked(str.string.bytes).iterator();
     var current_idx: usize = 0;
     var start_byte: usize = 0;
-    var end_byte: usize = str.string.len;
+    var end_byte: usize = str.string.bytes.len;
     var found_start = start_idx == 0; // start_idx 0 is always at byte 0
     var found_end = false;
 
@@ -399,8 +399,8 @@ pub fn substring(_: *interpreter.Interpreter, env: *core.Environment, args: core
 
     if (start_byte > end_byte) return ElzError.InvalidArgument;
 
-    const result = try env.allocator.dupe(u8, str.string[start_byte..end_byte]);
-    return Value{ .string = result };
+    const result = try env.allocator.dupe(u8, str.string.bytes[start_byte..end_byte]);
+    return (try core.makeString(env.allocator, result));
 }
 
 /// `number_to_string` converts a number to its string representation.
@@ -419,7 +419,7 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
         const n = try toI64(num_val);
         var buf: [128]u8 = undefined;
         const len = std.fmt.printInt(&buf, n, radix, .lower, .{});
-        return Value{ .string = try env.allocator.dupe(u8, buf[0..len]) };
+        return (try core.makeString(env.allocator, try env.allocator.dupe(u8, buf[0..len])));
     }
 
     // Share the writer's number formatting so `number->string` and `write`
@@ -427,7 +427,7 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
     var aw: std.Io.Writer.Allocating = .init(env.allocator);
     defer aw.deinit();
     @import("../writer.zig").write(num_val, &aw.writer) catch return ElzError.OutOfMemory;
-    return Value{ .string = try env.allocator.dupe(u8, aw.written()) };
+    return (try core.makeString(env.allocator, try env.allocator.dupe(u8, aw.written())));
 }
 
 /// `string_to_number` converts a string to a number.
@@ -438,7 +438,7 @@ pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, arg
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
 
-    const str = str_val.string;
+    const str = str_val.string.bytes;
     const parser = @import("../parser.zig");
 
     if (args.items.len == 2) {
@@ -480,8 +480,8 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
     if (str_val != .string) return ElzError.InvalidArgument;
     if (delim_val != .string) return ElzError.InvalidArgument;
 
-    const str = str_val.string;
-    const delim = delim_val.string;
+    const str = str_val.string.bytes;
+    const delim = delim_val.string.bytes;
 
     if (delim.len == 0) return ElzError.InvalidArgument;
 
@@ -501,7 +501,7 @@ pub fn string_split(_: *interpreter.Interpreter, env: *core.Environment, args: c
         i -= 1;
         const pair = try env.allocator.create(core.Pair);
         pair.* = .{
-            .car = Value{ .string = try env.allocator.dupe(u8, temp_parts.items[i]) },
+            .car = (try core.makeString(env.allocator, try env.allocator.dupe(u8, temp_parts.items[i]))),
             .cdr = result,
         };
         result = Value{ .pair = pair };
@@ -523,7 +523,7 @@ pub fn string_from_chars(_: *interpreter.Interpreter, env: *core.Environment, ar
         const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
         try bytes.appendSlice(env.allocator, buf[0..len]);
     }
-    return Value{ .string = try bytes.toOwnedSlice(env.allocator) };
+    return (try core.makeString(env.allocator, try bytes.toOwnedSlice(env.allocator)));
 }
 
 /// `make_string` creates a string of k characters.
@@ -554,12 +554,12 @@ pub fn make_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
         while (i < length) : (i += 1) {
             @memcpy(result[i * char_len .. (i + 1) * char_len], char_buf[0..char_len]);
         }
-        return Value{ .string = result };
+        return (try core.makeString(env.allocator, result));
     } else {
         // Default fill is space
         const result = try env.allocator.alloc(u8, length);
         @memset(result, ' ');
-        return Value{ .string = result };
+        return (try core.makeString(env.allocator, result));
     }
 }
 
@@ -632,14 +632,14 @@ pub fn string_ci_ge(_: *interpreter.Interpreter, _: *core.Environment, args: cor
 pub fn string_copy(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
-    const slice = try sliceByChars(args.items[0].string, args.items, 1);
-    return Value{ .string = try env.allocator.dupe(u8, slice) };
+    const slice = try sliceByChars(args.items[0].string.bytes, args.items, 1);
+    return (try core.makeString(env.allocator, try env.allocator.dupe(u8, slice)));
 }
 
 pub fn string_to_list(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
-    const slice = try sliceByChars(args.items[0].string, args.items, 1);
+    const slice = try sliceByChars(args.items[0].string.bytes, args.items, 1);
     var it = std.unicode.Utf8View.initUnchecked(slice).iterator();
     var result: Value = .nil;
     var chars = std.ArrayListUnmanaged(u21).empty;
@@ -672,15 +672,17 @@ pub fn list_to_string(_: *interpreter.Interpreter, env: *core.Environment, args:
         node = node.pair.cdr;
     }
     if (node != .nil) return ElzError.InvalidArgument;
-    return Value{ .string = try bytes.toOwnedSlice(env.allocator) };
+    return (try core.makeString(env.allocator, try bytes.toOwnedSlice(env.allocator)));
 }
 
-pub fn string_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_set_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[2] != .character) return ElzError.InvalidArgument;
-    const s = args.items[0].string;
+    const str = args.items[0].string;
+    const s = str.bytes;
     const idx = try toIndex(args.items[1]);
+    if (args.items[2].character > 0x10FFFF) return ElzError.InvalidArgument;
     const cp_new: u21 = @intCast(args.items[2].character);
     var buf_new: [4]u8 = undefined;
     const len_new = std.unicode.utf8Encode(cp_new, &buf_new) catch return ElzError.InvalidArgument;
@@ -700,37 +702,45 @@ pub fn string_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: 
         cur += 1;
     }
     if (!found) return ElzError.InvalidArgument;
-    // The replacement must be the same byte width (ASCII-to-ASCII or same-width).
-    if (len_new != byte_end - byte_start) return ElzError.InvalidArgument;
-    const mutable: []u8 = @constCast(s);
-    @memcpy(mutable[byte_start..byte_end], buf_new[0..len_new]);
+    if (len_new == byte_end - byte_start) {
+        @memcpy(s[byte_start..byte_end], buf_new[0..len_new]);
+        return Value.unspecified;
+    }
+    // The encoded width changed: rebuild the buffer. Every alias shares the
+    // string object, so they all observe the new contents.
+    const new_len = s.len - (byte_end - byte_start) + len_new;
+    const rebuilt = env.allocator.alloc(u8, new_len) catch return ElzError.OutOfMemory;
+    @memcpy(rebuilt[0..byte_start], s[0..byte_start]);
+    @memcpy(rebuilt[byte_start .. byte_start + len_new], buf_new[0..len_new]);
+    @memcpy(rebuilt[byte_start + len_new ..], s[byte_end..]);
+    str.bytes = rebuilt;
     return Value.unspecified;
 }
 
-pub fn string_fill_bang(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_fill_bang(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 2) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[1] != .character) return ElzError.InvalidArgument;
-    const s = args.items[0].string;
+    const str = args.items[0].string;
+    const s = str.bytes;
+    if (args.items[1].character > 0x10FFFF) return ElzError.InvalidArgument;
     const cp: u21 = @intCast(args.items[1].character);
     var buf: [4]u8 = undefined;
     const char_len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
     const slice = try sliceByChars(s, args.items, 2);
-    // In-place fill: every character being replaced must have the same byte
-    // length as the fill character, since a string cannot be resized in place.
-    // Checking the total length alone would let a 2-character region of mixed
-    // widths turn into a region with a different character count.
-    var scan: usize = 0;
-    while (scan < slice.len) {
-        const width = std.unicode.utf8ByteSequenceLength(slice[scan]) catch return ElzError.InvalidArgument;
-        if (width != char_len) return ElzError.InvalidArgument;
-        scan += width;
-    }
-    const mutable: []u8 = @constCast(slice);
+    const start = @intFromPtr(slice.ptr) - @intFromPtr(s.ptr);
+    const end = start + slice.len;
+    const count = std.unicode.utf8CountCodepoints(slice) catch return ElzError.InvalidArgument;
+    // Rebuild: prefix, `count` copies of the fill character, suffix.
+    const new_len = start + count * char_len + (s.len - end);
+    const rebuilt = env.allocator.alloc(u8, new_len) catch return ElzError.OutOfMemory;
+    @memcpy(rebuilt[0..start], s[0..start]);
     var i: usize = 0;
-    while (i + char_len <= mutable.len) : (i += char_len) {
-        @memcpy(mutable[i .. i + char_len], buf[0..char_len]);
+    while (i < count) : (i += 1) {
+        @memcpy(rebuilt[start + i * char_len .. start + (i + 1) * char_len], buf[0..char_len]);
     }
+    @memcpy(rebuilt[start + count * char_len ..], s[end..]);
+    str.bytes = rebuilt;
     return Value.unspecified;
 }
 
@@ -740,7 +750,7 @@ pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: co
     const prefix = if (args.items.len >= 1) blk: {
         const p = args.items[0];
         if (p != .string and p != .symbol) return ElzError.InvalidArgument;
-        break :blk if (p == .string) p.string else p.symbol;
+        break :blk if (p == .string) p.string.bytes else p.symbol;
     } else "g";
 
     interp.gensym_counter += 1;
@@ -760,17 +770,17 @@ test "string primitives" {
     var args = core.ValueList.init(interp.allocator);
     try args.append(Value{ .symbol = "foo" });
     var result = try symbol_to_string(&interp, interp.root_env, args, &fuel);
-    try testing.expect(result == .string and std.mem.eql(u8, result.string, "foo"));
+    try testing.expect(result == .string and std.mem.eql(u8, result.string.bytes, "foo"));
 
     // Test string->symbol
     args.clearRetainingCapacity();
-    try args.append(Value{ .string = "bar" });
+    try args.append((try core.makeString(interp.allocator, "bar")));
     result = try string_to_symbol(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == .symbol and std.mem.eql(u8, result.symbol, "bar"));
 
     // Test string-length
     args.clearRetainingCapacity();
-    try args.append(Value{ .string = "hello" });
+    try args.append((try core.makeString(interp.allocator, "hello")));
     result = try string_length(&interp, interp.root_env, args, &fuel);
     try testing.expect(result == .exact_integer and result.exact_integer == 5);
 

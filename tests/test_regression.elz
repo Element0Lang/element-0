@@ -548,4 +548,18 @@
 (test-case "time->components rejects out-of-range input"
   (eq? 'caught (try (time->components 1e30) (catch e 'caught))))
 
+;; --- Strings are shared heap objects ---
+(test-case "string-set! may change the encoded width"
+  (equal? '("a🜀c" 3) (let ((s (string #\a #\b #\c))) (string-set! s 1 #\🜀) (list s (string-length s)))))
+(test-case "string-set! to a narrower character"
+  (string=? "abc" (let ((s (string-copy "aλc"))) (string-set! s 1 #\b) s)))
+(test-case "string-fill! with a wide character keeps the length"
+  (let ((s (string-copy "abcde"))) (string-fill! s #\λ 1 3) (and (string=? "aλλde" s) (= 5 (string-length s)))))
+(test-case "aliases observe a width-changing string-set!"
+  (let ((s (make-string 3 #\a))) (let ((t s)) (string-set! s 1 #\λ) (and (eq? s t) (string=? "aλa" t)))))
+(test-case "a string reached through a list is mutated in place"
+  (equal? '("λa") (let ((lst (list (make-string 2 #\a)))) (string-set! (car lst) 0 #\λ) lst)))
+(test-case "eqv? on strings is identity"
+  (let ((s (string-copy "abc"))) (and (eqv? s s) (not (eqv? s (string-copy "abc"))))))
+
 (report-summary)

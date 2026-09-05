@@ -75,7 +75,7 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
         // Perform structural comparison based on type.
         switch (a) {
             .string => |s1| {
-                if (!std.mem.eql(u8, s1, b.string)) return false;
+                if (!std.mem.eql(u8, s1.bytes, b.string.bytes)) return false;
             },
             .symbol => |s1| {
                 if (!std.mem.eql(u8, s1, b.symbol)) return false;
@@ -145,7 +145,7 @@ pub fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .string => |av| switch (b) {
-            .string => |bv| av.ptr == bv.ptr,
+            .string => |bv| av == bv,
             else => false,
         },
         .pair => |av| switch (b) {

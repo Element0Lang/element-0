@@ -22,7 +22,8 @@ fn currentTimeMs() i64 {
 
 fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     switch (value) {
-        .string => |s| {
+        .string => |ms| {
+            const s = ms.bytes;
             try writer.writeAll(s);
             if (s.len == 0 or s[s.len - 1] != '\n') {
                 try writer.writeAll("\n");
@@ -225,7 +226,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         defer argv_list.deinit(elz.gc_allocator);
         while (arg_it.next()) |arg| {
             const copy = try elz.gc_allocator.dupe(u8, arg);
-            try argv_list.append(elz.gc_allocator, elz.core.Value{ .string = copy });
+            try argv_list.append(elz.gc_allocator, try elz.core.makeString(elz.gc_allocator, copy));
         }
         var argv: elz.core.Value = .nil;
         var i = argv_list.items.len;

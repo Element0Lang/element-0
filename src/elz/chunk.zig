@@ -151,8 +151,6 @@ pub const FuncProto = struct {
         for (self.constants.items, 0..) |c, i| {
             if (c == .symbol and val == .symbol and
                 std.mem.eql(u8, c.symbol, val.symbol)) return @intCast(i);
-            if (c == .string and val == .string and
-                std.mem.eql(u8, c.string, val.string)) return @intCast(i);
         }
         // Constant indices are two bytes wide.
         if (self.constants.items.len >= std.math.maxInt(u16)) return errors.ElzError.TooManyLocals;

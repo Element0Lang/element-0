@@ -10,7 +10,7 @@ fn describeValue(allocator: std.mem.Allocator, v: core.Value) ?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     if (v == .string) {
-        aw.writer.writeAll(v.string) catch return null;
+        aw.writer.writeAll(v.string.bytes) catch return null;
     } else {
         writer_mod.write(v, &aw.writer) catch return null;
     }
@@ -213,7 +213,7 @@ pub fn with_input_from_file(interp: *interpreter.Interpreter, env: *core.Environ
     if (path_val != .string) return ElzError.InvalidArgument;
 
     const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    new_port.* = core.Port.openInput(env.allocator, interp.io, path_val.string) catch return ElzError.FileNotFound;
+    new_port.* = core.Port.openInput(env.allocator, interp.io, path_val.string.bytes) catch return ElzError.FileNotFound;
 
     const saved = interp.stdin_port;
     interp.stdin_port = new_port;
@@ -237,7 +237,7 @@ pub fn with_output_to_file(interp: *interpreter.Interpreter, env: *core.Environm
     if (path_val != .string) return ElzError.InvalidArgument;
 
     const new_port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
-    new_port.* = core.Port.openOutput(env.allocator, interp.io, path_val.string) catch return ElzError.FileNotWritable;
+    new_port.* = core.Port.openOutput(env.allocator, interp.io, path_val.string.bytes) catch return ElzError.FileNotWritable;
 
     const saved = interp.stdout_port;
     interp.stdout_port = new_port;

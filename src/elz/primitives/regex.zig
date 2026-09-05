@@ -295,8 +295,8 @@ pub fn regex_match(_: *interpreter.Interpreter, env: *core.Environment, args: co
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[1] != .string) return ElzError.InvalidArgument;
 
-    const pattern = args.items[0].string;
-    const input = args.items[1].string;
+    const pattern = args.items[0].string.bytes;
+    const input = args.items[1].string.bytes;
 
     var full = std.ArrayListUnmanaged(u8).empty;
     defer full.deinit(env.allocator);
@@ -316,8 +316,8 @@ pub fn regex_search(_: *interpreter.Interpreter, env: *core.Environment, args: c
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[1] != .string) return ElzError.InvalidArgument;
 
-    const pattern = args.items[0].string;
-    const input = args.items[1].string;
+    const pattern = args.items[0].string.bytes;
+    const input = args.items[1].string.bytes;
 
     const regex = compile(pattern, env.allocator) catch return ElzError.InvalidArgument;
     defer env.allocator.free(regex.nodes);
@@ -326,7 +326,7 @@ pub fn regex_search(_: *interpreter.Interpreter, env: *core.Environment, args: c
         const result = matchAt(regex, input, pos, env.allocator) catch return ElzError.OutOfMemory;
         if (result) |m| {
             if (m.end > m.start) {
-                return Value{ .string = env.allocator.dupe(u8, input[m.start..m.end]) catch return ElzError.OutOfMemory };
+                return (try core.makeString(env.allocator, env.allocator.dupe(u8, input[m.start..m.end]) catch return ElzError.OutOfMemory));
             }
         }
     }
@@ -339,9 +339,9 @@ pub fn regex_replace(_: *interpreter.Interpreter, env: *core.Environment, args: 
     if (args.items[1] != .string) return ElzError.InvalidArgument;
     if (args.items[2] != .string) return ElzError.InvalidArgument;
 
-    const pattern = args.items[0].string;
-    const replacement = args.items[1].string;
-    const input = args.items[2].string;
+    const pattern = args.items[0].string.bytes;
+    const replacement = args.items[1].string.bytes;
+    const input = args.items[2].string.bytes;
 
     const regex = compile(pattern, env.allocator) catch return ElzError.InvalidArgument;
     defer env.allocator.free(regex.nodes);
@@ -375,7 +375,7 @@ pub fn regex_replace(_: *interpreter.Interpreter, env: *core.Environment, args: 
         }
     }
 
-    return Value{ .string = result.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory };
+    return (try core.makeString(env.allocator, result.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory));
 }
 
 pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -383,8 +383,8 @@ pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: co
     if (args.items[0] != .string) return ElzError.InvalidArgument;
     if (args.items[1] != .string) return ElzError.InvalidArgument;
 
-    const pattern = args.items[0].string;
-    const input = args.items[1].string;
+    const pattern = args.items[0].string.bytes;
+    const input = args.items[1].string.bytes;
 
     const regex = compile(pattern, env.allocator) catch return ElzError.InvalidArgument;
     defer env.allocator.free(regex.nodes);
@@ -410,7 +410,7 @@ pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: co
 
         if (found) |match_result| {
             const part = env.allocator.dupe(u8, input[pos..match_result.start]) catch return ElzError.OutOfMemory;
-            parts.append(env.allocator, Value{ .string = part }) catch return ElzError.OutOfMemory;
+            parts.append(env.allocator, (try core.makeString(env.allocator, part))) catch return ElzError.OutOfMemory;
             pos = match_result.end;
         } else {
             break;
@@ -419,7 +419,7 @@ pub fn regex_split(_: *interpreter.Interpreter, env: *core.Environment, args: co
 
     // Add remaining
     const rest = env.allocator.dupe(u8, input[pos..]) catch return ElzError.OutOfMemory;
-    parts.append(env.allocator, Value{ .string = rest }) catch return ElzError.OutOfMemory;
+    parts.append(env.allocator, (try core.makeString(env.allocator, rest))) catch return ElzError.OutOfMemory;
 
     // Build list
     var list_result: Value = Value.nil;
@@ -487,7 +487,7 @@ test "regex-search" {
 
     const r1 = try interp.evalString("(regex-search \"[0-9]+\" \"abc123def\")", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("123", r1.string);
+    try testing.expectEqualStrings("123", r1.string.bytes);
 }
 
 test "regex-replace" {
@@ -498,7 +498,7 @@ test "regex-replace" {
 
     const r1 = try interp.evalString("(regex-replace \"[0-9]+\" \"NUM\" \"abc123def456\")", &fuel);
     try testing.expect(r1 == .string);
-    try testing.expectEqualStrings("abcNUMdefNUM", r1.string);
+    try testing.expectEqualStrings("abcNUMdefNUM", r1.string.bytes);
 }
 
 test "regex-split" {
@@ -509,5 +509,5 @@ test "regex-split" {
 
     const r1 = try interp.evalString("(regex-split \",\" \"a,b,c\")", &fuel);
     try testing.expect(r1 == .pair);
-    try testing.expectEqualStrings("a", r1.pair.car.string);
+    try testing.expectEqualStrings("a", r1.pair.car.string.bytes);
 }

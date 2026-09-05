@@ -665,6 +665,25 @@ pub const Port = struct {
     }
 };
 
+/// A mutable string. `bytes` holds UTF-8 and is replaced wholesale when an
+/// in-place edit changes the encoded length.
+pub const MString = struct {
+    bytes: []u8,
+};
+
+/// Wraps `bytes` (already owned by `allocator`) as a string value.
+pub fn makeString(allocator: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const s = allocator.create(MString) catch return error.OutOfMemory;
+    s.* = .{ .bytes = @constCast(bytes) };
+    return Value{ .string = s };
+}
+
+/// Copies `bytes` into a fresh string value.
+pub fn copyString(allocator: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const owned = allocator.dupe(u8, bytes) catch return error.OutOfMemory;
+    return makeString(allocator, owned);
+}
+
 /// Represents zero or more return values produced by `values`. A continuation expecting
 /// a single value but receiving a `MultiValues` is an error in standard Scheme.
 pub const MultiValues = struct {
@@ -707,8 +726,9 @@ pub const Value = union(enum) {
     pair: *Pair,
     /// A single character.
     character: u32,
-    /// A string of characters.
-    string: []const u8,
+    /// A string of characters. Strings are heap objects so that aliases share
+    /// one buffer and `string-set!` can change a character's byte width.
+    string: *MString,
     /// A boolean value (`#t` or `#f`).
     boolean: bool,
     /// A VM-compiled closure (bytecode + upvalues).
@@ -810,7 +830,7 @@ pub const Value = union(enum) {
                 new_c.* = c.*;
                 break :blk Value{ .complex = new_c };
             },
-            .string => |s| Value{ .string = try allocator.dupe(u8, s) },
+            .string => |s| try copyString(allocator, s.bytes),
             .pair => |p| {
                 const new_pair = try allocator.create(Pair);
                 new_pair.* = .{
@@ -851,7 +871,7 @@ pub const Value = union(enum) {
             .pointer => |p| switch (p.size) {
                 .slice => blk: {
                     const s = try allocator.dupe(u8, v);
-                    break :blk Value{ .string = s };
+                    break :blk (try makeString(allocator, s));
                 },
                 else => @compileError("Unsupported pointer type"),
             },
@@ -887,15 +907,15 @@ test "core environment" {
 
     // Test get from outer environment
     var outer_env = try Environment.init(allocator, null);
-    try outer_env.set(&interp_stub, "y", Value{ .string = "hello" });
+    try outer_env.set(&interp_stub, "y", (try makeString(allocator, "hello")));
     var inner_env = try Environment.init(allocator, outer_env);
     value = try inner_env.get("y", &interp_stub);
-    try testing.expectEqualStrings("hello", value.string);
+    try testing.expectEqualStrings("hello", value.string.bytes);
 
     // Test update on outer environment
-    try inner_env.update(&interp_stub, "y", Value{ .string = "world" });
+    try inner_env.update(&interp_stub, "y", (try makeString(allocator, "world")));
     value = try outer_env.get("y", &interp_stub);
-    try testing.expectEqualStrings("world", value.string);
+    try testing.expectEqualStrings("world", value.string.bytes);
 
     // Test update on symbol not found
     const err = inner_env.update(&interp_stub, "z", Value{ .number = 0 });

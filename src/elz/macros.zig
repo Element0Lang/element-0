@@ -195,7 +195,7 @@ fn match_pattern(
         },
         .string => |s| {
             if (input != .string) return false;
-            return std.mem.eql(u8, s, input.string);
+            return std.mem.eql(u8, s.bytes, input.string.bytes);
         },
         .character => |c| {
             if (input != .character) return false;

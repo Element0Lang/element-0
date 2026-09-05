@@ -131,7 +131,7 @@ test "string operations" {
         \\(string-append "hello" " " "world")
     , &fuel);
     try testing.expect(result == .string);
-    try testing.expectEqualStrings("hello world", result.string);
+    try testing.expectEqualStrings("hello world", result.string.bytes);
 }
 
 test "list operations" {
@@ -216,7 +216,7 @@ test "try/catch catches errors" {
         \\(try (/ 1 0) (catch err "caught"))
     , &fuel);
     try testing.expect(result == .string);
-    try testing.expectEqualStrings("caught", result.string);
+    try testing.expectEqualStrings("caught", result.string.bytes);
 }
 
 // ---------------------------------------------------------------------------

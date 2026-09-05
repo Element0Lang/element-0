@@ -141,7 +141,7 @@ pub fn utf8_to_string(_: *interpreter.Interpreter, env: *core.Environment, args:
     const slice = src[r.start..r.end];
     if (!std.unicode.utf8ValidateSlice(slice)) return ElzError.InvalidArgument;
     const copy = env.allocator.dupe(u8, slice) catch return ElzError.OutOfMemory;
-    return Value{ .string = copy };
+    return (try core.makeString(env.allocator, copy));
 }
 
 /// Syntax: (string->utf8 str [start [end]])
@@ -149,7 +149,7 @@ pub fn utf8_to_string(_: *interpreter.Interpreter, env: *core.Environment, args:
 pub fn string_to_utf8(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
     if (args.items[0] != .string) return ElzError.InvalidArgument;
-    const str = args.items[0].string;
+    const str = args.items[0].string.bytes;
     const char_len = std.unicode.utf8CountCodepoints(str) catch return ElzError.InvalidArgument;
     const r = try rangeArgs(args.items[1..], char_len);
 

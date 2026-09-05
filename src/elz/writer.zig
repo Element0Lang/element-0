@@ -154,7 +154,8 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
                 },
             }
         },
-        .string => |s| {
+        .string => |ms| {
+            const s = ms.bytes;
             if (mode == .display) return writer.writeAll(s);
             try writer.writeAll("\"");
             for (s) |c| {
@@ -321,7 +322,8 @@ test "write simple values" {
 
     // Test string
     w = .fixed(&buf);
-    try write(Value{ .string = "hello" }, &w);
+    var hello = core.MString{ .bytes = @constCast("hello") };
+    try write(Value{ .string = &hello }, &w);
     try testing.expectEqualStrings("\"hello\"", w.buffered());
 
     // Test complex numbers
