@@ -389,7 +389,7 @@ pub fn set_current_output_port_bang(interp: *interpreter.Interpreter, _: *core.E
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     if (v != .port) return ElzError.InvalidArgument;
-    interp.stdout_port = v.port;
+    interp.runtime.stdout_port = v.port;
     return Value.unspecified;
 }
 
@@ -430,7 +430,7 @@ pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.En
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     if (v != .port) return ElzError.InvalidArgument;
-    interp.stdin_port = v.port;
+    interp.runtime.stdin_port = v.port;
     return Value.unspecified;
 }
 

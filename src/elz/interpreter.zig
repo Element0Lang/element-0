@@ -70,8 +70,6 @@ pub const HygieneAlias = struct {
     def_scope_id: u64,
 };
 
-/// `Interpreter` is the top-level handle for the Elz scripting engine.
-/// It holds the root environment, module cache, and VM configuration.
 /// One call frame of a recorded backtrace.
 pub const BacktraceFrame = struct {
     /// The function's debug name, or "<lambda>".
@@ -86,6 +84,103 @@ pub const BacktraceFrame = struct {
 /// error report into a screenful of identical lines.
 pub const MAX_BACKTRACE_FRAMES: usize = 40;
 
+/// Everything known about the most recent error. Producers fill it through
+/// `Interpreter.fail`; the catch site (`try`, the REPL, an embedder) reads it
+/// and calls `clear`. Only this struct carries error detail; the Zig error
+/// value itself is just the classification.
+pub const ErrorState = struct {
+    /// A human-readable message, when the failing operation supplied one.
+    message: ?[]const u8 = null,
+    /// Location of the failing form, when the source was read with tracking.
+    file: ?[]const u8 = null,
+    line: ?u32 = null,
+    /// The object passed to `raise`, `raise-continuable`, or `error`, carried
+    /// alongside `ElzError.UserError` until a handler consumes it.
+    payload: ?core.Value = null,
+    /// When true, the VM records the call frames an error unwinds through in
+    /// `backtrace`, innermost first. Hosts such as the REPL turn this on; it
+    /// is off by default because errors caught by `try` pay for it too.
+    collect_backtrace: bool = false,
+    backtrace: std.ArrayListUnmanaged(BacktraceFrame) = .empty,
+
+    /// Forgets the current error. Call this once a report has been consumed so
+    /// stale detail cannot attach itself to the next failure.
+    pub fn clear(self: *ErrorState) void {
+        self.message = null;
+        self.file = null;
+        self.line = null;
+        self.payload = null;
+        self.backtrace.clearRetainingCapacity();
+    }
+};
+
+/// Bookkeeping for the wall-clock limit in `SandboxFlags.time_limit_ms`.
+pub const TimeBudget = struct {
+    /// Timestamp (ms) when the outermost evaluation started.
+    start_ms: ?i64 = null,
+    /// Step counter for throttling time checks (check every N steps).
+    check_counter: u64 = 0,
+    /// Nesting depth of evalString/evalForm calls. The clock starts with the
+    /// outermost call only, so nested evaluation (macro expansion, `eval`,
+    /// `load`) cannot extend the budget.
+    eval_depth: u32 = 0,
+};
+
+/// State owned by the compiler and macro expander. Nothing in the VM or the
+/// primitives should need to read it.
+pub const CompilerState = struct {
+    /// Hygiene aliases: a fresh identifier introduced by a `syntax-rules`
+    /// template, mapped to the name it stands for and the scope the macro
+    /// was defined in. The compiler resolves an alias from that scope.
+    hygiene_aliases: std.StringHashMapUnmanaged(HygieneAlias) = .empty,
+    /// Top-level names the current compilation unit will define. A macro
+    /// template may reference one before its `define` has run, so hygiene
+    /// renaming must leave these alone.
+    pending_globals: std.StringHashMapUnmanaged(void) = .empty,
+    /// Hands out compiler scope identities.
+    id_counter: u64 = 0,
+    /// Current expression nesting depth inside the compiler.
+    depth: u32 = 0,
+    /// Files currently being loaded by `include`, `import`, or `load`, so a
+    /// file that includes itself is reported instead of recursing forever.
+    loading_files: std.StringHashMapUnmanaged(void) = .empty,
+    /// Libraries registered by define-library, keyed by the canonical
+    /// space-joined library name (e.g. "my lib").
+    library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
+    /// Loaded file modules, so a file imported twice is parsed and run once.
+    module_cache: std.StringHashMapUnmanaged(*core.Module) = .empty,
+    /// Source locations of parsed forms, keyed by pair pointer.
+    source_locations: parser.FormLocations = .empty,
+};
+
+/// State owned by the VM and the primitives that run on it.
+pub const RuntimeState = struct {
+    /// Idle VM instances kept for primitive callbacks. Creating a VM allocates
+    /// a large value stack and frame array, so `vm.callProc` borrows from here
+    /// instead of allocating one per call (`map` calls it once per element).
+    vm_pool: std.ArrayListUnmanaged(*vm.VM) = .empty,
+    /// Current nesting of VM runs started by primitive callbacks.
+    native_depth: u32 = 0,
+    /// Handlers installed by with-exception-handler, innermost last.
+    exception_handlers: std.ArrayListUnmanaged(core.Value) = .empty,
+    /// Escape-continuation and dynamic-wind state.
+    /// Only primitives/control.zig should read or write these fields.
+    cps: CpsState = .{},
+    /// The built-in record type used for error objects (set by env_setup).
+    error_rtd: ?*core.RecordType = null,
+    /// Counter for generating unique symbols via `gensym`.
+    gensym_counter: u64 = 0,
+    /// The current ports. Populated lazily on first reference.
+    stdin_port: ?*core.Port = null,
+    stdout_port: ?*core.Port = null,
+    stderr_port: ?*core.Port = null,
+};
+
+/// `Interpreter` is the top-level handle for the Elz scripting engine.
+///
+/// The first three fields and `command_line` are the embedding surface. The
+/// remaining fields group the engine's mutable state by owner, so a reader can
+/// tell which component a piece of state belongs to.
 pub const Interpreter = struct {
     /// Allocator used for environment bindings and the module cache.
     allocator: std.mem.Allocator,
@@ -93,76 +188,31 @@ pub const Interpreter = struct {
     io: std.Io,
     /// The root environment, containing all built-in functions and global variables.
     root_env: *core.Environment,
-    /// A message describing the last error that occurred, if any.
-    last_error_message: ?[]const u8 = null,
-    /// A cache for loaded modules to avoid redundant parsing and evaluation.
-    module_cache: std.StringHashMap(*core.Module),
-    /// Counter for generating unique symbols via `gensym` (one per `Interpreter` instance).
-    gensym_counter: u64 = 0,
-    /// Maximum wall-clock execution time in milliseconds (null = no limit).
-    time_limit_ms: ?u64 = null,
-    /// Whether filesystem access is permitted. Checked by the compiler for
-    /// `include` and by `importModule`, which read files at compile time.
-    enable_filesystem: bool = true,
-    /// Timestamp (ms) when the current evaluation started.
-    eval_start_ms: ?i64 = null,
-    /// Step counter for throttling time checks (check every N steps).
-    time_check_counter: u64 = 0,
-    /// Escape-continuation and dynamic-wind state.
-    /// Only primitives/control.zig should read or write these fields.
-    cps: CpsState = .{},
-    /// The current input port. Populated lazily on first reference.
-    stdin_port: ?*core.Port = null,
-    /// The current output port. Populated lazily on first reference.
-    stdout_port: ?*core.Port = null,
-    stderr_port: ?*core.Port = null,
-    /// The value raised by `raise`/`raise-continuable`/`error`, carried
-    /// alongside the Zig error until a catch site consumes it.
-    current_exception: ?core.Value = null,
-    /// Handlers installed by with-exception-handler, innermost last.
-    exception_handlers: std.ArrayListUnmanaged(core.Value) = .empty,
-    /// The built-in record type used for error objects (set by env_setup).
-    error_rtd: ?*core.RecordType = null,
+    /// The capabilities and limits this interpreter was created with.
+    flags: SandboxFlags = .{},
     /// The process argument list for (command-line), set by the host.
     command_line: ?core.Value = null,
-    /// Libraries registered by define-library, keyed by the canonical
-    /// space-joined library name (e.g. "my lib").
-    library_registry: std.StringHashMapUnmanaged(*core.Module) = .empty,
-    /// Source locations of parsed forms, keyed by pair pointer.
-    source_locations: parser.FormLocations = .empty,
-    /// Idle VM instances kept for primitive callbacks. Creating a VM allocates
-    /// a large value stack and frame array, so `vm.callProc` borrows from here
-    /// instead of allocating one per call (`map` calls it once per element).
-    vm_pool: std.ArrayListUnmanaged(*vm.VM) = .empty,
-    /// Top-level names the current compilation unit will define. A macro
-    /// template may reference one before its `define` has run, so hygiene
-    /// renaming must leave these alone.
-    pending_globals: std.StringHashMapUnmanaged(void) = .empty,
-    /// Location of the most recent uncaught runtime error, when known.
-    last_error_file: ?[]const u8 = null,
-    last_error_line: ?u32 = null,
-    /// When true, the VM records the call frames an error unwinds through in
-    /// `backtrace`, innermost first. Hosts such as the REPL turn this on; it
-    /// is off by default because errors caught by `try` pay for it too.
-    collect_backtrace: bool = false,
-    backtrace: std.ArrayListUnmanaged(BacktraceFrame) = .empty,
-    /// Nesting depth of evalString/evalForm calls. The time-limit clock starts
-    /// with the outermost call only, so nested evaluation (macro expansion,
-    /// `eval`, `load`) cannot extend the budget.
-    eval_depth: u32 = 0,
-    /// Current expression nesting depth inside the compiler.
-    compile_depth: u32 = 0,
-    /// Current nesting of VM runs started by primitive callbacks.
-    native_depth: u32 = 0,
-    /// Hygiene aliases: a fresh identifier introduced by a `syntax-rules`
-    /// template, mapped to the name it stands for and the scope the macro
-    /// was defined in. The compiler resolves an alias from that scope.
-    hygiene_aliases: std.StringHashMapUnmanaged(HygieneAlias) = .empty,
-    /// Hands out compiler scope identities.
-    compiler_id_counter: u64 = 0,
-    /// Files currently being loaded by `include`, `import`, or `load`, so a
-    /// file that includes itself is reported instead of recursing forever.
-    loading_files: std.StringHashMapUnmanaged(void) = .empty,
+    /// Detail about the most recent error. See `ErrorState`.
+    last_error: ErrorState = .{},
+    /// Wall-clock limit bookkeeping.
+    budget: TimeBudget = .{},
+    /// Compiler and macro expander state.
+    compiler: CompilerState = .{},
+    /// VM and primitive state.
+    runtime: RuntimeState = .{},
+
+    /// Records `message` as the detail for `err` and returns `err`, so a
+    /// failing operation can be written as `return interp.fail(...)`.
+    pub fn fail(self: *Interpreter, err: core.ElzError, comptime fmt: []const u8, args: anytype) core.ElzError {
+        self.last_error.message = std.fmt.allocPrint(self.allocator, fmt, args) catch null;
+        return err;
+    }
+
+    /// Like `fail` for a message that needs no formatting.
+    pub fn failWith(self: *Interpreter, err: core.ElzError, message: []const u8) core.ElzError {
+        self.last_error.message = message;
+        return err;
+    }
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
@@ -181,10 +231,7 @@ pub const Interpreter = struct {
             .allocator = allocator,
             .io = std.Io.Threaded.global_single_threaded.io(),
             .root_env = undefined,
-            .last_error_message = null,
-            .module_cache = std.StringHashMap(*core.Module).init(allocator),
-            .time_limit_ms = flags.time_limit_ms,
-            .enable_filesystem = flags.enable_filesystem,
+            .flags = flags,
         };
 
         const root_env = try allocator.create(core.Environment);
@@ -197,7 +244,7 @@ pub const Interpreter = struct {
         gc.add_roots(@intFromPtr(root_env), @intFromPtr(root_env) + @sizeOf(core.Environment));
         self.root_env = root_env;
 
-        try root_env.set(&self, "nil", core.Value.nil);
+        try root_env.set("nil", core.Value.nil);
 
         if (flags.enable_math) {
             try env_setup.populate_math(&self);
@@ -227,7 +274,7 @@ pub const Interpreter = struct {
         try env_setup.populate_regex(&self);
 
         const std_lib_source = @embedFile("../stdlib/std.elz");
-        var std_lib_forms = try parser.readAllTracked(std_lib_source, allocator, "<stdlib>", &self.source_locations);
+        var std_lib_forms = try parser.readAllTracked(std_lib_source, allocator, "<stdlib>", &self.compiler.source_locations);
         defer std_lib_forms.deinit(allocator);
 
         if (std_lib_forms.items.len > 0) {
@@ -257,7 +304,7 @@ pub const Interpreter = struct {
     /// Returns:
     /// The `core.Value` of the last evaluated expression, or an error if parsing or evaluation fails.
     pub fn evalString(self: *Interpreter, source: []const u8, fuel: *u64) !core.Value {
-        var forms = try parser.readAllTracked(source, self.allocator, "<eval>", &self.source_locations);
+        var forms = try parser.readAllTracked(source, self.allocator, "<eval>", &self.compiler.source_locations);
         defer forms.deinit(self.allocator);
 
         if (forms.items.len == 0) return .unspecified;
@@ -279,31 +326,27 @@ pub const Interpreter = struct {
     /// Returns the cached `core.Value.module` if the path was already loaded.
     pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
         if (path_val != .string) return core.ElzError.InvalidArgument;
-        if (!self.enable_filesystem) {
-            self.last_error_message = "import: filesystem access is disabled";
-            return core.ElzError.PermissionDenied;
+        if (!self.flags.enable_filesystem) {
+            return self.failWith(core.ElzError.PermissionDenied, "import: filesystem access is disabled");
         }
         const path_str = path_val.string.bytes;
 
-        if (self.module_cache.get(path_str)) |cached_mod_ptr| {
+        if (self.compiler.module_cache.get(path_str)) |cached_mod_ptr| {
             return core.Value{ .module = cached_mod_ptr };
         }
 
         if (!self.beginLoading(path_str)) {
-            self.last_error_message = std.fmt.allocPrint(self.allocator, "import: '{s}' imports itself", .{path_str}) catch null;
-            return core.ElzError.InvalidArgument;
+            return self.fail(core.ElzError.InvalidArgument, "import: '{s}' imports itself", .{path_str});
         }
         defer self.endLoading(path_str);
 
         const source_bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path_str, self.allocator, .limited(1024 * 1024)) catch {
-            self.last_error_message = "Failed to read module file.";
-            return core.ElzError.InvalidArgument;
+            return self.failWith(core.ElzError.InvalidArgument, "Failed to read module file.");
         };
         defer self.allocator.free(source_bytes);
 
-        var forms = @import("parser.zig").readAllTracked(source_bytes, self.allocator, try self.allocator.dupe(u8, path_str), &self.source_locations) catch {
-            self.last_error_message = "Failed to parse module file.";
-            return core.ElzError.InvalidArgument;
+        var forms = @import("parser.zig").readAllTracked(source_bytes, self.allocator, try self.allocator.dupe(u8, path_str), &self.compiler.source_locations) catch {
+            return self.failWith(core.ElzError.InvalidArgument, "Failed to parse module file.");
         };
         defer forms.deinit(self.allocator);
 
@@ -352,7 +395,7 @@ pub const Interpreter = struct {
         }
 
         const cached_name = try self.allocator.dupe(u8, path_str);
-        try self.module_cache.put(cached_name, mod_ptr);
+        try self.compiler.module_cache.put(self.allocator, cached_name, mod_ptr);
 
         return core.Value{ .module = mod_ptr };
     }
@@ -376,28 +419,28 @@ pub const Interpreter = struct {
 
     /// Starts the time-limit clock for an outermost evaluation.
     fn beginEval(self: *Interpreter) void {
-        if (self.eval_depth == 0 and self.time_limit_ms != null) {
-            self.eval_start_ms = currentTimeMs();
-            self.time_check_counter = 0;
+        if (self.budget.eval_depth == 0 and self.flags.time_limit_ms != null) {
+            self.budget.start_ms = currentTimeMs();
+            self.budget.check_counter = 0;
         }
-        self.eval_depth += 1;
+        self.budget.eval_depth += 1;
     }
 
     fn endEval(self: *Interpreter) void {
-        self.eval_depth -= 1;
+        self.budget.eval_depth -= 1;
     }
 
     /// Marks `path` as being loaded. Returns false when it is already in
     /// progress, which means the file recursively includes or imports itself.
     pub fn beginLoading(self: *Interpreter, path: []const u8) bool {
-        if (self.loading_files.contains(path)) return false;
+        if (self.compiler.loading_files.contains(path)) return false;
         const owned = self.allocator.dupe(u8, path) catch return true;
-        self.loading_files.put(self.allocator, owned, {}) catch {};
+        self.compiler.loading_files.put(self.allocator, owned, {}) catch {};
         return true;
     }
 
     pub fn endLoading(self: *Interpreter, path: []const u8) void {
-        _ = self.loading_files.remove(path);
+        _ = self.compiler.loading_files.remove(path);
     }
 
     /// Converts internal CPS signals into embedder-facing errors at the API boundary.
@@ -407,8 +450,7 @@ pub const Interpreter = struct {
     fn wrapEvalResult(self: *Interpreter, result: core.ElzError!core.Value) core.ElzError!core.Value {
         return result catch |err| switch (err) {
             error.EscapeContinuationInvoked => {
-                self.last_error_message = "escape continuation invoked outside its dynamic extent";
-                return error.InvalidArgument;
+                return self.failWith(error.InvalidArgument, "escape continuation invoked outside its dynamic extent");
             },
             else => err,
         };
@@ -418,11 +460,11 @@ pub const Interpreter = struct {
     /// wall-clock time against the configured limit. Returns `TimeLimitExceeded` if over.
     /// Called by vm.zig and primitives to check the time budget without duplicating the logic.
     pub fn checkTimeBudget(self: *Interpreter) core.ElzError!void {
-        self.time_check_counter +%= 1;
-        if (self.time_check_counter & 0xFF == 0) {
-            if (self.time_limit_ms) |limit| {
+        self.budget.check_counter +%= 1;
+        if (self.budget.check_counter & 0xFF == 0) {
+            if (self.flags.time_limit_ms) |limit| {
                 // No eval window yet (e.g. the stdlib load during init): nothing to limit.
-                const start = self.eval_start_ms orelse return;
+                const start = self.budget.start_ms orelse return;
                 const elapsed = currentTimeMs() - start;
                 if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
             }
@@ -432,39 +474,39 @@ pub const Interpreter = struct {
     /// Releases resources held by this `Interpreter`.
     /// Most memory is GC-managed; this cleans up the module cache.
     pub fn deinit(self: *Interpreter) void {
-        self.module_cache.deinit();
-        for (self.vm_pool.items) |machine| {
+        self.compiler.module_cache.deinit(self.allocator);
+        for (self.runtime.vm_pool.items) |machine| {
             machine.deinit();
             self.allocator.destroy(machine);
         }
-        self.vm_pool.deinit(self.allocator);
-        self.pending_globals.deinit(self.allocator);
+        self.runtime.vm_pool.deinit(self.allocator);
+        self.compiler.pending_globals.deinit(self.allocator);
     }
 
     /// Returns the lazily initialized port that wraps the host's standard input stream.
     pub fn currentInputPort(self: *Interpreter) !*core.Port {
-        if (self.stdin_port) |p| return p;
+        if (self.runtime.stdin_port) |p| return p;
         const port = try self.allocator.create(core.Port);
         port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdin(), true, "<stdin>");
-        self.stdin_port = port;
+        self.runtime.stdin_port = port;
         return port;
     }
 
     /// Returns the lazily initialized port that wraps the host's standard output stream.
     pub fn currentOutputPort(self: *Interpreter) !*core.Port {
-        if (self.stdout_port) |p| return p;
+        if (self.runtime.stdout_port) |p| return p;
         const port = try self.allocator.create(core.Port);
         port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stdout(), false, "<stdout>");
-        self.stdout_port = port;
+        self.runtime.stdout_port = port;
         return port;
     }
 
     /// Returns the lazily initialized port that wraps the host's standard error stream.
     pub fn currentErrorPort(self: *Interpreter) !*core.Port {
-        if (self.stderr_port) |p| return p;
+        if (self.runtime.stderr_port) |p| return p;
         const port = try self.allocator.create(core.Port);
         port.* = try core.Port.fromStandard(self.allocator, self.io, std.Io.File.stderr(), false, "<stderr>");
-        self.stderr_port = port;
+        self.runtime.stderr_port = port;
         return port;
     }
 };
@@ -474,7 +516,7 @@ test "interpreter init and basic eval" {
     defer interp.deinit();
 
     // Test that nil is defined
-    const nil_val = try interp.root_env.get("nil", &interp);
+    const nil_val = try interp.root_env.get("nil");
     try std.testing.expect(nil_val == .nil);
 
     // Test basic arithmetic
@@ -530,14 +572,14 @@ test "stale escape continuation returns InvalidArgument, not EscapeContinuationI
     // Now invoke the stale escape continuation.
     const result = interp.evalString("(stale-k 99)", &fuel);
     try std.testing.expectError(core.ElzError.InvalidArgument, result);
-    try std.testing.expect(interp.last_error_message != null);
+    try std.testing.expect(interp.last_error.message != null);
 }
 
-test "cps state is grouped under interp.cps" {
+test "cps state is grouped under interp.runtime.cps" {
     // Verify the CPS fields are accessible via the sub-struct and initialise to zero/null.
     var interp = try Interpreter.init(.{});
     defer interp.deinit();
 
-    try std.testing.expect(interp.cps.escape_value == null);
-    try std.testing.expect(interp.cps.winders == null);
+    try std.testing.expect(interp.runtime.cps.escape_value == null);
+    try std.testing.expect(interp.runtime.cps.winders == null);
 }

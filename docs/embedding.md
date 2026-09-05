@@ -32,7 +32,7 @@ defer forms.deinit(interp.allocator);
 for (forms.items) |form| {
     var fuel: u64 = std.math.maxInt(u64);
     const result = interp.evalForm(&form, &fuel) catch |err| {
-        // interp.last_error_message, last_error_file, and last_error_line describe the failure
+        // interp.last_error holds the message, location, and backtrace
         return err;
     };
     _ = result;
@@ -121,15 +121,24 @@ Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use 
 
 ## Error Handling
 
-Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). Several fields on the interpreter add detail:
+Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). The detail lives in `interp.last_error`, an `ErrorState` with these fields:
 
-- `last_error_message`: a human-readable message, when one is available.
-- `last_error_file` and `last_error_line`: the location of the failing form, when the source was read with location tracking (`parser.readAllTracked`, which `evalString` uses).
-- `backtrace`: the call frames the error unwound through, innermost first, each with a procedure name, file, and line. It is filled only while `collect_backtrace` is true, because errors caught by `try` inside the script pay for the recording too. The REPL turns it on; embedders that show errors to users should do the same and clear the list before each evaluation.
+- `message`: a human-readable message, when the failing operation supplied one.
+- `file` and `line`: the location of the failing form, when the source was read with location tracking (`parser.readAllTracked`, which `evalString` uses).
+- `payload`: the object a script passed to `raise` or `error`, for `UserError`.
+- `backtrace`: the call frames the error unwound through, innermost first, each with a procedure name, file, and line. It is filled only while `collect_backtrace` is true, because errors caught by `try` inside the script pay for the recording too. The REPL turns it on; embedders that show errors to users should do the same.
 
 A value raised by a script (`(raise 'oops)`) arrives as `UserError`; inside the script, `guard` and `with-exception-handler` see the raised object itself. Runtime errors caught inside a script are error objects with a kind, so `file-error?` and `read-error?` work on them.
 
-Clear `last_error_message` before each evaluation if you display it, as the REPL does; it is only overwritten on failure.
+Call `interp.last_error.clear()` once you have shown a report, as the REPL does. The fields are only written on failure, so stale detail would otherwise attach itself to the next error.
+
+Primitives written in Zig produce their detail through `interp.fail`, which records a formatted message and returns the error in one expression:
+
+```zig
+if (args.items[0] != .pair) {
+    return interp.fail(elz.ElzError.InvalidArgument, "car: expected a pair, got {s}", .{elz.core.typeName(args.items[0])});
+}
+```
 
 ## Modules and Files
 

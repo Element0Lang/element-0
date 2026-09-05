@@ -63,8 +63,7 @@ fn checkedRecord(interp: *interpreter.Interpreter, args: core.ValueList) ElzErro
     if (args.items[0] != .record_type) return ElzError.InvalidArgument;
     const rtd = args.items[0].record_type;
     if (args.items[1] != .record or args.items[1].record.rtd != rtd) {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "not a record of type {s}", .{rtd.name}) catch null;
-        return ElzError.InvalidArgument;
+        return interp.fail(ElzError.InvalidArgument, "not a record of type {s}", .{rtd.name});
     }
     if (args.items[2] != .exact_integer) return ElzError.InvalidArgument;
     const idx = args.items[2].exact_integer;

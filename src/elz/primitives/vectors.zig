@@ -67,29 +67,29 @@ pub fn vector_length(_: *interpreter.Interpreter, _: *core.Environment, args: co
 
 /// `vector_ref` returns the element at a given index in a vector.
 /// Syntax: (vector-ref vec k)
-pub fn vector_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
-    if (vec_val != .vector) return ElzError.InvalidArgument;
+    if (vec_val != .vector) return interp.fail(ElzError.InvalidArgument, "vector-ref: expected a vector, got {s}", .{core.typeName(vec_val)});
     const index = try toIndex(args.items[1]);
     const vec = vec_val.vector;
-    if (index >= vec.items.len) return ElzError.InvalidArgument;
+    if (index >= vec.items.len) return interp.fail(ElzError.InvalidArgument, "vector-ref: index {d} is out of range for a vector of length {d}", .{ index, vec.items.len });
     return vec.items[index];
 }
 
 /// `vector_set` sets the element at a given index in a vector.
 /// Syntax: (vector-set! vec k obj)
-pub fn vector_set(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn vector_set(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
 
     const vec_val = args.items[0];
     const obj = args.items[2];
 
-    if (vec_val != .vector) return ElzError.InvalidArgument;
+    if (vec_val != .vector) return interp.fail(ElzError.InvalidArgument, "vector-set!: expected a vector, got {s}", .{core.typeName(vec_val)});
     const index = try toIndex(args.items[1]);
     const vec = vec_val.vector;
-    if (index >= vec.items.len) return ElzError.InvalidArgument;
+    if (index >= vec.items.len) return interp.fail(ElzError.InvalidArgument, "vector-set!: index {d} is out of range for a vector of length {d}", .{ index, vec.items.len });
 
     vec.items[index] = obj;
     return Value.unspecified;

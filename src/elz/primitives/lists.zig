@@ -38,10 +38,10 @@ pub fn cons(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The `car` of the pair.
-pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn car(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "car: expected a pair, got {s}", .{core.typeName(p)});
     return p.pair.car;
 }
 
@@ -52,10 +52,10 @@ pub fn car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
 ///
 /// Returns:
 /// The `cdr` of the pair.
-pub fn cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn cdr(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "cdr: expected a pair, got {s}", .{core.typeName(p)});
     return p.pair.cdr;
 }
 
@@ -328,10 +328,10 @@ pub fn is_pair(_: *interpreter.Interpreter, _: *core.Environment, args: core.Val
 
 /// `set_car` modifies the car of a pair.
 /// Syntax: (set-car! pair obj)
-pub fn set_car(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_car(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "set-car!: expected a pair, got {s}", .{core.typeName(p)});
     p.pair.car = args.items[1];
     return Value.unspecified;
 }
@@ -354,10 +354,10 @@ pub fn list_set_bang(_: *interpreter.Interpreter, _: *core.Environment, args: co
 
 /// `set_cdr` modifies the cdr of a pair.
 /// Syntax: (set-cdr! pair obj)
-pub fn set_cdr(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn set_cdr(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const p = args.items[0];
-    if (p != .pair) return ElzError.InvalidArgument;
+    if (p != .pair) return interp.fail(ElzError.InvalidArgument, "set-cdr!: expected a pair, got {s}", .{core.typeName(p)});
     p.pair.cdr = args.items[1];
     return Value.unspecified;
 }

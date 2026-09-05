@@ -122,13 +122,11 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
 
     const filename = filename_val.string.bytes;
     if (!interp.beginLoading(filename)) {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "load: '{s}' loads itself", .{filename}) catch null;
-        return ElzError.InvalidArgument;
+        return interp.fail(ElzError.InvalidArgument, "load: '{s}' loads itself", .{filename});
     }
     defer interp.endLoading(filename);
     const source = std.Io.Dir.cwd().readFileAlloc(interp.io, filename, env.allocator, .limited(1 * 1024 * 1024)) catch |err| {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to load file '{s}': {s}", .{ filename, @errorName(err) }) catch null;
-        return ElzError.ForeignFunctionError;
+        return interp.fail(ElzError.ForeignFunctionError, "Failed to load file '{s}': {s}", .{ filename, @errorName(err) });
     };
     defer env.allocator.free(source);
 
@@ -190,7 +188,7 @@ test "io primitives" {
 
     _ = try load(&interp, interp.root_env, args, &fuel);
 
-    const x = try interp.root_env.get("x", &interp);
+    const x = try interp.root_env.get("x");
     try testing.expect(x == .exact_integer);
     try testing.expectEqual(@as(i64, 42), x.exact_integer);
 

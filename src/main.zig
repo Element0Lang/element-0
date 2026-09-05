@@ -60,25 +60,23 @@ fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
 /// `interpreter` just raised, then clears them so they do not leak into the
 /// next report.
 fn reportError(interpreter: *elz.Interpreter, err: anyerror, writer: *std.Io.Writer) !void {
-    if (interpreter.last_error_message) |msg| {
+    if (interpreter.last_error.message) |msg| {
         try writer.print("Error: {s}\n", .{msg});
     } else {
         try writer.print("Error: {s}\n", .{@errorName(err)});
     }
-    if (interpreter.last_error_line) |line| {
-        const file = interpreter.last_error_file orelse "?";
+    if (interpreter.last_error.line) |line| {
+        const file = interpreter.last_error.file orelse "?";
         try writer.print("At: {s}:{d}\n", .{ file, line });
-        interpreter.last_error_line = null;
-        interpreter.last_error_file = null;
     }
     try writeBacktrace(interpreter, writer);
+    interpreter.last_error.clear();
 }
 
 /// Prints the recorded call chain, innermost first, when there is more than
-/// the top-level frame to show. Clears the record afterwards.
+/// the top-level frame to show.
 fn writeBacktrace(interpreter: *elz.Interpreter, writer: *std.Io.Writer) !void {
-    defer interpreter.backtrace.clearRetainingCapacity();
-    const frames = interpreter.backtrace.items;
+    const frames = interpreter.last_error.backtrace.items;
     if (frames.len < 2) return;
     try writer.writeAll("Backtrace:\n");
     for (frames, 0..) |frame, i| {
@@ -97,7 +95,7 @@ fn writeBacktrace(interpreter: *elz.Interpreter, writer: *std.Io.Writer) !void {
 /// failed, so `--file` can exit with a non-zero status instead of hiding the
 /// failure from callers such as `zig build test-elz`.
 fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const u8) !bool {
-    var forms = elz.parser.readAllTracked(source, interpreter.allocator, source_name, &interpreter.source_locations) catch |err| {
+    var forms = elz.parser.readAllTracked(source, interpreter.allocator, source_name, &interpreter.compiler.source_locations) catch |err| {
         std.debug.print("Parse Error: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -111,23 +109,22 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
     var last_result: elz.Value = .nil;
     for (forms.items) |form| {
         var fuel: u64 = std.math.maxInt(u64);
-        interpreter.last_error_message = null;
+        interpreter.last_error.clear();
         last_result = interpreter.evalForm(&form, &fuel) catch |err| {
             try stdout.writeAll("--- Runtime Error ---\n");
             try stdout.print("ErrorCode: {s}\n", .{@errorName(err)});
-            if (interpreter.last_error_message) |msg| {
+            if (interpreter.last_error.message) |msg| {
                 try stdout.print("Message: {s}\n", .{msg});
             }
-            if (interpreter.last_error_line) |line| {
-                const file = interpreter.last_error_file orelse "?";
+            if (interpreter.last_error.line) |line| {
+                const file = interpreter.last_error.file orelse "?";
                 try stdout.print("At: {s}:{d}\n", .{ file, line });
-                interpreter.last_error_line = null;
-                interpreter.last_error_file = null;
             }
             try stdout.writeAll("In form: ");
             try elz.write(form, stdout);
             try stdout.writeAll("\n");
             try writeBacktrace(interpreter, stdout);
+            interpreter.last_error.clear();
             return false;
         };
     }
@@ -428,7 +425,7 @@ const Repl = struct {
         // backtraces read "[3]:2" for line 2 of input 3. Compiled code keeps
         // the name, so it must outlive this call.
         const source_name = try std.fmt.allocPrint(interp.allocator, "[{d}]", .{self.input_number});
-        var forms = elz.parser.readAllTracked(self.pending.items, interp.allocator, source_name, &interp.source_locations) catch |err| switch (err) {
+        var forms = elz.parser.readAllTracked(self.pending.items, interp.allocator, source_name, &interp.compiler.source_locations) catch |err| switch (err) {
             error.UnmatchedOpenParen, error.UnexpectedEndOfInput, error.UnterminatedString => return false,
             else => {
                 try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
@@ -445,7 +442,7 @@ const Repl = struct {
     /// Parses and evaluates `source`, printing values when `print_values`.
     fn evalSource(self: *Repl, source: []const u8, name: []const u8, stdout: *std.Io.Writer, print_values: bool) !void {
         const interp = self.interp;
-        var forms = elz.parser.readAllTracked(source, interp.allocator, name, &interp.source_locations) catch |err| {
+        var forms = elz.parser.readAllTracked(source, interp.allocator, name, &interp.compiler.source_locations) catch |err| {
             try stdout.print("Parse Error in {s}: {s}\n", .{ name, @errorName(err) });
             return;
         };
@@ -459,8 +456,7 @@ const Repl = struct {
         const interp = self.interp;
         for (forms) |form| {
             var fuel: u64 = std.math.maxInt(u64);
-            interp.last_error_message = null;
-            interp.backtrace.clearRetainingCapacity();
+            interp.last_error.clear();
             const result = interp.evalForm(&form, &fuel) catch |err| {
                 try self.reportAndRemember(err, stdout);
                 return;
@@ -475,10 +471,9 @@ const Repl = struct {
 
     fn rememberValue(self: *Repl, value: elz.Value) void {
         const env = self.interp.root_env;
-        const interp = self.interp;
-        if (env.lookup("$2")) |v| env.set(interp, "$3", v) catch {};
-        if (env.lookup("$1")) |v| env.set(interp, "$2", v) catch {};
-        env.set(interp, "$1", value) catch {};
+        if (env.lookup("$2")) |v| env.set("$3", v) catch {};
+        if (env.lookup("$1")) |v| env.set("$2", v) catch {};
+        env.set("$1", value) catch {};
     }
 
     /// Prints the error report and keeps a copy for `.error`.
@@ -670,7 +665,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     interpreter_ptr.* = try elz.Interpreter.init(.{});
     elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
 
-    interpreter_ptr.collect_backtrace = true;
+    interpreter_ptr.last_error.collect_backtrace = true;
 
     {
         var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);

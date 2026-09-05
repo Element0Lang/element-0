@@ -357,10 +357,10 @@ pub fn integer_to_char(_: *interpreter.Interpreter, _: *core.Environment, args: 
 ///
 /// Parameters:
 /// - `args`: A `ValueList` containing a string and an index.
-pub fn string_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn string_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const str = args.items[0];
-    if (str != .string) return ElzError.InvalidArgument;
+    if (str != .string) return interp.fail(ElzError.InvalidArgument, "string-ref: expected a string, got {s}", .{core.typeName(str)});
     const idx_usize = try toIndex(args.items[1]);
 
     // Iterate through UTF-8 codepoints to find the character at the given index
@@ -806,9 +806,9 @@ pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: co
         break :blk if (p == .string) p.string.bytes else p.symbol;
     } else "g";
 
-    interp.gensym_counter += 1;
+    interp.runtime.gensym_counter += 1;
     var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.gensym_counter }) catch return ElzError.OutOfMemory;
+    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.runtime.gensym_counter }) catch return ElzError.OutOfMemory;
 
     return Value{ .symbol = try env.allocator.dupe(u8, formatted) };
 }

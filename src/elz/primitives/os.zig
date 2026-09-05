@@ -58,8 +58,7 @@ pub fn delete_file(interp: *interpreter.Interpreter, _: *core.Environment, args:
     const path = path_val.string.bytes;
 
     std.Io.Dir.cwd().deleteFile(interp.io, path) catch |err| {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to delete file '{s}': {s}", .{ path, @errorName(err) }) catch null;
-        return ElzError.ForeignFunctionError;
+        return interp.fail(ElzError.ForeignFunctionError, "Failed to delete file '{s}': {s}", .{ path, @errorName(err) });
     };
 
     return core.Value.unspecified;
@@ -133,8 +132,7 @@ pub fn rename_file(interp: *interpreter.Interpreter, _: *core.Environment, args:
     const new_path = new_val.string.bytes;
 
     std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, interp.io) catch |err| {
-        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to rename '{s}' to '{s}': {s}", .{ old_path, new_path, @errorName(err) }) catch null;
-        return ElzError.ForeignFunctionError;
+        return interp.fail(ElzError.ForeignFunctionError, "Failed to rename '{s}' to '{s}': {s}", .{ old_path, new_path, @errorName(err) });
     };
 
     return core.Value.unspecified;

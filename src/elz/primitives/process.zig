@@ -25,20 +25,17 @@ pub fn exit(interp: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
     // Check for NaN or Infinity
     if (std.math.isNan(num) or std.math.isInf(num)) {
-        interp.last_error_message = "Exit code must be a finite number.";
-        return ElzError.InvalidArgument;
+        return interp.failWith(ElzError.InvalidArgument, "Exit code must be a finite number.");
     }
 
     // Check range [0, 255]
     if (num < 0 or num > 255) {
-        interp.last_error_message = "Exit code must be in the range [0, 255].";
-        return ElzError.InvalidArgument;
+        return interp.failWith(ElzError.InvalidArgument, "Exit code must be in the range [0, 255].");
     }
 
     // Check for fractional part
     if (@floor(num) != num) {
-        interp.last_error_message = "Exit code must be an integer.";
-        return ElzError.InvalidArgument;
+        return interp.failWith(ElzError.InvalidArgument, "Exit code must be an integer.");
     }
 
     std.process.exit(@intFromFloat(num));

@@ -12,7 +12,7 @@ test "interpreter initializes with default flags" {
     defer interp.deinit();
 
     // nil should be defined
-    const nil_val = try interp.root_env.get("nil", &interp);
+    const nil_val = try interp.root_env.get("nil");
     try testing.expect(nil_val == .nil);
 }
 
@@ -260,7 +260,7 @@ test "runtime errors carry a source location" {
     var interp = try elz.Interpreter.init(.{});
     defer interp.deinit();
 
-    var forms = try elz.parser.readAllTracked("(define (f)\n  (car 42))\n(f)\n", interp.allocator, "<test>", &interp.source_locations);
+    var forms = try elz.parser.readAllTracked("(define (f)\n  (car 42))\n(f)\n", interp.allocator, "<test>", &interp.compiler.source_locations);
     defer forms.deinit(interp.allocator);
 
     var failed = false;
@@ -272,6 +272,6 @@ test "runtime errors carry a source location" {
         };
     }
     try std.testing.expect(failed);
-    try std.testing.expectEqual(@as(u32, 2), interp.last_error_line.?);
-    try std.testing.expectEqualStrings("<test>", interp.last_error_file.?);
+    try std.testing.expectEqual(@as(u32, 2), interp.last_error.line.?);
+    try std.testing.expectEqualStrings("<test>", interp.last_error.file.?);
 }

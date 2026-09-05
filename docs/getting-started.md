@@ -48,7 +48,7 @@ An error prints its message, the input and line it came from, and the chain of c
 [5]> (define (g x) (car x))
 [6]> (define (f x) (+ 1 (g x)))
 [7]> (f 5)
-Error: InvalidArgument
+Error: car: expected a pair, got an integer
 At: [5]:1
 Backtrace:
   0: g  ([5]:1)

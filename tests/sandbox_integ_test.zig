@@ -44,7 +44,7 @@ test "no time limit by default" {
     defer interp.deinit();
 
     // time_limit_ms should be null
-    try testing.expect(interp.time_limit_ms == null);
+    try testing.expect(interp.flags.time_limit_ms == null);
 
     var fuel: u64 = 10000;
     const result = try interp.evalString("(* 6 7)", &fuel);

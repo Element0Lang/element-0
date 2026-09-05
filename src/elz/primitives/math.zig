@@ -230,52 +230,52 @@ fn numNegate(a: Value, alloc: std.mem.Allocator) ElzError!Value {
 
 // --- Primitive procedures ---
 
-pub fn add(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn add(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return Value{ .exact_integer = 0 };
     var acc = args.items[0];
-    if (!acc.isNumeric()) return ElzError.InvalidArgument;
+    if (!acc.isNumeric()) return interp.fail(ElzError.InvalidArgument, "+: expected a number, got {s}", .{core.typeName(acc)});
     for (args.items[1..]) |arg| {
-        if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (!arg.isNumeric()) return interp.fail(ElzError.InvalidArgument, "+: expected a number, got {s}", .{core.typeName(arg)});
         acc = try numAdd(acc, arg, env.allocator);
     }
     return acc;
 }
 
-pub fn sub(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn sub(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return ElzError.WrongArgumentCount;
-    if (!args.items[0].isNumeric()) return ElzError.InvalidArgument;
+    if (!args.items[0].isNumeric()) return interp.fail(ElzError.InvalidArgument, "-: expected a number, got {s}", .{core.typeName(args.items[0])});
     if (args.items.len == 1) {
         return numNegate(args.items[0], env.allocator);
     }
     var acc = args.items[0];
     for (args.items[1..]) |arg| {
-        if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (!arg.isNumeric()) return interp.fail(ElzError.InvalidArgument, "-: expected a number, got {s}", .{core.typeName(arg)});
         acc = try numSub(acc, arg, env.allocator);
     }
     return acc;
 }
 
-pub fn mul(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn mul(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return Value{ .exact_integer = 1 };
     var acc = args.items[0];
-    if (!acc.isNumeric()) return ElzError.InvalidArgument;
+    if (!acc.isNumeric()) return interp.fail(ElzError.InvalidArgument, "*: expected a number, got {s}", .{core.typeName(acc)});
     for (args.items[1..]) |arg| {
-        if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (!arg.isNumeric()) return interp.fail(ElzError.InvalidArgument, "*: expected a number, got {s}", .{core.typeName(arg)});
         acc = try numMul(acc, arg, env.allocator);
     }
     return acc;
 }
 
-pub fn div(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn div(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1) return ElzError.WrongArgumentCount;
-    if (!args.items[0].isNumeric()) return ElzError.InvalidArgument;
+    if (!args.items[0].isNumeric()) return interp.fail(ElzError.InvalidArgument, "/: expected a number, got {s}", .{core.typeName(args.items[0])});
     if (args.items.len == 1) {
         // (/ x) = 1/x
         return numDiv(Value{ .exact_integer = 1 }, args.items[0], env.allocator);
     }
     var acc = args.items[0];
     for (args.items[1..]) |arg| {
-        if (!arg.isNumeric()) return ElzError.InvalidArgument;
+        if (!arg.isNumeric()) return interp.fail(ElzError.InvalidArgument, "/: expected a number, got {s}", .{core.typeName(arg)});
         acc = try numDiv(acc, arg, env.allocator);
     }
     return acc;
@@ -1338,8 +1338,6 @@ test "math primitives" {
         .allocator = allocator,
         .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,
-        .last_error_message = null,
-        .module_cache = undefined,
     };
     const env_stub = try core.Environment.init(allocator, null);
     defer {
