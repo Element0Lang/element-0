@@ -621,4 +621,40 @@
   (letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))))
     (= (fact 30) 265252859812191058636308480000000)))
 
+;; --- Hygienic macro expansion ---
+(test-case "a template's free identifier means the definition-site binding"
+  (eq? 'outer (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))))
+(test-case "a template keyword survives use-site shadowing"
+  (eq? 'now (let-syntax ((my-when (syntax-rules () ((_ test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...))))))
+              (let ((if #t)) (my-when if (set! if 'now)) if))))
+(test-case "a use-site binding cannot capture a template's global reference"
+  (begin
+    (define-syntax %two (syntax-rules () ((_ x) (list x x))))
+    (equal? '(1 1) (let ((list vector)) (%two 1)))))
+(test-case "a template temporary cannot capture a user variable"
+  (begin
+    (define-syntax %my-or (syntax-rules () ((_ a b) (let ((t a)) (if t t b)))))
+    (= 5 (let ((if list) (t 5)) (%my-or #f t)))))
+(test-case "a template may mutate a definition-site local through shadowing"
+  (= 3 ((lambda () (let ((k 1)) (let-syntax ((bump (syntax-rules () ((_) (set! k (+ k 1)))))) (let ((k 50)) (bump) (bump)) k))))))
+(test-case "case datums in a template are data"
+  (begin
+    (define-syntax %my-case (syntax-rules () ((_ v) (case v ((foo) 'is-foo) ((1 2) 'small) (else => (lambda (x) x))))))
+    (equal? '(is-foo small 9) (list (%my-case 'foo) (%my-case 2) (%my-case 9)))))
+(test-case "quasiquoted data in a template is not renamed"
+  (begin
+    (define-syntax %my-qq (syntax-rules () ((_ x) `(a ,x ,@x))))
+    (equal? '(a (2 3) 2 3) (%my-qq (list 2 3)))))
+(test-case "a macro-defining macro resolves nested aliases"
+  (begin
+    (define-syntax %def-getter (syntax-rules () ((_ name val) (define-syntax name (syntax-rules () ((_) (list val val)))))))
+    (%def-getter %g 4)
+    (equal? '(4 4) (let ((list vector)) (%g)))))
+(test-case "an underscore among the literals matches itself"
+  (begin
+    (define-syntax %count (syntax-rules (_) ((_) 0) ((_ _) 1) ((_ _ _) 2) ((x . y) 'fail)))
+    (equal? '(2 0 fail) (list (%count _ _) (%count) (%count a b)))))
+(test-case "a let-syntax body is its own scope for definitions"
+  (= 1 (let () (define x 1) (let-syntax () (define x 2) #f) x)))
+
 (report-summary)

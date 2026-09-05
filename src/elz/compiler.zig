@@ -116,6 +116,8 @@ pub const Compiler = struct {
     current_file: []const u8 = "",
     /// Interpreter reference for macro expansion.
     interp: *@import("interpreter.zig").Interpreter,
+    /// Identity of this compiler scope, recorded by transformers defined in it.
+    id: u64 = 0,
     /// Tracked stack depth: number of values currently on the runtime stack above
     /// frame.stack_base. Used to assign correct slot indices when allocating locals
     /// inside inline expressions. Incremented by every push-emitting instruction and
@@ -131,9 +133,11 @@ pub const Compiler = struct {
         const proto = try allocator.create(FuncProto);
         proto.* = FuncProto.init(allocator, name);
         if (enclosing) |enc| proto.source_file = enc.current_file;
+        interp.compiler_id_counter += 1;
         return .{
             .allocator = allocator,
             .proto = proto,
+            .id = interp.compiler_id_counter,
             .current_line = if (enclosing) |enc| enc.current_line else 0,
             .current_file = if (enclosing) |enc| enc.current_file else "",
             .scope = Scope.init(allocator, null),
@@ -267,14 +271,14 @@ pub const Compiler = struct {
 
     /// True when a `define` directly in `body` (or inside a `begin` there)
     /// binds `name`, so a same-named macro must not expand in that body.
-    fn bodyDefines(body: Value, name: []const u8) bool {
+    fn bodyDefines(self: *Compiler, body: Value, name: []const u8) bool {
         var cur = body;
         while (cur == .pair) : (cur = cur.pair.cdr) {
             const form = cur.pair.car;
             if (form != .pair or form.pair.car != .symbol) continue;
-            const head = form.pair.car.symbol;
+            const head = self.baseName(form.pair.car.symbol);
             if (std.mem.eql(u8, head, "begin")) {
-                if (bodyDefines(form.pair.cdr, name)) return true;
+                if (self.bodyDefines(form.pair.cdr, name)) return true;
                 continue;
             }
             if (!std.mem.eql(u8, head, "define") or form.pair.cdr != .pair) continue;
@@ -293,8 +297,12 @@ pub const Compiler = struct {
         if (head != .symbol) return null;
         const looked_up = env.lookup(head.symbol) orelse blk: {
             // A macro name renamed by hygiene refers to the macro itself.
-            const base = macros_mod.hygieneBase(head.symbol) orelse return null;
-            break :blk env.lookup(base) orelse return null;
+            var name = head.symbol;
+            while (macros_mod.hygieneBase(name)) |base| {
+                name = base;
+                if (env.lookup(name)) |v| break :blk v;
+            }
+            return null;
         };
         switch (looked_up) {
             .syntax_rules => |sr| {
@@ -359,15 +367,104 @@ pub const Compiler = struct {
         }
     }
 
-    /// Resolves a variable, letting a hygiene-renamed free identifier fall
-    /// back to a local or upvalue binding of its original name at the use
-    /// site. Globals get the same fallback at run time in the VM.
-    fn resolveVarWithFallback(self: *Compiler, name: []const u8) !VarLoc {
+    // -----------------------------------------------------------------------
+    // Hygiene: identifiers introduced by syntax-rules templates
+    //
+    // An introduced identifier is an alias (`name__hN`) registered in
+    // `interp.hygiene_aliases` with the scope its macro was defined in. It is
+    // resolved as its base name *from that scope*, so a binding at the use
+    // site cannot capture it, and a keyword such as `if` or `else` keeps its
+    // meaning even when the use site rebinds that name.
+    // -----------------------------------------------------------------------
+
+    fn aliasOf(self: *Compiler, name: []const u8) ?@import("interpreter.zig").HygieneAlias {
+        return self.interp.hygiene_aliases.get(name);
+    }
+
+    /// The compiler with identity `id` among this one and its enclosing ones.
+    fn findScope(self: *Compiler, id: u64) ?*Compiler {
+        var cur: ?*Compiler = self;
+        while (cur) |c| : (cur = c.enclosing) {
+            if (c.id == id) return c;
+        }
+        return null;
+    }
+
+    /// Reports whether `name` is lexically bound as seen from compiler `c`,
+    /// without recording any capture.
+    fn boundFrom(c: *Compiler, name: []const u8) bool {
+        var cur: ?*Compiler = c;
+        while (cur) |k| : (cur = k.enclosing) {
+            if (k.scope.findLocal(name) != null) return true;
+        }
+        return false;
+    }
+
+    /// Resolves `name` as seen from the enclosing compiler `target`, threading
+    /// upvalue captures through every compiler in between.
+    fn resolveFrom(self: *Compiler, target: *Compiler, name: []const u8) ElzError!VarLoc {
+        if (self == target) return self.resolveVar(name);
+        const enc = self.enclosing orelse return .global;
+        const loc = try enc.resolveFrom(target, name);
+        switch (loc) {
+            .local => |slot| {
+                for (enc.scope.locals.items) |*l| {
+                    if (l.slot == slot) l.is_captured = true;
+                }
+                return .{ .upval = try self.scope.addUpval(.{ .is_local = true, .index = slot }) };
+            },
+            .upval => |idx| return .{ .upval = try self.scope.addUpval(.{ .is_local = false, .index = idx }) },
+            .global => return .global,
+        }
+    }
+
+    /// Resolves a variable. An alias that is not itself lexically bound
+    /// resolves as its base name from the macro's definition scope; when that
+    /// scope is not enclosing (a global macro), it is a global, and the VM
+    /// falls back from the alias to the base name at run time.
+    fn resolveVarWithFallback(self: *Compiler, name: []const u8) ElzError!VarLoc {
         const loc = try self.resolveVar(name);
         if (loc != .global) return loc;
-        const base = macros_mod.hygieneBase(name) orelse return loc;
-        const base_loc = try self.resolveVar(base);
-        return if (base_loc != .global) base_loc else loc;
+        const alias = self.aliasOf(name) orelse return loc;
+        if (self.findScope(alias.def_scope_id)) |def| {
+            const from_def = try self.resolveFrom(def, alias.base);
+            if (from_def != .global) return from_def;
+        }
+        // The base may itself be an alias (a macro-defining macro): resolve
+        // it in turn. Otherwise it is a global the VM finds by base name.
+        if (self.aliasOf(alias.base) != null) return self.resolveVarWithFallback(alias.base);
+        return .global;
+    }
+
+    /// The keyword a head symbol denotes: its own name, or for an alias the
+    /// base name when that is not lexically bound at the definition scope.
+    /// Null when the symbol is a lexically bound variable.
+    fn keywordName(self: *Compiler, sym: []const u8) ElzError!?[]const u8 {
+        if ((try self.resolveVar(sym)) != .global) return null;
+        if (self.aliasOf(sym)) |alias| {
+            if (self.findScope(alias.def_scope_id)) |def| {
+                if (boundFrom(def, alias.base)) return null;
+            }
+            // An alias of an alias: keep unwrapping.
+            if (self.aliasOf(alias.base) != null) return self.keywordName(alias.base);
+            return alias.base;
+        }
+        return sym;
+    }
+
+    /// True when `v` denotes the syntactic keyword `kw`.
+    fn isKeyword(self: *Compiler, v: Value, comptime kw: []const u8) ElzError!bool {
+        if (v != .symbol) return false;
+        const k = (try self.keywordName(v.symbol)) orelse return false;
+        return std.mem.eql(u8, k, kw);
+    }
+
+    /// The base name of an alias, or the symbol itself: for syntactic scans
+    /// that run before scopes are known.
+    fn baseName(self: *Compiler, sym: []const u8) []const u8 {
+        var name = sym;
+        while (self.aliasOf(name)) |alias| name = alias.base;
+        return name;
     }
 
     fn compileVarLoad(self: *Compiler, name: []const u8) ElzError!void {
@@ -413,13 +510,12 @@ pub const Compiler = struct {
             return self.compileCall(head, args, env, tail, fuel);
         }
 
-        const sym = head.symbol;
-
         // A lexically bound name shadows any special form of the same name,
-        // e.g. (let ((if list)) (if 1 2 3)) calls the variable.
-        if (try self.resolveVar(sym) != .global) {
+        // e.g. (let ((if list)) (if 1 2 3)) calls the variable. A hygiene
+        // alias dispatches on the keyword it stands for.
+        const sym = (try self.keywordName(head.symbol)) orelse {
             return self.compileCall(head, args, env, tail, fuel);
-        }
+        };
 
         // Validate the operand list's shape once, before dispatch.
         if (minOperands(sym)) |min| try self.requireOperands(sym, args, min);
@@ -491,26 +587,8 @@ pub const Compiler = struct {
             .pair => |p| {
                 // Check whether unquote/unquote-splicing are locally bound (in which case they
                 // lose their special meaning inside quasiquote per R5RS §4.2.6).
-                const unquote_is_global = blk: {
-                    if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote")) {
-                        const loc = try self.resolveVar("unquote");
-                        break :blk switch (loc) {
-                            .global => true,
-                            else => false,
-                        };
-                    }
-                    break :blk false;
-                };
-                const unquote_splice_is_global = blk: {
-                    if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "unquote-splicing")) {
-                        const loc = try self.resolveVar("unquote-splicing");
-                        break :blk switch (loc) {
-                            .global => true,
-                            else => false,
-                        };
-                    }
-                    break :blk false;
-                };
+                const unquote_is_global = try self.isKeyword(p.car, "unquote");
+                const unquote_splice_is_global = try self.isKeyword(p.car, "unquote-splicing");
                 // (unquote x) at level 1 → compile x
                 if (level == 1 and unquote_is_global) {
                     const operand = try self.requirePair("unquote", p.cdr);
@@ -537,7 +615,7 @@ pub const Compiler = struct {
                     return;
                 }
                 // (quasiquote x) — increase level
-                if (p.car == .symbol and std.mem.eql(u8, p.car.symbol, "quasiquote") and p.cdr == .pair) {
+                if (try self.isKeyword(p.car, "quasiquote") and p.cdr == .pair) {
                     // Wrap in (quasiquote ...)
                     const ci = try self.addConst(Value{ .symbol = "quasiquote" });
                     _ = try self.emitBx(.load_const, ci);
@@ -584,24 +662,11 @@ pub const Compiler = struct {
         const car = p.car;
         // `(a . ,x)` reads as `(a unquote x)`: an unquote form in tail position
         // is the tail itself, not two more elements.
-        if (car == .symbol and std.mem.eql(u8, car.symbol, "unquote") and
-            p.cdr == .pair and p.cdr.pair.cdr == .nil and try self.resolveVar("unquote") == .global)
-        {
+        if (try self.isKeyword(car, "unquote") and p.cdr == .pair and p.cdr.pair.cdr == .nil) {
             return self.compileQQ(list, env, level, fuel);
         }
         // Check for (unquote-splicing x) at level 1 — splice (only when unquote-splicing is global)
-        const splice_is_global = blk: {
-            if (car == .pair and car.pair.cdr == .pair and car.pair.car == .symbol and
-                std.mem.eql(u8, car.pair.car.symbol, "unquote-splicing"))
-            {
-                const loc = try self.resolveVar("unquote-splicing");
-                break :blk switch (loc) {
-                    .global => true,
-                    else => false,
-                };
-            }
-            break :blk false;
-        };
+        const splice_is_global = car == .pair and car.pair.cdr == .pair and try self.isKeyword(car.pair.car, "unquote-splicing");
         if (level == 1 and splice_is_global) {
             // Splice: evaluate the spliced list, then append to rest
             try self.compileExpr(car.pair.cdr.pair.car, env, false, fuel);
@@ -722,9 +787,7 @@ pub const Compiler = struct {
         var cur = args;
         while (cur == .pair) {
             const form = cur.pair.car;
-            if (form == .pair and form.pair.car == .symbol and
-                std.mem.eql(u8, form.pair.car.symbol, "catch"))
-            {
+            if (form == .pair and try self.isKeyword(form.pair.car, "catch")) {
                 catch_clause = form;
                 break;
             }
@@ -787,12 +850,13 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn evalTransformer(self: *Compiler, expr: Value, name: []const u8, env: *core.Environment) ElzError!Value {
-        if (expr == .pair and expr.pair.car == .symbol and std.mem.eql(u8, expr.pair.car.symbol, "syntax-rules")) {
+        if (expr == .pair and expr.pair.car == .symbol and std.mem.eql(u8, self.baseName(expr.pair.car.symbol), "syntax-rules")) {
             const ellipsis_bound = switch (try self.resolveVar("...")) {
                 .global => false,
                 else => true,
             };
             const sr = try macros_mod.buildSyntaxRules(env, name, expr.pair.cdr, ellipsis_bound);
+            sr.def_scope_id = self.id;
             return Value{ .syntax_rules = sr };
         }
         var f: u64 = 1_000_000;
@@ -953,10 +1017,7 @@ pub const Compiler = struct {
 
         // Scan for internal defines and hoist them as locals.
         for (forms.items) |form| {
-            if (form == .pair and form.pair.car == .symbol and
-                std.mem.eql(u8, form.pair.car.symbol, "define") and
-                try self.resolveVar("define") == .global)
-            {
+            if (form == .pair and try self.isKeyword(form.pair.car, "define")) {
                 const spec = try self.requirePair("define", form.pair.cdr);
                 const target = spec.car;
                 const dname = switch (target) {
@@ -989,14 +1050,11 @@ pub const Compiler = struct {
             var form = cur.pair.car;
             while (form == .pair) {
                 // A definition in this body shadows a macro of the same name.
-                if (form.pair.car == .symbol and (try self.macroShadowed(form.pair.car) or bodyDefines(body, form.pair.car.symbol))) break;
+                if (form.pair.car == .symbol and (try self.macroShadowed(form.pair.car) or self.bodyDefines(body, form.pair.car.symbol))) break;
                 const expanded = try self.tryExpandMacro(form.pair.car, form.pair.cdr, env, fuel) orelse break;
                 form = expanded;
             }
-            if (form == .pair and form.pair.car == .symbol and
-                std.mem.eql(u8, form.pair.car.symbol, "begin") and
-                try self.resolveVar("begin") == .global)
-            {
+            if (form == .pair and try self.isKeyword(form.pair.car, "begin")) {
                 try self.collectBodyForms(form.pair.cdr, env, out, fuel);
                 continue;
             }
@@ -1374,7 +1432,7 @@ pub const Compiler = struct {
             const clause_body = clause.cdr;
 
             // else clause — compile body, break.
-            if (test_expr == .symbol and std.mem.eql(u8, test_expr.symbol, "else")) {
+            if (try self.isKeyword(test_expr, "else")) {
                 found_else = true;
                 try self.compileBegin(clause_body, env, tail and is_last, fuel);
                 break;
@@ -1382,18 +1440,7 @@ pub const Compiler = struct {
 
             // cond => arrow: (cond (test => proc) ...) — compile as (let ((t test)) (if t (proc t) ...))
             // Only treat => as the arrow keyword when it is not locally bound (R5RS §4.2.1).
-            const arrow_not_bound = brk: {
-                if (clause_body != .nil and clause_body.pair.car == .symbol and
-                    std.mem.eql(u8, clause_body.pair.car.symbol, "=>"))
-                {
-                    const loc = try self.resolveVar("=>");
-                    break :brk switch (loc) {
-                        .global => true,
-                        else => false,
-                    };
-                }
-                break :brk false;
-            };
+            const arrow_not_bound = clause_body != .nil and try self.isKeyword(clause_body.pair.car, "=>");
             if (arrow_not_bound) {
                 const arrow_rest = try self.requirePair("cond", clause_body.pair.cdr);
                 const proc_expr = arrow_rest.car;
@@ -1473,7 +1520,7 @@ pub const Compiler = struct {
             const datums = clause.car;
             const body = clause.cdr;
 
-            if (datums == .symbol and std.mem.eql(u8, datums.symbol, "else")) {
+            if (try self.isKeyword(datums, "else")) {
                 // Run else body (key on stack, consumed by the body helper), jump to end.
                 try self.compileCaseBody(body, env, tail and is_last, fuel);
                 // Jump to end (past the "no match" fallthrough code).
@@ -1619,7 +1666,7 @@ pub const Compiler = struct {
     /// Compiles a case clause body with the key on top of the stack. A plain
     /// body pops the key first; a `(=> proc)` body calls proc with the key.
     fn compileCaseBody(self: *Compiler, body: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
-        if (body == .pair and body.pair.car == .symbol and std.mem.eql(u8, body.pair.car.symbol, "=>")) {
+        if (body == .pair and try self.isKeyword(body.pair.car, "=>")) {
             if (body.pair.cdr != .pair) return ElzError.InvalidArgument;
             const proc_expr = body.pair.cdr.pair.car;
             try self.compileExpr(proc_expr, env, false, fuel);
@@ -1833,7 +1880,10 @@ pub const Compiler = struct {
             }
         }
 
-        try self.compileBegin(body, env, tail, fuel);
+        // The body is a <body> of its own (R7RS 4.3.1): definitions inside it
+        // are local to it, so compile it as an immediately applied thunk.
+        try self.compileLambdaArgs(.nil, body, env, fuel);
+        _ = try self.emitA(if (tail) .tail_call else .call, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -1849,6 +1899,7 @@ pub const Compiler = struct {
             else => true,
         };
         const sr = try macros_mod.buildSyntaxRules(env, "<anonymous>", args, ellipsis_bound);
+        sr.def_scope_id = self.id;
         const result = Value{ .syntax_rules = sr };
         const ci = try self.addConst(result);
         _ = try self.emitBx(.load_const, ci);
@@ -2083,7 +2134,7 @@ fn collectTopLevelDefines(
     added: *std.ArrayListUnmanaged([]const u8),
 ) ElzError!void {
     if (form != .pair or form.pair.car != .symbol) return;
-    const head = form.pair.car.symbol;
+    const head = macros_mod.hygieneBase(form.pair.car.symbol) orelse form.pair.car.symbol;
     if (std.mem.eql(u8, head, "begin")) {
         var cur = form.pair.cdr;
         while (cur == .pair) : (cur = cur.pair.cdr) {

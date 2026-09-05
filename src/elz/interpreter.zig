@@ -64,6 +64,12 @@ pub const CpsState = struct {
     winders: ?*core.Winder = null,
 };
 
+/// What a hygiene-renamed identifier stands for.
+pub const HygieneAlias = struct {
+    base: []const u8,
+    def_scope_id: u64,
+};
+
 /// `Interpreter` is the top-level handle for the Elz scripting engine.
 /// It holds the root environment, module cache, and VM configuration.
 pub const Interpreter = struct {
@@ -129,6 +135,12 @@ pub const Interpreter = struct {
     compile_depth: u32 = 0,
     /// Current nesting of VM runs started by primitive callbacks.
     native_depth: u32 = 0,
+    /// Hygiene aliases: a fresh identifier introduced by a `syntax-rules`
+    /// template, mapped to the name it stands for and the scope the macro
+    /// was defined in. The compiler resolves an alias from that scope.
+    hygiene_aliases: std.StringHashMapUnmanaged(HygieneAlias) = .empty,
+    /// Hands out compiler scope identities.
+    compiler_id_counter: u64 = 0,
     /// Files currently being loaded by `include`, `import`, or `load`, so a
     /// file that includes itself is reported instead of recursing forever.
     loading_files: std.StringHashMapUnmanaged(void) = .empty,

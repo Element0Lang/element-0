@@ -106,6 +106,9 @@ phase has the highest value. It requires restructuring the matcher and expander 
     * [x] Custom ellipsis identifier (`(syntax-rules ooo (lit ...) rules ...)`)
     * [x] `(<ellipsis> <template>)` escape in templates
     * [x] `syntax-error`
+    * [x] Hygiene: introduced identifiers resolve from the definition scope, so
+      use-site bindings cannot capture them and template keywords keep their
+      meaning under shadowing
 * Derived forms unlocked by the expander
     * [x] `let-values`, `let*-values`, `define-values`
     * [x] `case-lambda`

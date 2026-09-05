@@ -420,60 +420,19 @@ fn expand_ellipsis(
     return result;
 }
 
-const special_form_names: []const []const u8 = &.{
-    "quote",        "quasiquote",   "unquote",        "unquote-splicing",
-    "if",           "cond",         "case",           "and",
-    "or",           "define",       "define-macro",   "define-syntax",
-    "syntax-rules", "syntax-error", "set!",           "lambda",
-    "begin",        "let",          "let*",           "letrec",
-    "letrec*",      "do",           "delay",          "try",
-    "catch",        "import",       "else",           "=>",
-    "...",          "_",            "reset",          "shift",
-    "when",         "unless",       "let-syntax",     "letrec-syntax",
-    "include",      "include-ci",   "define-library",
-};
-
-fn is_special_form_name(name: []const u8) bool {
-    for (special_form_names) |s| {
-        if (std.mem.eql(u8, s, name)) return true;
-    }
-    return false;
-}
-
 fn collect_introduced_identifiers(
-    interp: *interpreter.Interpreter,
     allocator: std.mem.Allocator,
     template: Value,
     pattern_var_names: []const []const u8,
-    def_env: *Environment,
     ellipsis: []const u8,
     out: *std.ArrayListUnmanaged([]const u8),
 ) ElzError!void {
     switch (template) {
-        .symbol => |s| {
-            if (is_special_form_name(s)) return;
-            if (ellipsis.len > 0 and std.mem.eql(u8, s, ellipsis)) return;
-            for (pattern_var_names) |pv| {
-                if (std.mem.eql(u8, pv, s)) return;
-            }
-            if (def_env.contains(s)) return;
-            // A name this compilation unit defines later is a free reference,
-            // not an identifier the template introduces.
-            if (interp.pending_globals.contains(s)) return;
-            for (out.items) |existing| {
-                if (std.mem.eql(u8, existing, s)) return;
-            }
-            try out.append(allocator, s);
-        },
+        .symbol => |s| try add_identifier(allocator, s, pattern_var_names, ellipsis, out),
         .pair => |p| {
             if (p.car.is_symbol("quote")) return;
-            try collect_introduced_identifiers(interp, allocator, p.car, pattern_var_names, def_env, ellipsis, out);
-            try collect_introduced_identifiers(interp, allocator, p.cdr, pattern_var_names, def_env, ellipsis, out);
-        },
-        .vector => |v| {
-            for (v.items) |item| {
-                try collect_introduced_identifiers(interp, allocator, item, pattern_var_names, def_env, ellipsis, out);
-            }
+            try collect_introduced_identifiers(allocator, p.car, pattern_var_names, ellipsis, out);
+            try collect_introduced_identifiers(allocator, p.cdr, pattern_var_names, ellipsis, out);
         },
         else => {},
     }
@@ -499,7 +458,7 @@ fn add_identifier(
     ellipsis: []const u8,
     out: *std.ArrayListUnmanaged([]const u8),
 ) ElzError!void {
-    if (is_special_form_name(name)) return;
+    if (std.mem.eql(u8, name, "_")) return;
     if (ellipsis.len > 0 and std.mem.eql(u8, name, ellipsis)) return;
     for (pattern_var_names) |pv| {
         if (std.mem.eql(u8, pv, name)) return;
@@ -615,35 +574,106 @@ fn rename_template(
     template: Value,
     rename_map: *const std.StringHashMapUnmanaged([]const u8),
 ) ElzError!Value {
+    return rename_template_depth(allocator, template, rename_map, 0);
+}
+
+/// Renames introduced identifiers. Data is left alone: quoted forms, vector
+/// literals, `case` datums, and the parts of a quasiquotation that are not
+/// unquoted (`qq_depth` tracks quasiquote nesting).
+fn rename_template_depth(
+    allocator: std.mem.Allocator,
+    template: Value,
+    rename_map: *const std.StringHashMapUnmanaged([]const u8),
+    qq_depth: usize,
+) ElzError!Value {
     switch (template) {
         .symbol => |s| {
-            if (rename_map.get(s)) |renamed| {
-                return Value{ .symbol = try allocator.dupe(u8, renamed) };
+            if (qq_depth == 0) {
+                if (rename_map.get(s)) |renamed| {
+                    return Value{ .symbol = try allocator.dupe(u8, renamed) };
+                }
             }
             return Value{ .symbol = try allocator.dupe(u8, s) };
         },
         .pair => |p| {
-            if (p.car.is_symbol("quote")) {
-                return template.deep_clone(allocator);
+            if (p.car.is_symbol("quote")) return template.deep_clone(allocator);
+            if (p.car == .symbol and p.cdr == .pair) {
+                const head = p.car.symbol;
+                if (std.mem.eql(u8, head, "quasiquote")) {
+                    return rename_keyword_form(allocator, p, rename_map, qq_depth, qq_depth + 1);
+                }
+                if (qq_depth > 0 and (std.mem.eql(u8, head, "unquote") or std.mem.eql(u8, head, "unquote-splicing"))) {
+                    return rename_keyword_form(allocator, p, rename_map, qq_depth, qq_depth - 1);
+                }
+                if (qq_depth == 0 and std.mem.eql(u8, head, "case")) {
+                    return rename_case_form(allocator, p, rename_map);
+                }
             }
             const new_pair = try allocator.create(core.Pair);
             new_pair.* = .{
-                .car = try rename_template(allocator, p.car, rename_map),
-                .cdr = try rename_template(allocator, p.cdr, rename_map),
+                .car = try rename_template_depth(allocator, p.car, rename_map, qq_depth),
+                .cdr = try rename_template_depth(allocator, p.cdr, rename_map, qq_depth),
             };
             return Value{ .pair = new_pair };
         },
-        .vector => |v| {
-            const items = allocator.alloc(Value, v.items.len) catch return ElzError.OutOfMemory;
-            for (v.items, items) |item, *slot| {
-                slot.* = try rename_template(allocator, item, rename_map);
-            }
-            const vec = allocator.create(core.Vector) catch return ElzError.OutOfMemory;
-            vec.* = .{ .items = items };
-            return Value{ .vector = vec };
-        },
+        // A vector template is data; pattern variables inside it are still
+        // substituted later, since substitution does not go through the map.
+        .vector => return template.deep_clone(allocator),
         else => return template.deep_clone(allocator),
     }
+}
+
+/// Renames the keyword of a quasiquote-family form at the current depth and
+/// its operands at `inner_depth`.
+fn rename_keyword_form(
+    allocator: std.mem.Allocator,
+    p: *core.Pair,
+    rename_map: *const std.StringHashMapUnmanaged([]const u8),
+    qq_depth: usize,
+    inner_depth: usize,
+) ElzError!Value {
+    const new_pair = try allocator.create(core.Pair);
+    new_pair.* = .{
+        .car = try rename_template_depth(allocator, p.car, rename_map, qq_depth),
+        .cdr = try rename_template_depth(allocator, p.cdr, rename_map, inner_depth),
+    };
+    return Value{ .pair = new_pair };
+}
+
+/// Renames a `case` form: the keyword, the key, and clause bodies, but not
+/// the datum lists, which are data (an `else` keyword is still renamed).
+fn rename_case_form(
+    allocator: std.mem.Allocator,
+    p: *core.Pair,
+    rename_map: *const std.StringHashMapUnmanaged([]const u8),
+) ElzError!Value {
+    const key_pair = p.cdr.pair;
+    var clauses: Value = .nil;
+    var tail: ?*core.Pair = null;
+    var cur = key_pair.cdr;
+    while (cur == .pair) : (cur = cur.pair.cdr) {
+        const clause = cur.pair.car;
+        var new_clause = clause;
+        if (clause == .pair) {
+            const datums = clause.pair.car;
+            const new_datums = if (datums == .symbol)
+                try rename_template_depth(allocator, datums, rename_map, 0)
+            else
+                try datums.deep_clone(allocator);
+            const cp = try allocator.create(core.Pair);
+            cp.* = .{ .car = new_datums, .cdr = try rename_template_depth(allocator, clause.pair.cdr, rename_map, 0) };
+            new_clause = Value{ .pair = cp };
+        }
+        const link = try allocator.create(core.Pair);
+        link.* = .{ .car = new_clause, .cdr = .nil };
+        if (tail) |t| t.cdr = Value{ .pair = link } else clauses = Value{ .pair = link };
+        tail = link;
+    }
+    const kp = try allocator.create(core.Pair);
+    kp.* = .{ .car = try rename_template_depth(allocator, key_pair.car, rename_map, 0), .cdr = clauses };
+    const head = try allocator.create(core.Pair);
+    head.* = .{ .car = try rename_template_depth(allocator, p.car, rename_map, 0), .cdr = Value{ .pair = kp } };
+    return Value{ .pair = head };
 }
 
 fn append_lists(allocator: std.mem.Allocator, head: Value, tail: Value) ElzError!Value {
@@ -771,14 +801,18 @@ pub fn expandSyntaxRules(
             // from `name__hN` to `name` (see `hygieneBase`).
             var introduced: std.ArrayListUnmanaged([]const u8) = .empty;
             defer introduced.deinit(allocator);
-            try collect_introduced_identifiers(interp, allocator, rule.template, pattern_var_names.items, sr.env, sr.ellipsis, &introduced);
+            try collect_introduced_identifiers(allocator, rule.template, pattern_var_names.items, sr.ellipsis, &introduced);
             try collect_template_bound(allocator, rule.template, pattern_var_names.items, sr.ellipsis, &introduced);
 
+            // Each introduced identifier gets a fresh alias that records what
+            // it stands for and where the macro was defined, so the compiler
+            // resolves it from the definition scope rather than the use site.
             var rename_map: std.StringHashMapUnmanaged([]const u8) = .empty;
             defer rename_map.deinit(allocator);
             for (introduced.items) |name| {
                 const fresh = fresh_hygiene_name(interp, allocator, name) catch return ElzError.OutOfMemory;
                 try rename_map.put(allocator, name, fresh);
+                interp.hygiene_aliases.put(interp.allocator, fresh, .{ .base = name, .def_scope_id = sr.def_scope_id }) catch return ElzError.OutOfMemory;
             }
 
             const renamed_template = try rename_template(allocator, rule.template, &rename_map);

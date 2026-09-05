@@ -286,6 +286,9 @@ pub const SyntaxRulesMacro = struct {
     /// The ellipsis marker (default "..."). Set to "" when "..." is lexically rebound,
     /// or to a custom symbol for the R7RS `(syntax-rules <ellipsis> ...)` form.
     ellipsis: []const u8,
+    /// Identity of the compiler scope the transformer was defined in (0 for
+    /// none). Free identifiers a template introduces resolve from that scope.
+    def_scope_id: u64 = 0,
 };
 
 /// A pointer to a native Zig function that can be called from Elz.

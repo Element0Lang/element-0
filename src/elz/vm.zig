@@ -482,9 +482,12 @@ pub const VM = struct {
                     if (name_val != .symbol) return ElzError.InvalidArgument;
                     const val = self.interp.root_env.lookup(name_val.symbol) orelse blk: {
                         // A hygiene-renamed identifier that never got a binding
-                        // of its own is a free reference to the original name.
-                        if (@import("macros.zig").hygieneBase(name_val.symbol)) |base| {
-                            if (self.interp.root_env.lookup(base)) |v| break :blk v;
+                        // of its own is a free reference to the original name,
+                        // possibly through several levels of renaming.
+                        var name = name_val.symbol;
+                        while (@import("macros.zig").hygieneBase(name)) |base| {
+                            name = base;
+                            if (self.interp.root_env.lookup(name)) |v| break :blk v;
                         }
                         break :blk try self.interp.root_env.get(name_val.symbol, self.interp);
                     };
@@ -496,11 +499,10 @@ pub const VM = struct {
                     // `set!` requires an existing binding: `update` reports
                     // SymbolNotFound rather than quietly creating a global.
                     var name = name_val.symbol;
-                    if (!self.interp.root_env.contains(name)) {
-                        if (@import("macros.zig").hygieneBase(name)) |base| {
-                            if (self.interp.root_env.contains(base)) name = base;
-                        }
+                    while (!self.interp.root_env.contains(name)) {
+                        name = @import("macros.zig").hygieneBase(name) orelse break;
                     }
+                    if (!self.interp.root_env.contains(name)) name = name_val.symbol;
                     try self.interp.root_env.update(self.interp, name, self.peek(0));
                 },
                 .define_global => {
