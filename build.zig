@@ -218,6 +218,13 @@ pub fn build(b: *std.Build) void {
                 t_module.addImport("minish", minish_dep.module("minish"));
             }
 
+            // The REPL tests spawn the real binary; hand them its path.
+            if (repl_exe) |exe| {
+                const t_options = b.addOptions();
+                t_options.addOptionPath("repl_path", exe.getEmittedBin());
+                t_module.addOptions("build_options", t_options);
+            }
+
             const t = b.addTest(.{ .root_module = t_module });
             const bdwgc_dep_t = b.dependency("bdwgc", .{});
             t_module.addIncludePath(bdwgc_dep_t.path("include"));

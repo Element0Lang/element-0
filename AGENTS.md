@@ -68,6 +68,8 @@ Priorities, in order:
 - `examples/elz/`: Element 0 script examples.
 - `tests/`: Element 0 language-level tests (`test_*.elz`), Zig property tests (`*_prop_test.zig`), Zig integration tests
   (`*_integ_test.zig`), and the R7RS conformance harness (`r7rs_conformance.elz` over the suite vendored in `tests/vendor/`).
+  `repl_integ_test.zig` spawns the built `elz-repl` binary (its path arrives through `build_options.repl_path`) and checks
+  piped sessions, dot commands, and the command-line flags end to end. A change to the REPL's output belongs there.
 - `tools/`: Development scripts, currently the Unicode table generator and its template.
 - `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
 - `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
