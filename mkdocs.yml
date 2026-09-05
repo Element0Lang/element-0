@@ -48,7 +48,7 @@ nav:
   - Procedures: procedures.md
   - Embedding Guide: embedding.md
   - Examples: examples.md
-  - Zig API Reference: api/index.html
+  - Zig API Reference: zig-api/index.html
 
 markdown_extensions:
   - pymdownx.highlight:

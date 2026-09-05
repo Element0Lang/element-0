@@ -1,6 +1,7 @@
 # Examples
 
-The repository ships runnable examples in two forms: Element 0 scripts under `examples/elz/`, and Zig programs under `examples/zig/` that embed the interpreter and expose Zig functions to it.
+The repository ships runnable examples in two forms.
+The Element 0 scripts are in `examples/elz/`, and the Zig programs in `examples/zig/` embed the interpreter and expose Zig functions to it.
 
 ## Element 0 Scripts
 

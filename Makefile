@@ -128,7 +128,7 @@ release: ## Build in Release mode
 
 clean: ## Remove docs, build artifacts, and cache directories
 	@echo "Removing build artifacts, cache, generated docs, and junk files..."
-	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/api site public
+	@rm -rf $(BUILD_DIR) $(CACHE_DIR) $(JUNK_FILES) docs/zig-api site public
 
 lint: ## Check code style and formatting of Zig files
 	@echo "Running code style checks..."

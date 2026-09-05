@@ -2,7 +2,7 @@
 
 Every procedure and syntactic form bound in the global environment, grouped by category. Names from R7RS-small behave as the [report](https://small.r7rs.org/) specifies; differences are listed in the [language reference](language-reference.md#deviations-from-r7rs-small). Names marked *Elz* are extensions.
 
-Procedures written in Element 0 itself live in `src/stdlib/std.elz`; the rest are Zig primitives under `src/elz/primitives/`. Some groups can be removed from the environment by a sandbox flag, noted in each heading.
+Procedures written in Element 0 itself are defined in `src/stdlib/std.elz`; the rest are Zig primitives in `src/elz/primitives/`. Some groups can be removed from the environment by a sandbox flag, noted in each heading.
 
 ## Syntax
 

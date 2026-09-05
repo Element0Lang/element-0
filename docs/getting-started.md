@@ -100,7 +100,7 @@ pub fn main() !void {
 }
 ```
 
-The [Embedding Guide](embedding.md) covers the rest of the API: mapping richer Zig types, calling Element 0 closures from Zig, sandboxing, and error reporting.
+The [Embedding Guide](embedding.md) covers the rest of the API, including richer Zig types, calling Element 0 closures from Zig, sandboxing, and error reporting.
 
 ## Running the Tests
 

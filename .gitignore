@@ -96,7 +96,7 @@ uv.lock
 # Additional files and directories to ignore (put below)
 *_output.txt
 public/
-docs/api/
+docs/zig-api/
 site/
 *.o
 *.a

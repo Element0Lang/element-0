@@ -1,6 +1,6 @@
 # Embedding Guide
 
-Elz is designed to run inside a Zig application: the host creates an interpreter, exposes the functions scripts may call, evaluates code, and reads the results back. This guide covers that API. The generated [Zig API reference](api/index.html) documents every declaration.
+Elz is designed to run inside a Zig application. The host creates an interpreter, exposes the functions scripts may call, evaluates code, and reads the results back. This guide covers that API. The generated [Zig API reference](zig-api/index.html) documents every declaration.
 
 ## The Interpreter
 
@@ -22,7 +22,7 @@ var fuel: u64 = 1_000_000;
 const value = try interp.evalString("(+ 1 2)", &fuel);
 ```
 
-`evalString` parses every form in the string, compiles them, runs them, and returns the value of the last one. `fuel` is an instruction budget: every VM instruction decrements it, including instructions run by callbacks from primitives such as `map` and `apply`, and list primitives charge one unit per element they visit. When it reaches zero the evaluation stops with `ElzError.ExecutionBudgetExceeded`. Pass `std.math.maxInt(u64)` when you do not want a budget.
+`evalString` parses every form in the string, compiles them, runs them, and returns the value of the last one. `fuel` is an instruction budget. Every VM instruction decrements it, including instructions run by callbacks from primitives such as `map` and `apply`, and list primitives charge one unit per element they visit. When it reaches zero the evaluation stops with `ElzError.ExecutionBudgetExceeded`. Pass `std.math.maxInt(u64)` when you do not want a budget.
 
 `evalForm` evaluates a single already-parsed form. The REPL uses it with `elz.parser.readAll` to report errors per form:
 
@@ -69,7 +69,7 @@ try elz.define_foreign_func(interp.root_env, "greet", greet);
 try elz.define_foreign_func(interp.root_env, "even-number?", is_even);
 ```
 
-Supported parameter types are `f64` and the other floats, integers of any width (range-checked, so a script passing `300` to a `u8` parameter gets an error), `bool`, `[]const u8` (strings and symbols), `?T` (`#f` maps to null), `elz.Value` for values passed through unchanged, Zig structs (mapped from Element 0 hash maps by field name), and `elz.ffi.ElzCallback`, which wraps an Element 0 procedure so Zig can call it. Return values convert the same way: floats become inexact numbers, integers become exact integers, `bool` becomes a boolean, `[]const u8` becomes a fresh string, `void` becomes the empty list, optionals map null to `#f`, and structs become hash maps. A function may return an error union; a returned error becomes `ElzError.ForeignFunctionError` with the error name as the message.
+Supported parameter types are `f64` and the other floats, integers of any width (range-checked, so a script passing `300` to a `u8` parameter gets an error), `bool`, `[]const u8` (strings and symbols), `?T` (`#f` maps to null), `elz.Value` for values passed through unchanged, Zig structs (mapped from Element 0 hash maps by field name), and `elz.ffi.ElzCallback`, which wraps an Element 0 procedure so Zig can call it. Return values convert the same way. Floats become inexact numbers, integers become exact integers, `bool` becomes a boolean, `[]const u8` becomes a fresh string, `void` becomes the empty list, optionals map null to `#f`, and structs become hash maps. A function may return an error union; a returned error becomes `ElzError.ForeignFunctionError` with the error name as the message.
 
 Functions with zero, one, or two parameters are mapped directly. For more parameters, or a variable count, take the evaluated arguments as a slice:
 
@@ -115,7 +115,7 @@ A disabled group's procedures are not bound at all, so a script that calls one g
 
 The time limit is checked every few hundred instructions and inside the list primitives, and starts with the outermost `evalString` or `evalForm` call, so nested evaluation (`eval`, `load`, macro expansion) cannot extend it. Combine it with the fuel counter for a deterministic bound.
 
-Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack: expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
+Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack. Expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
 
 Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use one interpreter per thread.
 
@@ -136,4 +136,4 @@ When the filesystem is enabled, scripts can `(load "file.elz")`, `(include "file
 
 ## The REPL as a Reference
 
-`src/main.zig` is a complete embedding: it allocates the interpreter with `gc_allocator`, registers its memory as a GC root, captures `argv` for `command-line`, and runs a read-eval-print loop with `evalForm` and per-form error reporting. The programs in `examples/zig/` are smaller and show the FFI patterns above.
+`src/main.zig` is a complete embedding. It allocates the interpreter with `gc_allocator`, registers its memory as a GC root, captures `argv` for `command-line`, and runs a read-eval-print loop with `evalForm` and per-form error reporting. The programs in `examples/zig/` are smaller and show the FFI patterns above.

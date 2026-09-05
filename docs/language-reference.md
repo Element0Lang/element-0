@@ -21,7 +21,7 @@ Element 0 reads the full R7RS-small lexical syntax.
   `#e1.5` reads as `3/2`. `1/3` is an exact rational. `+inf.0`, `-inf.0`,
   and `+nan.0` are inexact reals. `3+4i` is a complex number in rectangular
   notation; an exact zero imaginary part, as in `3+0i`, denotes a real
-  number. Number syntax is strict: `inf`, `nan`, `1_000`, and `0x10` are
+  number. Number syntax is strict, so `inf`, `nan`, `1_000`, and `0x10` are
   symbols, not numbers.
 * Characters are written `#\a`, by name (`#\space`, `#\newline`, `#\tab`,
   `#\return`, `#\alarm`, `#\backspace`, `#\delete`, `#\escape`, `#\null`),
@@ -88,9 +88,9 @@ change what a template's `list` or `if` means, and a template that refers to
 a local variable of the function the macro was defined in reaches that
 variable even from a nested scope that shadows the name.
 
-Quoted data in a template is never renamed: `(quote x)`, the datum lists of
-`case`, vector literals, and the parts of a quasiquotation that are not
-unquoted appear in the output exactly as written.
+Quoted data in a template is never renamed. A `(quote x)` form, the datum
+lists of `case`, vector literals, and the parts of a quasiquotation that are
+not unquoted appear in the output exactly as written.
 
 `define-macro` defines a procedural (non-hygienic) macro. The body receives
 the unevaluated argument forms and returns a replacement form.
@@ -230,7 +230,7 @@ raises an error rather than capturing across the boundary. `for-each` is
 written in Element 0, so a `shift` inside it works.
 
 A local variable that a closure captured inside the captured segment stays
-shared: after `k` resumes the segment, the closure and the resumed code see
+shared. After `k` resumes the segment, the closure and the resumed code see
 the same variable, and a value assigned in one invocation of `k` is visible
 in the next.
 
@@ -299,7 +299,7 @@ restricts I/O and other capabilities and can impose a wall-clock time
 limit, and an instruction budget bounds every evaluation.
 
 Fixed limits keep hostile input from exhausting the native stack and are
-reported as errors: expressions nest at most 1000 levels in the compiler and
+reported as errors. Expressions nest at most 1000 levels in the compiler and
 2048 levels in the reader, a JSON document nests at most 512 levels, the VM
 holds at most 65536 call frames, and callbacks from primitives (`map`,
 `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
@@ -313,8 +313,8 @@ with `make test-conformance`. The known gaps follow.
   A rational whose numerator or denominator would not fit, or a rational
   combined with an integer that does not fit, raises `Overflow`.
 * `call/cc` captures escape-only continuations, as described above. This is
-  the one failing conformance check: a `dynamic-wind` cannot be re-entered
-  through a continuation.
+  the one failing conformance check, since a `dynamic-wind` cannot be
+  re-entered through a continuation.
 * `shift` does not capture across a native primitive such as `map`.
 * `dynamic-wind` before and after thunks do not re-fire when a captured
   segment is reinstated.

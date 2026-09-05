@@ -1,7 +1,7 @@
 # Element 0
 
 Element 0 is a small Lisp dialect in the Scheme family, designed to be embedded in Zig applications as a scripting engine.
-Elz is its implementation: a bytecode compiler and stack-based virtual machine written in Zig, with the Boehm-Demers-Weiser garbage collector underneath.
+Elz is its implementation, a bytecode compiler and stack-based virtual machine written in Zig, with the Boehm-Demers-Weiser garbage collector underneath.
 
 ## Key Features
 
@@ -32,7 +32,7 @@ Elz is its implementation: a bytecode compiler and stack-based virtual machine w
 - [Procedures](procedures.md): every built-in procedure, grouped by category.
 - [Embedding Guide](embedding.md): the interpreter lifecycle, exposing Zig functions, sandboxing, and error handling.
 - [Examples](examples.md): the example scripts and Zig programs in the repository.
-- [Zig API Reference](api/index.html): generated documentation of the Zig source.
+- [Zig API Reference](zig-api/index.html): generated documentation of the Zig source.
 
 !!! note
     Element 0 is in early development. Bugs and breaking changes are expected. Please report problems on the
