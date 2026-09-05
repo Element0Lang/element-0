@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("../core.zig");
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
@@ -207,13 +208,20 @@ test "directory_list returns list" {
 pub fn get_environment_variables(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
     if (args.items.len != 0) return ElzError.WrongArgumentCount;
 
+    // The process environment block differs per OS (Windows keeps it in the
+    // PEB, POSIX exposes `environ`), so let the standard library read it.
+    const environ: std.process.Environ = if (comptime builtin.os.tag == .windows)
+        .{ .block = .global }
+    else
+        .{ .block = .{ .slice = std.mem.span(std.c.environ) } };
+    var map = environ.createMap(env.allocator) catch return ElzError.OutOfMemory;
+    defer map.deinit();
+
     var result: core.Value = .nil;
-    var i: usize = 0;
-    while (std.c.environ[i]) |entry_ptr| : (i += 1) {
-        const entry = std.mem.span(entry_ptr);
-        const eq = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
-        const name = env.allocator.dupe(u8, entry[0..eq]) catch return ElzError.OutOfMemory;
-        const value = env.allocator.dupe(u8, entry[eq + 1 ..]) catch return ElzError.OutOfMemory;
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        const name = env.allocator.dupe(u8, entry.key_ptr.*) catch return ElzError.OutOfMemory;
+        const value = env.allocator.dupe(u8, entry.value_ptr.*) catch return ElzError.OutOfMemory;
         const cell = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
         cell.* = .{ .car = (try core.makeString(env.allocator, name)), .cdr = (try core.makeString(env.allocator, value)) };
         const link = env.allocator.create(core.Pair) catch return ElzError.OutOfMemory;
