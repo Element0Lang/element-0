@@ -1,219 +1,75 @@
 # AGENTS.md
 
-This file provides guidance to coding agents collaborating on this repository.
+Guidance for coding agents working on this repository. It covers what cannot be read off the code. For the layout, run `ls`; for the build targets, run `make help`; for dependencies, read `build.zig.zon`; for the embedding API, read `docs/embedding.md`.
 
 ## Mission
 
-Element 0 is a small, embeddable Lisp dialect inspired by Scheme, implemented in Zig.
-The interpreter (Elz) is designed to integrate into Zig applications as a scripting engine.
-Priorities, in order:
+Element 0 is a small Lisp dialect based on R7RS-small. Elz, its implementation in Zig, embeds into Zig applications as a scripting engine. Priorities, in order:
 
-1. Correctness and R7RS-small compliance where applicable (see `ROADMAP.md`).
-2. Clean, minimal public API for embedding into Zig projects.
-3. Maintainable and well-tested code.
-4. Cross-platform support (Linux, macOS, and Windows).
+1. Correctness and R7RS-small conformance (`ROADMAP.md` records the deliberate deviations).
+2. A small, stable public API in `src/lib.zig`.
+3. Maintainable, tested code.
+4. Linux, macOS, Windows, and `wasm32-wasi` all build.
 
 ## Core Rules
 
-- Use English for code, comments, docs, and tests.
 - Prefer small, focused changes over large refactoring.
 - Add comments only when they clarify non-obvious behavior.
-- Do not add features, error handling, or abstractions beyond what is needed for the current task.
+- Do not add features, error handling, or abstractions beyond what the task needs.
+- Do not push, tag, or release. Prepare the change and leave the remote to the maintainer.
 
 ## Writing Style
 
-- Write in simple, plain English. Use short sentences and everyday words.
-- Use Oxford commas in inline lists: "a, b, and c" not "a, b, c".
-- Do not use em dashes. Restructure the sentence or use a semicolon instead.
-- Avoid colons in the middle of sentences, in new prose. A colon that introduces a code block or a list is fine;
-  existing text is reworded when it is touched anyway, not in a sweep.
-- Avoid colorful adjectives and adverbs. Write "garbage collector" not "efficient garbage collector", "parser" not "robust parser".
-- Prefer noun phrases for checklist items over imperative verbs. Write "opcode timing table" not "build the opcode timing table".
-- Headings in Markdown files must be in title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in, on,
-  at, to, by, of) stay lowercase unless they are the first word.
-- Do not bold the lead-in of a list item. Write "Vectors and hash maps: ..." not "**Vectors and hash maps**: ...".
-- Use sentence case for the lead-in of a list item. Write "Upvalue capture: ..." not "Upvalue Capture: ...". Proper nouns keep their capitals.
-- Capitalize only the first part of a hyphenated compound: "Tail-call Detection" in a heading, "Stack-based" at the start of a sentence, and
-  "stack-based bytecode VM" elsewhere. Never write "Tail-Call".
-- Start each sentence with a capital letter, capitalize proper nouns (Zig, Scheme, Element 0, Elz, R7RS), and leave common nouns lowercase
-  in the middle of a sentence.
-- Write correct and complete sentences.
-- Avoid made-up words and abbreviations.
-- Use participial phrases scarcely.
+Applies to code comments, documentation pages, commit messages, and chat.
 
-## Repository Layout
+- Write in plain English with short sentences and everyday words. No colorful adjectives ("parser", not "robust parser").
+- No em dashes. Restructure the sentence or use a semicolon.
+- No colons in the middle of a sentence in new prose. A colon that introduces a code block or a list is fine. Reword existing text only when touching it anyway.
+- Do not write that something "lives under" or "lives in" a path. Write "is in" or "is defined in".
+- Oxford commas in inline lists.
+- Headings in title case; minor words (a, an, the, and, but, or, for, in, on, at, to, by, of) stay lowercase unless first. Capitalize only the first part of a hyphenated compound ("Tail-call Detection").
+- List items: sentence-case lead-in, never bold ("Upvalue capture: ..." not "**Upvalue Capture**: ..."). Prefer noun phrases for checklist items.
+- Capitalize proper nouns (Zig, Scheme, Element 0, Elz, R7RS) and nothing else mid-sentence.
+- Complete sentences, no made-up words or abbreviations, participial phrases only sparingly.
 
-- `src/lib.zig`: Main public API export module for embedding Elz as a library.
-- `src/main.zig`: REPL entry point (`elz-repl` binary).
-- `src/elz/core.zig`: Core value types, Environment, and Module definitions.
-- `src/elz/bigint.zig`: Arbitrary-precision exact integers over `std.math.big`.
-- `src/elz/unicode.zig`: Generated Unicode tables for character predicates and case mappings (regenerate with
-  `python3 tools/gen_unicode.py`).
-- `src/elz/interpreter.zig`: Main `Interpreter` struct.
-- `src/elz/chunk.zig`: Bytecode data structures: `OpCode`, `Instruction`, `FuncProto`, and `UpvalDesc`.
-- `src/elz/compiler.zig`: AST-to-bytecode compiler; handles all special forms, tail-call detection, upvalue capture, and compile-time macro expansion.
-- `src/elz/macros.zig`: Compile-time macro expansion helpers: `expandMacro` (procedural macros) and `expandSyntaxRules` (pattern-based macros).
-- `src/elz/vm.zig`: Stack-based bytecode VM; executes `FuncProto` chunks, manages call frames and upvalues.
-- `src/elz/parser.zig`: S-expression parser.
-- `src/elz/env_setup.zig`: Environment initialization and FFI setup.
-- `src/elz/ffi.zig`: Foreign function interface for calling Zig functions from Element 0.
-- `src/elz/gc.zig`: Garbage collection wrapper (uses Boehm-Demers-Weiser GC).
-- `src/elz/errors.zig`: Error types.
-- `src/elz/writer.zig`: Value serialization and display.
-- `src/elz/api_helpers.zig`: Public API helper functions.
-- `src/elz/primitives/`: Built-in functions grouped by category (math, lists, strings, control, predicates, vectors, bytevectors,
-  records, hashmaps, io, ports, format, json, regex, datetime, os, modules, and process).
-- `src/stdlib/std.elz`: Standard library written in Element 0 itself.
-- `examples/zig/`: FFI examples showing how to call Zig functions from Element 0.
-- `examples/elz/`: Element 0 script examples.
-- `tests/`: Element 0 language-level tests (`test_*.elz`), Zig property tests (`*_prop_test.zig`), Zig integration tests
-  (`*_integ_test.zig`), and the R7RS conformance harness (`r7rs_conformance.elz` over the suite vendored in `tests/vendor/`).
-  `repl_integ_test.zig` spawns the built `elz-repl` binary (its path arrives through `build_options.repl_path`) and checks
-  piped sessions, dot commands, and the command-line flags end to end. A change to the REPL's output belongs there.
-- `tools/`: Development scripts, currently the Unicode table generator and its template.
-- `.github/workflows/`: CI workflows (tests, benchmarks, docs, and releases).
-- `build.zig` / `build.zig.zon`: Zig build configuration and dependencies.
-- `Makefile`: GNU Make wrapper around `zig build`.
+## Conventions
 
-## Architecture
+- Zig 0.16.0. The Makefile looks for it at `~/.local/share/zig/0.16.0/zig` before falling back to `PATH`.
+- `zig fmt` is enforced; `make lint` checks it, `make format` applies it.
+- Zig names are `snake_case` for functions and variables and `PascalCase` for types. Element 0 names are `kebab-case`.
+- `src/elz/unicode.zig` is generated. Edit `tools/gen_unicode.py` or its template and regenerate; never edit the output.
 
-### Interpreter Pipeline
+## Architecture Rules
 
-Source code flows through: Parser (`parser.zig`) -> Compiler (`compiler.zig`) -> VM (`vm.zig`) -> Writer (`writer.zig`).
-The `Interpreter` struct in `interpreter.zig` ties these together and manages the root environment. Its mutable state is grouped by owner. `flags` holds the sandbox configuration, `last_error` holds the message, location, payload, and backtrace of the most recent failure, `budget` holds the wall-clock limit, `compiler` holds the hygiene aliases, pending globals, loading set, module and library registries, and source locations, and `runtime` holds the VM pool, exception handlers, escape state, ports, and gensym counter. A primitive that fails should `return interp.fail(err, fmt, args)` rather than writing fields directly, naming the operation and the offending operand (`core.typeName` gives the phrase for a value's type). Built-ins are registered with `interp.definePrimitive(name, f)`, which also records the name, so a primitive that returns `WrongArgumentCount`, `InvalidArgument`, or `DivisionByZero` without a message still gets a generic one naming it. A catch site calls `interp.last_error.clear()` after consuming a report. `core.Environment` does not know about the interpreter; callers attach messages to a `SymbolNotFound` themselves.
+The pipeline is parser, compiler, VM, writer, tied together by `Interpreter` in `src/elz/interpreter.zig`. Its state is grouped by owner (`flags`, `last_error`, `budget`, `compiler`, `runtime`); the doc comments on those structs say what belongs where. Rules that the types do not enforce:
 
-### Core / Primitives Split
+- A failing primitive returns `interp.fail(err, fmt, args)` with a message that names the operation and the offending operand (`core.typeName` gives the phrase for a value). Never write `last_error` fields directly.
+- Built-ins are registered with `interp.definePrimitive(name, f)`, which also records the name so an unlabelled `WrongArgumentCount`, `InvalidArgument`, or `DivisionByZero` still gets attributed.
+- A catch site calls `interp.last_error.clear()` after consuming a report.
+- `core.Environment` does not know about the interpreter. A caller that wants a message on `SymbolNotFound` attaches it.
+- Memory is Boehm-collected on native targets. On wasm, `gc.zig` substitutes an arena that frees nothing until `deinit`. Values must stay reachable from the interpreter, the VM stacks, or a Zig local; nothing else is a root.
+- Primitives that call back into Element 0 go through `vm.callProc`, never a VM of their own.
 
-- `src/elz/core.zig` defines the value types and environment model.
-- `src/elz/primitives/` contains all built-in functions, each in a category-specific module.
-- New built-in functions should be added to the appropriate primitives' module.
+## Validation
 
-### FFI
+Run the narrowest target while iterating (`make test` for a Zig change, `make test-elz` for a language change) and `make test-all` plus `make lint` before declaring done. `make test-conformance` reports the R7RS score and must not go down.
 
-Zig functions can be registered with the interpreter via `env_setup.define_foreign_func()`.
-This is the primary extension mechanism for embedding use cases.
+Where tests go:
 
-`ffi.makeForeignFunc` supports 0, 1, or 2 scalar parameters plus one variadic form, `(std.mem.Allocator, []const core.Value)`.
-A function needing the primitive signature `(*interpreter.Interpreter, *core.Environment, core.ValueList, *u64)` is bound
-directly as a `core.Value.procedure`, as `env_setup.zig` does for the built-ins.
-Parameter types supported by `Caster`: `f64`, integers, `bool`, `[]const u8`, `?T`, `core.Value`, Zig structs
-(mapped to/from Elz hash-maps by field name), and `ElzCallback` (an Elz closure or procedure wrapped for
-invocation from Zig). `valueFromNative` converts Zig scalars, strings, optionals, and structs back to `core.Value`.
+- Inline `test` blocks in the module they cover, for Zig-level behavior.
+- `tests/test_*.elz` for language behavior. No language-facing change is complete without one. When unsure what the correct behavior is, add the case to `tests/test_edge_cases.elz` first.
+- `tests/*_prop_test.zig` (Minish) for invariants such as round trips and crash resistance.
+- `tests/*_integ_test.zig` for the public embedding API. `repl_integ_test.zig` spawns the built `elz-repl` (path in `build_options.repl_path`); any change to the REPL's output belongs there.
 
-### Garbage Collection
+Prefer one targeted assertion per case over broad output comparisons, and keep tests deterministic.
 
-Memory is managed by the Boehm-Demers-Weiser GC (`bdwgc`), wrapped in `gc.zig`. The GC is linked as a C library dependency.
+## Documentation
 
-### Dependencies
+- `src/lib.zig` is the public API. Keep its doc comments current and do not re-export internal types without deliberate intent.
+- `docs/` is the MkDocs site and `README.md` is the front page. A change visible to users updates the page that describes it, and stale text found along the way is fixed in the same patch.
+- Every code sample in the docs must run. Check it before committing.
 
-Managed via Zig's package manager (`build.zig.zon`):
+## Review and Commit Hygiene
 
-- BDWGC (v8.2.12): Garbage collector.
-- Bestline: Line editing and history for the REPL.
-- Chilli (v0.3.2): CLI framework for the REPL.
-- Minish (v0.3.0): Property-based testing framework.
-
-## Zig Conventions
-
-- Zig version: 0.16.0.
-- Formatting is enforced by `zig fmt`. Run `make format` before committing.
-- Naming: `snake_case` for functions and variables, `PascalCase` for types and structs.
-- Element 0 symbols use `kebab-case` (e.g., `zig-mul`, `string-length`).
-
-## Required Validation
-
-Run all test suites for any change:
-
-| Target            | Command           | What It Runs                                               |
-|-------------------|-------------------|------------------------------------------------------------|
-| Zig unit tests    | `make test`       | Inline `test` blocks in `src/**/*.zig`                     |
-| Property tests    | `make test-prop`  | Property-based tests in `tests/*_prop_test.zig` (Minish)   |
-| Integration tests | `make test-integ` | Integration tests in `tests/*_integ_test.zig`              |
-| Language tests    | `make test-elz`   | Element 0 test files in `tests/test_*.elz`                 |
-| All tests         | `make test-all`   | Runs all of the above                                      |
-| Lint              | `make lint`       | Checks Zig formatting with `zig fmt --check`               |
-| Benchmarks        | `make bench`      | Runs `benches/bench-*.elz` with `--bench 10` (ReleaseFast) |
-
-For interactive exploration: `make repl`.
-
-Run the narrowest relevant target while iterating (e.g., `make test` for a Zig change, `make test-elz` for a language change). Only run
-`make test-all` before declaring done.
-
-## First Contribution Flow
-
-Use red-green TDD:
-
-1. Read the relevant source module under `src/elz/`.
-2. Write a failing test that describes the expected behavior (red). For a Zig change, add an inline `test` block; for a language behavior change, add
-   a case to the appropriate `tests/test_*.elz` file. Run the narrowest target and confirm it fails for the right reason.
-3. Write the smallest implementation that makes the test pass (green).
-4. Refactor while keeping tests green.
-5. Run `make test-all` and `make lint` before declaring done.
-6. Verify interactively with `make repl` if needed.
-
-When uncertain about language behavior, add a case to `tests/test_edge_cases.elz` first, before touching any Zig.
-
-Good first tasks:
-
-- Add a new built-in function in the appropriate `src/elz/primitives/` module.
-- Add a new standard library function in `src/stdlib/std.elz`.
-- Fix an edge case identified in `tests/test_edge_cases.elz`.
-- Add a new FFI example in `examples/zig/`.
-
-## Testing Expectations
-
-- Unit and regression tests live as inline `test` blocks in the module they cover (`src/elz/*.zig` and `src/elz/primitives/*.zig`).
-- Property-based tests live in `tests/*_prop_test.zig` and use the Minish framework. They test invariants like commutativity, roundtrip properties,
-  and crash resistance.
-- Integration tests live in `tests/*_integ_test.zig` and test the public embedding API (init, evalString, FFI, error propagation, sandboxing).
-- Language-level tests live in `tests/test_*.elz` and are run by the interpreter itself via `make test-elz`.
-- No language-facing change is complete without an Element 0 test.
-- Prefer targeted assertions (one value, one error variant, one edge) over broad output comparisons.
-- Keep tests deterministic: initialize only the state you need, drive the public API, and assert on observable behavior.
-- When uncertain about correct behavior, add or refine a test first.
-
-## Documentation Expectations
-
-- `src/lib.zig` is the public embedding API. Keep its doc comments current; do not re-export internal types (`Interpreter`, `Environment`,
-  `core.Value`) without deliberate intent.
-- User workflow changes should update `README.md`.
-- If you encounter stale docs while changing related code, fix them in the same patch.
-
-## Change Design Checklist
-
-Before coding:
-
-1. Identify which module(s) the change touches (core, primitives, parser, compiler, vm, etc.).
-2. Consider whether the change requires updates to the standard library (`std.elz`).
-3. Check cross-platform implications if the change touches OS or I/O primitives.
-
-Before submitting:
-
-1. `make test-all` passes.
-2. `make lint` passes.
-3. Docs updated if the public API surface changed.
-
-## Review Guidelines
-
-Review output should be concise and include only critical issues.
-
-- `P0`: must-fix defects (incorrect language behavior, broken build or test workflow, severe regression).
-- `P1`: high-priority defects (possible correctness bug, missing validation for a risky change, incorrect cross-platform handling).
-
-Use this format for each issue:
-
-1. Severity (`P0`/`P1`)
-2. `file:line`
-3. Issue
-4. Why it matters
-5. Minimal fix direction
-
-Do not include style-only feedback or broad praise.
-
-## Commit and PR Hygiene
-
-- Keep commits scoped to one logical change.
-- PR descriptions should include:
-    1. Behavioral change summary.
-    2. Tests added or updated.
-    3. Interactive verification is done (yes/no).
+- Review output lists only `P0` (incorrect behavior, broken build or tests) and `P1` (likely bug, missing validation, platform handling) issues, each as severity, `file:line`, issue, why it matters, and the fix direction. No style-only feedback, no praise.
+- One logical change per commit. A PR description states the behavioral change, the tests added, and whether it was verified interactively.
