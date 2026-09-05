@@ -448,10 +448,14 @@ pub fn number_to_string(_: *interpreter.Interpreter, env: *core.Environment, arg
         const radix_num = try toI64(radix_val);
         if (radix_num < 2 or radix_num > 36) return ElzError.InvalidArgument;
         const radix: u8 = @intCast(radix_num);
+        if (num_val == .bigint) {
+            const text = try @import("../bigint.zig").toString(env.allocator, num_val.bigint, radix);
+            return core.makeString(env.allocator, text);
+        }
         const n = try toI64(num_val);
         var buf: [128]u8 = undefined;
         const len = std.fmt.printInt(&buf, n, radix, .lower, .{});
-        return (try core.makeString(env.allocator, try env.allocator.dupe(u8, buf[0..len])));
+        return core.copyString(env.allocator, buf[0..len]);
     }
 
     // Share the writer's number formatting so `number->string` and `write`

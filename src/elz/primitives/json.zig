@@ -47,6 +47,11 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
             }
         },
         .exact_integer => |n| try w.print("{d}", .{n}),
+        .bigint => |b| {
+            const text = @import("../bigint.zig").toString(std.heap.page_allocator, b, 10) catch return error.OutOfMemory;
+            defer std.heap.page_allocator.free(text);
+            try w.writeAll(text);
+        },
         .rational => |r| try w.print("{d}", .{@as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator))}),
         .complex => return error.OutOfMemory,
         .string => |ms| {

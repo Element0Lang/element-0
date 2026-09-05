@@ -833,7 +833,18 @@
          (let ((v (car results)))
            (set! results (cdr results))
            v))
-       ...))))
+       ...))
+    ((define-values (name ... . rest) expr)
+     (begin
+       (define results (call-with-values (lambda () expr) list))
+       (define name
+         (let ((v (car results)))
+           (set! results (cdr results))
+           v))
+       ...
+       (define rest results)))
+    ((define-values name expr)
+     (define name (call-with-values (lambda () expr) list)))))
 
 ;;; (%formals-min-count formals)
 ;;;

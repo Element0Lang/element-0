@@ -258,6 +258,37 @@ pub const Compiler = struct {
     // Macro expansion
     // -----------------------------------------------------------------------
 
+    /// True when `head` names a local or upvalue, which takes precedence over
+    /// any macro of the same name.
+    fn macroShadowed(self: *Compiler, head: Value) !bool {
+        if (head != .symbol) return false;
+        return (try self.resolveVar(head.symbol)) != .global;
+    }
+
+    /// True when a `define` directly in `body` (or inside a `begin` there)
+    /// binds `name`, so a same-named macro must not expand in that body.
+    fn bodyDefines(body: Value, name: []const u8) bool {
+        var cur = body;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            const form = cur.pair.car;
+            if (form != .pair or form.pair.car != .symbol) continue;
+            const head = form.pair.car.symbol;
+            if (std.mem.eql(u8, head, "begin")) {
+                if (bodyDefines(form.pair.cdr, name)) return true;
+                continue;
+            }
+            if (!std.mem.eql(u8, head, "define") or form.pair.cdr != .pair) continue;
+            const target = form.pair.cdr.pair.car;
+            const defined: ?[]const u8 = switch (target) {
+                .symbol => |sym| sym,
+                .pair => |tp| if (tp.car == .symbol) tp.car.symbol else null,
+                else => null,
+            };
+            if (defined) |d| if (std.mem.eql(u8, d, name)) return true;
+        }
+        return false;
+    }
+
     fn tryExpandMacro(self: *Compiler, head: Value, args: Value, env: *core.Environment, fuel: *u64) !?Value {
         if (head != .symbol) return null;
         const looked_up = env.lookup(head.symbol) orelse blk: {
@@ -368,7 +399,11 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileForm(self: *Compiler, head: Value, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
-        // Try macro expansion first (compile-time).
+        // Try macro expansion first (compile-time), unless a lexical binding
+        // shadows the macro name.
+        if (try self.macroShadowed(head)) {
+            return self.compileCall(head, args, env, tail, fuel);
+        }
         if (try self.tryExpandMacro(head, args, env, fuel)) |expanded| {
             return self.compileExpr(expanded, env, tail, fuel);
         }
@@ -953,6 +988,8 @@ pub const Compiler = struct {
         while (cur == .pair) : (cur = cur.pair.cdr) {
             var form = cur.pair.car;
             while (form == .pair) {
+                // A definition in this body shadows a macro of the same name.
+                if (form.pair.car == .symbol and (try self.macroShadowed(form.pair.car) or bodyDefines(body, form.pair.car.symbol))) break;
                 const expanded = try self.tryExpandMacro(form.pair.car, form.pair.cdr, env, fuel) orelse break;
                 form = expanded;
             }

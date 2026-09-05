@@ -16,15 +16,24 @@
 
 ;; Approximate equality: like equal?, but inexact reals compare within a
 ;; small relative tolerance, matching (chibi test) behavior.
+(define (%conf-error? v) (and (pair? v) (eq? (car v) '%conf-error)))
+
 (define (%approx-equal? a b)
   (cond
+    ;; Both sides raised: the test expected an error and got one.
+    ((and (%conf-error? a) (%conf-error? b)) #t)
     ((and (number? a) (number? b))
      (cond
        ((and (exact? a) (exact? b)) (= a b))
+       ((= a b) #t)
        ((not (= a a)) (not (= b b)))
        ((not (= b b)) #f)
-       (else (let ((mag (max (abs a) (abs b))))
-               (<= (abs (- a b)) (* mag 1e-9))))))
+       ;; (chibi test) uses a relative epsilon of 1e-5; the suite's expected
+       ;; inexact values are written to that precision, e.g. 9.728 for the
+       ;; geometric mean 9.728000255822641.
+       ;; magnitude rather than abs, so complex results compare too.
+       (else (let ((mag (max (magnitude a) (magnitude b))))
+               (<= (magnitude (- a b)) (* mag 1e-5))))))
     ((and (pair? a) (pair? b))
      (and (%approx-equal? (car a) (car b)) (%approx-equal? (cdr a) (cdr b))))
     ((and (vector? a) (vector? b))
@@ -64,7 +73,10 @@
   (set! *conf-run* (+ *conf-run* 1))
   (set! *conf-failed* (+ *conf-failed* 1))
   (display "[ABORTED BLOCK ") (display *conf-group*) (display "] ")
-  (write e) (newline))
+  (if (error-object? e)
+      (begin (display (error-object-message e)) (display " ") (write (error-object-irritants e)))
+      (write e))
+  (newline))
 
 (include "tests/vendor/r7rs-tests-wrapped.scm")
 

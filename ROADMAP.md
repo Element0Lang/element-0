@@ -66,6 +66,10 @@ This phase is leaf work; each item is a new primitive over machinery that alread
 exists. The complex and rational values already exist in the tower, so this phase
 exposes the standard interface to them.
 
+* Exact integers of arbitrary size
+    * [x] Integer arithmetic, comparison, division, `gcd`, `lcm`, `expt`, and
+      `exact-integer-sqrt` promote past the i64 range instead of overflowing
+    * [ ] Rationals with components outside the i64 range
 * Rational accessors
     * [x] `numerator`, `denominator`
     * [x] `rationalize`

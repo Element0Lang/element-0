@@ -376,8 +376,8 @@
   (eq? 'caught (try (eval (cons '+ (make-list 300 1))) (catch e 'caught))))
 
 ;; --- Arithmetic edge cases no longer abort the process ---
-(test-case "quotient at the i64 minimum reports overflow"
-  (eq? 'caught (try (quotient -9223372036854775808 -1) (catch e 'caught))))
+(test-case "quotient at the i64 minimum promotes to a big integer"
+  (= 9223372036854775808 (quotient -9223372036854775808 -1)))
 (test-case "remainder at the i64 minimum is zero"
   (= 0 (remainder -9223372036854775808 -1)))
 (test-case "even? rejects a float just past the i64 range"
@@ -592,5 +592,33 @@
   (and (char=? #\ß (char-upcase #\ß)) (char=? #\Λ (char-upcase #\λ)) (char=? #\σ (char-foldcase #\ς))))
 (test-case "string-ci=? compares full case foldings"
   (and (string-ci=? "Straße" "STRASSE") (string-ci=? "ΣΑΣ" "σας") (not (string-ci=? "a" "ab"))))
+
+;; --- Exact integers of any size ---
+(test-case "integer arithmetic promotes past the i64 range"
+  (and (= (expt 2 100) 1267650600228229401496703205376)
+       (= (* 4611686018427387904 2) 9223372036854775808)
+       (= (- -9223372036854775807 2) -9223372036854775809)))
+(test-case "results that fit an i64 come back as fixnums"
+  (and (exact-integer? (- (expt 2 64) (expt 2 64))) (= 4 (/ (expt 2 100) (expt 2 98))) (= 1024 (quotient (expt 2 100) (expt 2 90)))))
+(test-case "negating and abs of the i64 minimum"
+  (and (= (abs -9223372036854775808) 9223372036854775808) (= (- 0 -9223372036854775808) 9223372036854775808)))
+(test-case "big integer division family"
+  (and (= 2 (remainder (expt 2 100) 7)) (= 5 (modulo (- (expt 2 100)) 7))
+       (equal? '(1152921504606846976 0) (call-with-values (lambda () (exact-integer-sqrt (expt 2 120))) list))))
+(test-case "big integers compare exactly with each other and with floats"
+  (and (< (expt 2 100) (expt 2 101)) (> (expt 2 100) 1e29) (= (expt 2 100) 1.2676506002282294e30)
+       (eqv? (expt 2 100) (expt 2 100)) (not (eqv? (expt 2 100) (+ 1 (expt 2 100))))))
+(test-case "big integers read, print, and convert"
+  (and (= 123456789012345678901234567890 (string->number "123456789012345678901234567890"))
+       (string=? "1267650600228229401496703205376" (number->string (expt 2 100)))
+       (string=? "10000000000000000000000000" (number->string (expt 2 100) 16))
+       (= (exact 1e20) 100000000000000000000)
+       (= 1.2676506002282294e30 (inexact (expt 2 100)))))
+(test-case "gcd, lcm, and expt with big integers"
+  (and (= (gcd (expt 2 100) (expt 6 50)) (expt 2 50)) (= (lcm (expt 2 70) 3) (* 3 (expt 2 70)))
+       (= 1 (expt -1 (expt 2 100))) (eq? 'overflow (guard (e (#t 'overflow)) (expt 2 (expt 2 100))))))
+(test-case "factorial of 30"
+  (letrec ((fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))))
+    (= (fact 30) 265252859812191058636308480000000)))
 
 (report-summary)

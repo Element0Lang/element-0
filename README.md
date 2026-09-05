@@ -203,6 +203,12 @@ A disabled group's procedures are not bound at all, so a script that calls one g
 The compile-time forms that read files (`include`, `include-ci`, and `import`) report `PermissionDenied` when the filesystem is disabled.
 The other groups are `enable_math`, `enable_lists`, `enable_predicates`, `enable_strings`, and `enable_io`.
 
+The `fuel` counter passed to `evalString` and `evalForm` bounds the number of VM instructions, including instructions run by
+callbacks from primitives such as `map` and `apply`, and list primitives charge one unit per element they visit. A few fixed
+limits also apply and report an error instead of exhausting the native stack: expressions nest at most 1000 levels in the
+compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and
+primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
+
 -----
 
 ### Documentation

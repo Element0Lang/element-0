@@ -132,6 +132,10 @@ pub fn is_eqv_internal(a: Value, b: Value) bool {
             .exact_integer => |bv| av == bv,
             else => false,
         },
+        .bigint => switch (b) {
+            .bigint => @import("../bigint.zig").order(a, b) == .eq,
+            else => false,
+        },
         .rational => |av| switch (b) {
             .rational => |bv| av.numerator == bv.numerator and av.denominator == bv.denominator,
             else => false,
@@ -273,7 +277,7 @@ pub fn is_number(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 pub fn exact_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = v == .exact_integer or v == .rational };
+    return Value{ .boolean = v == .exact_integer or v == .bigint or v == .rational };
 }
 
 /// `inexact_p` returns #t for inexact numeric types.
@@ -288,7 +292,7 @@ pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     return Value{ .boolean = switch (v) {
-        .exact_integer, .rational => true,
+        .exact_integer, .bigint, .rational => true,
         .number => |n| std.math.isFinite(n),
         else => false,
     } };
@@ -298,7 +302,7 @@ pub fn rational_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.
 pub fn real_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
-    return Value{ .boolean = v == .number or v == .exact_integer or v == .rational };
+    return Value{ .boolean = v == .number or v == .exact_integer or v == .bigint or v == .rational };
 }
 
 /// `complex_p` returns #t for any numeric type.
@@ -359,7 +363,7 @@ pub fn is_integer(_: *interpreter.Interpreter, _: *core.Environment, args: core.
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     return Value{ .boolean = switch (v) {
-        .exact_integer => true,
+        .exact_integer, .bigint => true,
         .number => |n| std.math.isFinite(n) and @floor(n) == n,
         else => false,
     } };

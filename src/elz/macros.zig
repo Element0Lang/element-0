@@ -692,13 +692,18 @@ pub fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value, ellips
     var lit_names: std.ArrayListUnmanaged([]const u8) = .empty;
     defer lit_names.deinit(env.allocator);
     var lit_node = literals_val;
+    var ellipsis_is_literal = false;
     while (lit_node != .nil) {
         if (lit_node != .pair) return ElzError.InvalidArgument;
         const head = lit_node.pair.car;
         if (head != .symbol) return ElzError.InvalidArgument;
+        if (std.mem.eql(u8, head.symbol, ellipsis)) ellipsis_is_literal = true;
         try lit_names.append(env.allocator, try env.allocator.dupe(u8, head.symbol));
         lit_node = lit_node.pair.cdr;
     }
+    // An ellipsis identifier listed among the literals matches itself
+    // (R7RS 4.3.2), so no ellipsis is in effect for this transformer.
+    const effective_ellipsis: []const u8 = if (ellipsis_is_literal) "" else ellipsis;
 
     var rules_list: std.ArrayListUnmanaged(core.SyntaxRule) = .empty;
     defer rules_list.deinit(env.allocator);
@@ -721,7 +726,7 @@ pub fn buildSyntaxRules(env: *Environment, name: []const u8, body: Value, ellips
         .literals = try lit_names.toOwnedSlice(env.allocator),
         .rules = try rules_list.toOwnedSlice(env.allocator),
         .env = env,
-        .ellipsis = try env.allocator.dupe(u8, ellipsis),
+        .ellipsis = try env.allocator.dupe(u8, effective_ellipsis),
     };
     return sr;
 }
@@ -745,11 +750,16 @@ pub fn expandSyntaxRules(
         var bindings: Bindings = .empty;
         defer bindings.deinit(allocator);
 
-        const matched = match_pattern(allocator, rule.pattern, input, sr.literals, sr.ellipsis, &bindings) catch return ElzError.OutOfMemory;
+        // The keyword position of a pattern is ignored (R7RS 4.3.2): only the
+        // rest of the pattern is matched against the macro's operands, so a
+        // literal `_` there still matches any keyword.
+        const pattern_rest: Value = if (rule.pattern == .pair) rule.pattern.pair.cdr else rule.pattern;
+        const input_rest: Value = if (rule.pattern == .pair) input.pair.cdr else input;
+        const matched = match_pattern(allocator, pattern_rest, input_rest, sr.literals, sr.ellipsis, &bindings) catch return ElzError.OutOfMemory;
         if (matched) {
             var pattern_var_names: std.ArrayListUnmanaged([]const u8) = .empty;
             defer pattern_var_names.deinit(allocator);
-            try collect_pattern_vars(allocator, rule.pattern, sr.literals, sr.ellipsis, &pattern_var_names);
+            try collect_pattern_vars(allocator, pattern_rest, sr.literals, sr.ellipsis, &pattern_var_names);
 
             // Hygiene by renaming: identifiers the template introduces get
             // fresh names so they cannot capture the user's variables. That

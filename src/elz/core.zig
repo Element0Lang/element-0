@@ -327,6 +327,14 @@ pub fn normalizeRational(n: i64, d: i64, allocator: std.mem.Allocator) ElzError!
     return Value{ .rational = r };
 }
 
+/// An arbitrary-precision exact integer. Only values that do not fit in an
+/// i64 are represented this way; see bigint.zig for the arithmetic.
+pub const BigInt = struct {
+    /// Little-endian magnitude limbs, normalized (no leading zero limbs).
+    limbs: []const std.math.big.Limb,
+    positive: bool,
+};
+
 /// A complex number with inexact real and imaginary parts.
 pub const Complex = struct {
     real: f64,
@@ -716,8 +724,10 @@ pub const Value = union(enum) {
     symbol: []const u8,
     /// A floating-point number (inexact real).
     number: f64,
-    /// An exact integer.
+    /// An exact integer that fits in 64 bits.
     exact_integer: i64,
+    /// An exact integer outside the i64 range (see bigint.zig).
+    bigint: *BigInt,
     /// An exact rational number (heap-allocated, GCD-reduced).
     rational: *Rational,
     /// A complex number with inexact real and imaginary parts.
@@ -796,6 +806,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .number => |n| n,
             .exact_integer => |n| @floatFromInt(n),
+            .bigint => |b| @import("bigint.zig").toF64(b),
             .rational => |r| @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator)),
             else => null,
         };
@@ -803,7 +814,7 @@ pub const Value = union(enum) {
 
     /// Returns true if this value is any numeric type.
     pub fn isNumeric(self: Value) bool {
-        return self == .number or self == .exact_integer or self == .rational or self == .complex;
+        return self == .number or self == .exact_integer or self == .bigint or self == .rational or self == .complex;
     }
 
     /// Creates a deep copy of the `Value`.
@@ -819,7 +830,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified, .eof => self,
+            .number, .exact_integer, .bigint, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified, .eof => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

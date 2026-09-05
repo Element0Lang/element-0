@@ -217,10 +217,8 @@
     (catch err #t)))
 (test-case "quotient at exact boundary still works"
   (= (quotient 9007199254740992 1) 9007199254740992))
-(test-case "lcm overflow is reported as an error rather than wrapping"
-  (try
-    (begin (lcm 4611686018427387904 3) #f)
-    (catch err #t)))
+(test-case "lcm past the i64 range promotes to a big integer"
+  (= (lcm 4611686018427387904 3) 13835058055282163712))
 (test-case "lcm of large coprime values that fit produces correct result"
   (= (lcm 1000000 999999) 999999000000))
 

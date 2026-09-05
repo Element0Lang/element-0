@@ -599,17 +599,31 @@ pub fn parseReal(text: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, text) catch null;
 }
 
-/// Parses an integer in `radix` with an optional sign. Digit separators are
-/// rejected. Returns null when `text` is not such an integer.
-pub fn parseIntegerStrict(text: []const u8, radix: u8) ?i64 {
+/// Reports whether `text` is an optionally signed run of digits in `radix`.
+/// Digit separators are rejected.
+pub fn isIntegerSyntax(text: []const u8, radix: u8) bool {
     var i: usize = 0;
     if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
-    if (i >= text.len) return null;
+    if (i >= text.len) return false;
     for (text[i..]) |c| {
-        const d = std.fmt.charToDigit(c, radix) catch return null;
-        _ = d;
+        _ = std.fmt.charToDigit(c, radix) catch return false;
     }
+    return true;
+}
+
+/// Parses an integer in `radix` with an optional sign. Returns null when
+/// `text` is not such an integer or does not fit in an i64.
+pub fn parseIntegerStrict(text: []const u8, radix: u8) ?i64 {
+    if (!isIntegerSyntax(text, radix)) return null;
     return std.fmt.parseInt(i64, text, radix) catch null;
+}
+
+/// Parses an integer of any size in `radix`; null when not integer syntax.
+pub fn parseInteger(text: []const u8, radix: u8, allocator: std.mem.Allocator) ElzError!?Value {
+    if (parseIntegerStrict(text, radix)) |n| return Value{ .exact_integer = n };
+    if (!isIntegerSyntax(text, radix)) return null;
+    const digits = if (text[0] == '+') text[1..] else text;
+    return try @import("bigint.zig").parse(allocator, digits, radix);
 }
 
 /// Converts a decimal literal to an exact rational, for the `#e` prefix.
@@ -648,6 +662,10 @@ fn exactFromDecimal(text: []const u8, allocator: std.mem.Allocator) ElzError!Val
     if (g > 1) {
         num = @divExact(num, g);
         den = @divExact(den, g);
+    }
+    if (den == 1 and (num > std.math.maxInt(i64) or num < std.math.minInt(i64))) {
+        var m = std.math.big.int.Managed.initSet(allocator, num) catch return ElzError.OutOfMemory;
+        return @import("bigint.zig").toValue(allocator, &m);
     }
     if (num > std.math.maxInt(i64) or num < std.math.minInt(i64) or den > std.math.maxInt(i64)) return ElzError.Overflow;
     return core.normalizeRational(@intCast(num), @intCast(den), allocator);
@@ -724,10 +742,10 @@ pub fn parseNumber(token: []const u8, allocator: std.mem.Allocator) ElzError!?Va
         return rational_val;
     }
 
-    // Integer.
-    if (parseIntegerStrict(rest, r)) |n| {
-        if (force_exact == false) return Value{ .number = @floatFromInt(n) };
-        return Value{ .exact_integer = n };
+    // Integer, of any size.
+    if (try parseInteger(rest, r, allocator)) |n| {
+        if (force_exact == false) return Value{ .number = n.asFloat().? };
+        return n;
     }
     if (r != 10) {
         // An integer that overflows i64 in a non-decimal radix, or garbage.

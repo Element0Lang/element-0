@@ -106,6 +106,11 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
         .eof => try writer.writeAll("#<eof>"),
         .number => |n| try writeFloat(n, writer),
         .exact_integer => |n| try writer.print("{d}", .{n}),
+        .bigint => |b| {
+            const text = @import("bigint.zig").toString(std.heap.page_allocator, b, 10) catch return error.WriteFailed;
+            defer std.heap.page_allocator.free(text);
+            try writer.writeAll(text);
+        },
         .rational => |r| try writer.print("{d}/{d}", .{ r.numerator, r.denominator }),
         .complex => |c| {
             try writeFloat(c.real, writer);
