@@ -22,7 +22,7 @@ A small embeddable Lisp for the Zig ecosystem λ
 Element 0 is a small scripting language that can be embedded in Zig applications.
 It is a new Lisp dialect inspired by Scheme with features like first-class functions, macros, and a simple syntax.
 
-This project provides an implementation of Element 0 (a compiler and virtual machine).
+This project provides an implementation of Element 0 (the compiler and virtual machine).
 The implementation is named Elz (pronounced "el-zee") and can be easily integrated into Zig applications as a scripting engine.
 
 ### Key Features
@@ -199,23 +199,12 @@ var interpreter = try elz.Interpreter.init(.{
 });
 ```
 
-A disabled group's procedures are not bound at all, so a script that calls one gets a `SymbolNotFound` error.
-The compile-time forms that read files (`include`, `include-ci`, and `import`) report `PermissionDenied` when the filesystem is disabled.
-The other groups are `enable_math`, `enable_lists`, `enable_predicates`, `enable_strings`, and `enable_io`.
-
-The `fuel` counter passed to `evalString` and `evalForm` bounds the number of VM instructions, including instructions run by
-callbacks from primitives such as `map` and `apply`, and list primitives charge one unit per element they visit. A few fixed
-limits also apply and report an error instead of exhausting the native stack: expressions nest at most 1000 levels in the
-compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and
-primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
-
 -----
 
 ### Documentation
 
-The documentation site at [element0lang.github.io/element-0](https://element0lang.github.io/element-0/) has a getting
-started guide, the language reference, the list of built-in procedures, the embedding guide, and the generated Zig API
-reference. Its sources live in [docs](docs); build it locally with `make serve-docs`.
+The project documentation is available [here](https://element0lang.github.io/element-0/).
+The Zig API reference is available [here](https://element0lang.github.io/element-0/zig-api/).
 
 #### Standard Library
 
