@@ -4,6 +4,8 @@
 // Main scripting engine struct and its configuration.
 pub const Interpreter = @import("elz/interpreter.zig").Interpreter;
 pub const SandboxFlags = @import("elz/interpreter.zig").SandboxFlags;
+pub const BacktraceFrame = @import("elz/interpreter.zig").BacktraceFrame;
+pub const MAX_BACKTRACE_FRAMES = @import("elz/interpreter.zig").MAX_BACKTRACE_FRAMES;
 
 // Core data types and errors.
 pub const core = @import("elz/core.zig");

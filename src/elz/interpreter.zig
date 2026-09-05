@@ -72,6 +72,20 @@ pub const HygieneAlias = struct {
 
 /// `Interpreter` is the top-level handle for the Elz scripting engine.
 /// It holds the root environment, module cache, and VM configuration.
+/// One call frame of a recorded backtrace.
+pub const BacktraceFrame = struct {
+    /// The function's debug name, or "<lambda>".
+    name: []const u8,
+    /// Source file, "" when unknown.
+    file: []const u8,
+    /// Source line, 0 when unknown.
+    line: u32,
+};
+
+/// Upper bound on recorded frames, so a runaway recursion does not turn the
+/// error report into a screenful of identical lines.
+pub const MAX_BACKTRACE_FRAMES: usize = 40;
+
 pub const Interpreter = struct {
     /// Allocator used for environment bindings and the module cache.
     allocator: std.mem.Allocator,
@@ -127,6 +141,11 @@ pub const Interpreter = struct {
     /// Location of the most recent uncaught runtime error, when known.
     last_error_file: ?[]const u8 = null,
     last_error_line: ?u32 = null,
+    /// When true, the VM records the call frames an error unwinds through in
+    /// `backtrace`, innermost first. Hosts such as the REPL turn this on; it
+    /// is off by default because errors caught by `try` pay for it too.
+    collect_backtrace: bool = false,
+    backtrace: std.ArrayListUnmanaged(BacktraceFrame) = .empty,
     /// Nesting depth of evalString/evalForm calls. The time-limit clock starts
     /// with the outermost call only, so nested evaluation (macro expansion,
     /// `eval`, `load`) cannot extend the budget.

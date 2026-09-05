@@ -56,8 +56,9 @@ fn displayValue(_: *elz.Interpreter, value: elz.Value, writer: anytype) !void {
     }
 }
 
-/// Prints the message and location of the error that `interpreter` just
-/// raised, then clears the location so it does not leak into the next report.
+/// Prints the message, location, and backtrace of the error that
+/// `interpreter` just raised, then clears them so they do not leak into the
+/// next report.
 fn reportError(interpreter: *elz.Interpreter, err: anyerror, writer: *std.Io.Writer) !void {
     if (interpreter.last_error_message) |msg| {
         try writer.print("Error: {s}\n", .{msg});
@@ -70,6 +71,26 @@ fn reportError(interpreter: *elz.Interpreter, err: anyerror, writer: *std.Io.Wri
         interpreter.last_error_line = null;
         interpreter.last_error_file = null;
     }
+    try writeBacktrace(interpreter, writer);
+}
+
+/// Prints the recorded call chain, innermost first, when there is more than
+/// the top-level frame to show. Clears the record afterwards.
+fn writeBacktrace(interpreter: *elz.Interpreter, writer: *std.Io.Writer) !void {
+    defer interpreter.backtrace.clearRetainingCapacity();
+    const frames = interpreter.backtrace.items;
+    if (frames.len < 2) return;
+    try writer.writeAll("Backtrace:\n");
+    for (frames, 0..) |frame, i| {
+        const name = if (std.mem.eql(u8, frame.name, "<top>")) "<top level>" else frame.name;
+        if (frame.line != 0) {
+            const file = if (frame.file.len > 0) frame.file else "?";
+            try writer.print("  {d}: {s}  ({s}:{d})\n", .{ i, name, file, frame.line });
+        } else {
+            try writer.print("  {d}: {s}\n", .{ i, name });
+        }
+    }
+    if (frames.len >= elz.MAX_BACKTRACE_FRAMES) try writer.writeAll("  ...\n");
 }
 
 /// Runs `source` and reports the first runtime error. Returns false when a form
@@ -106,6 +127,7 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
             try stdout.writeAll("In form: ");
             try elz.write(form, stdout);
             try stdout.writeAll("\n");
+            try writeBacktrace(interpreter, stdout);
             return false;
         };
     }
@@ -262,12 +284,14 @@ const repl_help =
     \\  .load <file>       Load and run a source file in the current session
     \\  .time <expr>       Evaluate an expression and report the wall-clock time
     \\  .apropos <prefix>  List the global names starting with <prefix>
+    \\  .error             Show the last error report again
     \\  .clear             Clear the screen
     \\  .exit              Leave the REPL (Ctrl-D also works)
     \\
+    \\The last three printed values are bound to $1, $2, and $3.
     \\Input with open parentheses, brackets, or strings continues on the next
     \\line. Press Tab to complete a global name, and Ctrl-C to discard the
-    \\current input.
+    \\current input. ~/.elzrc is loaded on startup unless --no-rc is given.
     \\
 ;
 
@@ -278,46 +302,84 @@ const Repl = struct {
     pending: std.ArrayListUnmanaged(u8) = .empty,
     /// Backing storage for the history path.
     history_buffer: [std.fs.max_path_bytes]u8 = undefined,
+    /// Backing storage for the numbered prompt.
+    prompt_buffer: [32]u8 = undefined,
+    /// Number of the next input, shown in the prompt.
+    input_number: usize = 1,
+    /// The last error report, for `.error`.
+    last_report: ?[]u8 = null,
+    quiet: bool,
+    load_rc: bool,
 
-    fn init(interp: *elz.Interpreter) Repl {
+    fn init(interp: *elz.Interpreter, quiet: bool, load_rc: bool) Repl {
         const interactive = std.Io.File.stdin().isTty(interp.io) catch false;
-        return .{ .interp = interp, .reader = .{ .interactive = interactive } };
+        return .{
+            .interp = interp,
+            .reader = .{ .interactive = interactive },
+            .quiet = quiet,
+            .load_rc = load_rc,
+        };
     }
 
     fn deinit(self: *Repl) void {
         self.reader.release();
         self.pending.deinit(self.interp.allocator);
+        if (self.last_report) |r| self.interp.allocator.free(r);
         completion_interp = null;
     }
 
-    /// Builds `$HOME/.elz_history`, falling back to the working directory.
-    fn historyPath(self: *Repl) ?[:0]const u8 {
-        if (comptime is_windows) return null;
-        const home: []const u8 = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "";
-        return if (home.len > 0)
-            std.fmt.bufPrintZ(&self.history_buffer, "{s}/.elz_history", .{home}) catch null
+    /// Builds `$HOME/<name>`, falling back to the working directory.
+    fn homeFile(buffer: []u8, name: []const u8) ?[:0]const u8 {
+        const home: []const u8 = if (comptime is_windows)
+            ""
+        else if (std.c.getenv("HOME")) |h|
+            std.mem.span(h)
         else
-            std.fmt.bufPrintZ(&self.history_buffer, ".elz_history", .{}) catch null;
+            "";
+        return if (home.len > 0)
+            std.fmt.bufPrintZ(buffer, "{s}/{s}", .{ home, name }) catch null
+        else
+            std.fmt.bufPrintZ(buffer, "{s}", .{name}) catch null;
+    }
+
+    /// Runs `~/.elzrc` when it exists. Errors are reported and do not stop
+    /// the REPL from starting.
+    fn loadRcFile(self: *Repl) !void {
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path = homeFile(&path_buffer, ".elzrc") orelse return;
+        const interp = self.interp;
+        const source = std.Io.Dir.cwd().readFileAlloc(interp.io, path, interp.allocator, .limited(1024 * 1024)) catch return;
+        defer interp.allocator.free(source);
+        var out: Out = undefined;
+        const stdout = out.init(interp.io);
+        defer out.flush();
+        try self.evalSource(source, path, stdout, false);
     }
 
     fn run(self: *Repl) !void {
         const io = self.interp.io;
         if (self.reader.interactive) {
-            var out: Out = undefined;
-            const stdout = out.init(io);
-            try stdout.print("Element 0 (elz {s})\n", .{build_options.version});
-            try stdout.writeAll("Type .help for help, .exit or Ctrl-D to quit.\n");
-            out.flush();
+            if (!self.quiet) {
+                var out: Out = undefined;
+                const stdout = out.init(io);
+                try stdout.print("Element 0 (elz {s})\n", .{build_options.version});
+                try stdout.writeAll("Type .help for help, .exit or Ctrl-D to quit.\n");
+                out.flush();
+            }
 
-            self.reader.history_path = self.historyPath();
+            self.reader.history_path = homeFile(&self.history_buffer, ".elz_history");
             if (comptime !is_windows) {
                 completion_interp = self.interp;
                 bestline.bestlineSetCompletionCallback(completionCallback);
             }
         }
+        if (self.load_rc) try self.loadRcFile();
 
         while (true) {
-            const prompt: [:0]const u8 = if (self.pending.items.len == 0) "> " else "... ";
+            const prompt: [:0]const u8 = if (self.pending.items.len == 0)
+                std.fmt.bufPrintZ(&self.prompt_buffer, "[{d}]> ", .{self.input_number}) catch "> "
+            else
+                "... ";
             const line = (try self.reader.readLine(io, prompt)) orelse {
                 if (self.reader.last_end == .interrupted) {
                     // Ctrl-C: drop the partial form and start over.
@@ -362,7 +424,11 @@ const Repl = struct {
         const stdout = out.init(interp.io);
         defer out.flush();
 
-        var forms = elz.parser.readAllTracked(self.pending.items, interp.allocator, "<repl>", &interp.source_locations) catch |err| switch (err) {
+        // Name the input after its prompt number, so error locations and
+        // backtraces read "[3]:2" for line 2 of input 3. Compiled code keeps
+        // the name, so it must outlive this call.
+        const source_name = try std.fmt.allocPrint(interp.allocator, "[{d}]", .{self.input_number});
+        var forms = elz.parser.readAllTracked(self.pending.items, interp.allocator, source_name, &interp.source_locations) catch |err| switch (err) {
             error.UnmatchedOpenParen, error.UnexpectedEndOfInput, error.UnterminatedString => return false,
             else => {
                 try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
@@ -371,19 +437,59 @@ const Repl = struct {
         };
         defer forms.deinit(interp.allocator);
 
-        for (forms.items) |form| {
+        self.input_number += 1;
+        try self.evalForms(forms.items, stdout, true);
+        return true;
+    }
+
+    /// Parses and evaluates `source`, printing values when `print_values`.
+    fn evalSource(self: *Repl, source: []const u8, name: []const u8, stdout: *std.Io.Writer, print_values: bool) !void {
+        const interp = self.interp;
+        var forms = elz.parser.readAllTracked(source, interp.allocator, name, &interp.source_locations) catch |err| {
+            try stdout.print("Parse Error in {s}: {s}\n", .{ name, @errorName(err) });
+            return;
+        };
+        defer forms.deinit(interp.allocator);
+        try self.evalForms(forms.items, stdout, print_values);
+    }
+
+    /// Evaluates forms in order, stopping at the first error. Printed values
+    /// shift into `$1`, `$2`, and `$3`.
+    fn evalForms(self: *Repl, forms: []const elz.Value, stdout: *std.Io.Writer, print_values: bool) !void {
+        const interp = self.interp;
+        for (forms) |form| {
             var fuel: u64 = std.math.maxInt(u64);
             interp.last_error_message = null;
+            interp.backtrace.clearRetainingCapacity();
             const result = interp.evalForm(&form, &fuel) catch |err| {
-                try reportError(interp, err, stdout);
-                return true;
+                try self.reportAndRemember(err, stdout);
+                return;
             };
-            if (result != .unspecified) {
+            if (print_values and result != .unspecified) {
                 try elz.write(result, stdout);
                 try stdout.writeAll("\n");
+                self.rememberValue(result);
             }
         }
-        return true;
+    }
+
+    fn rememberValue(self: *Repl, value: elz.Value) void {
+        const env = self.interp.root_env;
+        const interp = self.interp;
+        if (env.lookup("$2")) |v| env.set(interp, "$3", v) catch {};
+        if (env.lookup("$1")) |v| env.set(interp, "$2", v) catch {};
+        env.set(interp, "$1", value) catch {};
+    }
+
+    /// Prints the error report and keeps a copy for `.error`.
+    fn reportAndRemember(self: *Repl, err: anyerror, stdout: *std.Io.Writer) !void {
+        const interp = self.interp;
+        var report = std.Io.Writer.Allocating.init(interp.allocator);
+        defer report.deinit();
+        try reportError(interp, err, &report.writer);
+        try stdout.writeAll(report.written());
+        if (self.last_report) |old| interp.allocator.free(old);
+        self.last_report = try report.toOwnedSlice();
     }
 
     /// Runs a dot command. Returns false when the REPL should exit.
@@ -403,6 +509,12 @@ const Repl = struct {
             try stdout.writeAll(repl_help);
         } else if (std.mem.eql(u8, name, "clear")) {
             try stdout.writeAll("\x1b[H\x1b[2J");
+        } else if (std.mem.eql(u8, name, "error")) {
+            if (self.last_report) |report| {
+                try stdout.writeAll(report);
+            } else {
+                try stdout.writeAll("No error has been reported yet.\n");
+            }
         } else if (std.mem.eql(u8, name, "load")) {
             if (rest.len == 0) {
                 try stdout.writeAll("Usage: .load <file>\n");
@@ -413,46 +525,15 @@ const Repl = struct {
                 return true;
             };
             defer interp.allocator.free(source);
-            var forms = elz.parser.readAllTracked(source, interp.allocator, rest, &interp.source_locations) catch |err| {
-                try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
-                return true;
-            };
-            defer forms.deinit(interp.allocator);
-            for (forms.items) |form| {
-                var fuel: u64 = std.math.maxInt(u64);
-                interp.last_error_message = null;
-                _ = interp.evalForm(&form, &fuel) catch |err| {
-                    try reportError(interp, err, stdout);
-                    return true;
-                };
-            }
-            try stdout.print("Loaded {s} ({d} forms)\n", .{ rest, forms.items.len });
+            try self.evalSource(source, rest, stdout, false);
         } else if (std.mem.eql(u8, name, "time")) {
             if (rest.len == 0) {
                 try stdout.writeAll("Usage: .time <expr>\n");
                 return true;
             }
-            var forms = elz.parser.readAllTracked(rest, interp.allocator, "<repl>", &interp.source_locations) catch |err| {
-                try stdout.print("Parse Error: {s}\n", .{@errorName(err)});
-                return true;
-            };
-            defer forms.deinit(interp.allocator);
             const start = currentTimeMs();
-            var result: elz.Value = .unspecified;
-            for (forms.items) |form| {
-                var fuel: u64 = std.math.maxInt(u64);
-                interp.last_error_message = null;
-                result = interp.evalForm(&form, &fuel) catch |err| {
-                    try reportError(interp, err, stdout);
-                    return true;
-                };
-            }
-            const elapsed = currentTimeMs() - start;
-            if (result != .unspecified) {
-                try elz.write(result, stdout);
-                try stdout.writeAll("\n");
-            }
-            try stdout.print("; {d} ms\n", .{elapsed});
+            try self.evalSource(rest, "<time>", stdout, true);
+            try stdout.print("; {d} ms\n", .{currentTimeMs() - start});
         } else if (std.mem.eql(u8, name, "apropos")) {
             const names = try matchingNames(interp.allocator, interp, rest);
             defer interp.allocator.free(names);
@@ -468,8 +549,8 @@ const Repl = struct {
     }
 };
 
-fn runRepl(interpreter: *elz.Interpreter) !void {
-    var repl = Repl.init(interpreter);
+fn runRepl(interpreter: *elz.Interpreter, quiet: bool, load_rc: bool) !void {
+    var repl = Repl.init(interpreter, quiet, load_rc);
     defer repl.deinit();
     try repl.run();
 }
@@ -506,6 +587,8 @@ fn rootExec(ctx: chilli.CommandContext) !void {
 
     const verbose = if (ctx.command.getFlagValue("verbose")) |v| v.Bool else false;
     const interactive = if (ctx.command.getFlagValue("interactive")) |v| v.Bool else false;
+    const quiet = if (ctx.command.getFlagValue("quiet")) |v| v.Bool else false;
+    const no_rc = if (ctx.command.getFlagValue("no-rc")) |v| v.Bool else false;
     const bench_iters: i64 = if (ctx.command.getFlagValue("bench")) |v| v.Int else 0;
     const eval_source: []const u8 = if (ctx.command.getFlagValue("eval")) |v| v.String else "";
 
@@ -514,6 +597,11 @@ fn rootExec(ctx: chilli.CommandContext) !void {
     if (filename.len == 0) {
         if (ctx.command.getFlagValue("file")) |v| filename = v.String;
     }
+
+    // (command-line) is the script followed by its own arguments, or just the
+    // program name when there is no script. The interpreter's flags are not
+    // the script's business.
+    try setCommandLine(interpreter, filename, ctx.getArgs("args"));
 
     if (eval_source.len > 0) {
         if (!try exec(interpreter, eval_source, "<eval>")) std.process.exit(1);
@@ -552,7 +640,26 @@ fn rootExec(ctx: chilli.CommandContext) !void {
         std.debug.print("[VERBOSE] Starting REPL mode...\n", .{});
     }
 
-    try runRepl(interpreter);
+    try runRepl(interpreter, quiet, !no_rc);
+}
+
+/// argv[0], kept for `(command-line)` when no script is given.
+var program_name: []const u8 = "elz";
+
+fn setCommandLine(interpreter: *elz.Interpreter, filename: []const u8, args: []const []const u8) !void {
+    const allocator = elz.gc_allocator;
+    var argv: elz.Value = .nil;
+    var i = args.len;
+    while (i > 0) {
+        i -= 1;
+        const link = try allocator.create(elz.core.Pair);
+        link.* = .{ .car = try elz.core.makeString(allocator, try allocator.dupe(u8, args[i])), .cdr = argv };
+        argv = elz.Value{ .pair = link };
+    }
+    const head = if (filename.len > 0) filename else program_name;
+    const link = try allocator.create(elz.core.Pair);
+    link.* = .{ .car = try elz.core.makeString(allocator, try allocator.dupe(u8, head)), .cdr = argv };
+    interpreter.command_line = elz.Value{ .pair = link };
 }
 
 /// The main entry point for the `elz` executable.
@@ -563,25 +670,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     interpreter_ptr.* = try elz.Interpreter.init(.{});
     elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
 
-    // Capture argv for (command-line), in order.
+    interpreter_ptr.collect_backtrace = true;
+
     {
         var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);
         defer arg_it.deinit();
-        var argv_list = std.ArrayListUnmanaged(elz.core.Value).empty;
-        defer argv_list.deinit(elz.gc_allocator);
-        while (arg_it.next()) |arg| {
-            const copy = try elz.gc_allocator.dupe(u8, arg);
-            try argv_list.append(elz.gc_allocator, try elz.core.makeString(elz.gc_allocator, copy));
-        }
-        var argv: elz.core.Value = .nil;
-        var i = argv_list.items.len;
-        while (i > 0) {
-            i -= 1;
-            const link = try elz.gc_allocator.create(elz.core.Pair);
-            link.* = .{ .car = argv_list.items[i], .cdr = argv };
-            argv = elz.core.Value{ .pair = link };
-        }
-        interpreter_ptr.command_line = argv;
+        if (arg_it.next()) |argv0| program_name = try elz.gc_allocator.dupe(u8, argv0);
     }
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -599,6 +693,14 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         .name = "file",
         .description = "An Element 0 source file to execute",
         .is_required = false,
+        .default_value = .{ .String = "" },
+    });
+
+    try root_cmd.addPositional(.{
+        .name = "args",
+        .description = "Arguments passed to the script through (command-line)",
+        .is_required = false,
+        .variadic = true,
         .default_value = .{ .String = "" },
     });
 
@@ -622,6 +724,21 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         .name = "interactive",
         .shortcut = 'i',
         .description = "Start the REPL after running the file or expression",
+        .type = .Bool,
+        .default_value = .{ .Bool = false },
+    });
+
+    try root_cmd.addFlag(.{
+        .name = "quiet",
+        .shortcut = 'q',
+        .description = "Do not print the REPL banner",
+        .type = .Bool,
+        .default_value = .{ .Bool = false },
+    });
+
+    try root_cmd.addFlag(.{
+        .name = "no-rc",
+        .description = "Do not load ~/.elzrc when starting the REPL",
         .type = .Bool,
         .default_value = .{ .Bool = false },
     });

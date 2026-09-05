@@ -735,6 +735,23 @@ pub const VM = struct {
     // Execute a top-level FuncProto
     // -----------------------------------------------------------------------
 
+    fn recordBacktrace(self: *VM) void {
+        const interp = self.interp;
+        const max = @import("interpreter.zig").MAX_BACKTRACE_FRAMES;
+        var i = self.frame_count;
+        while (i > 0 and interp.backtrace.items.len < max) {
+            i -= 1;
+            const fr = self.frames[i];
+            const ip = if (fr.ip > 0) fr.ip - 1 else 0;
+            const lines = fr.closure.proto.lines.items;
+            interp.backtrace.append(interp.allocator, .{
+                .name = fr.closure.proto.name,
+                .file = fr.closure.proto.source_file,
+                .line = if (ip < lines.len) lines[ip] else 0,
+            }) catch return;
+        }
+    }
+
     pub fn runProto(self: *VM, proto: *FuncProto, fuel: ?*u64) ElzError!Value {
         self.fuel = fuel;
         const cl = try self.interp.allocator.create(VmClosure);
@@ -757,6 +774,9 @@ pub const VM = struct {
                     self.interp.last_error_file = fr.closure.proto.source_file;
                 }
             }
+            // Nested VM runs unwind innermost first, so appending here keeps
+            // the whole backtrace ordered from the failure outwards.
+            if (self.interp.collect_backtrace) self.recordBacktrace();
             self.closeUpvaluesAbove(0);
             return err;
         };

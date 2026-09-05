@@ -195,7 +195,8 @@ the capture point.
 
 * [x] Source locations in errors: the parser records each form's file and line,
   the compiler carries them into a per-instruction line table, and uncaught
-  runtime errors report `At: file:line`. Stack traces remain future work.
+  runtime errors report `At: file:line` and a backtrace of the calls that led
+  to the failure (`Interpreter.collect_backtrace`).
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
   `tests/vendor/` and runs via `make test-conformance`. Current score: 976 of
   977 checks pass. The remaining case re-enters a `dynamic-wind` through a full

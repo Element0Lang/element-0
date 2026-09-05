@@ -435,6 +435,7 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
         interp.last_error_message = null;
         interp.last_error_line = null;
         interp.last_error_file = null;
+        interp.backtrace.clearRetainingCapacity();
 
         var handler_args = core.ValueList.init(env.allocator);
         defer handler_args.deinit();
