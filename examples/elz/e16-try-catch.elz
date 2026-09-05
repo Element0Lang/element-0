@@ -9,7 +9,8 @@
       (display " by ")
       (display den)
       (display ". Reason: ")
-      (display err)
+      ;; Runtime errors arrive as error objects; other raised values are shown as they are.
+      (display (if (error-object? err) (error-object-message err) err))
       (newline)
       #f))) ;; Return #f on failure
 

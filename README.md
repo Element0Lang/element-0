@@ -59,7 +59,7 @@ You can download the release binaries for Elz from the [release page](https://gi
 
 2. Build and run the REPL
    ```sh
-   zig build repl && ./zig-out/bin/elz-repl
+   zig build && ./zig-out/bin/elz-repl
    ```
 
 3. Run an Element 0 script file
@@ -97,9 +97,11 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "your-app",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // 1. Get the Elz dependency object from the builder.
@@ -185,8 +187,10 @@ When you build and run this program, the output will be:
 Result of (* 10 5) is: 50
 
 --- Calling a Zig function from Elz ---
-Result of (zig-mul 7 6) is: 42
+Result of (zig-mul 7 6) is: 42.0
 ```
+
+The result is `42.0` rather than `42` because `zig_multiply` returns an `f64`, which becomes an inexact number.
 
 ##### Restricting What a Script Can Do
 

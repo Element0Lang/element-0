@@ -95,11 +95,13 @@ The value of the last top-level form is displayed unless it is unspecified. An u
 
 ```
 --- Runtime Error ---
-ErrorCode: InvalidArgument
+ErrorCode: SymbolNotFound
 Message: Symbol 'undefined-name' not found.
 At: script.elz:3
 In form: (display (undefined-name 1))
 ```
+
+When the failure happens inside a procedure, a `Backtrace:` section lists the calls that led to it.
 
 `--bench N` runs the file N times and prints timing statistics, and `--verbose` prints what the program is doing.
 

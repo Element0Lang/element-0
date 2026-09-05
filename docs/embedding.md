@@ -121,10 +121,11 @@ Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use 
 
 ## Error Handling
 
-Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). Three fields on the interpreter add detail:
+Every evaluation entry point returns `elz.ElzError!Value`. The error tag classifies the failure (`SymbolNotFound`, `InvalidArgument`, `WrongArgumentCount`, `DivisionByZero`, `UserError` for `raise` and `error`, `StackOverflow`, `ExecutionBudgetExceeded`, `TimeLimitExceeded`, and so on). Several fields on the interpreter add detail:
 
 - `last_error_message`: a human-readable message, when one is available.
 - `last_error_file` and `last_error_line`: the location of the failing form, when the source was read with location tracking (`parser.readAllTracked`, which `evalString` uses).
+- `backtrace`: the call frames the error unwound through, innermost first, each with a procedure name, file, and line. It is filled only while `collect_backtrace` is true, because errors caught by `try` inside the script pay for the recording too. The REPL turns it on; embedders that show errors to users should do the same and clear the list before each evaluation.
 
 A value raised by a script (`(raise 'oops)`) arrives as `UserError`; inside the script, `guard` and `with-exception-handler` see the raised object itself. Runtime errors caught inside a script are error objects with a kind, so `file-error?` and `read-error?` work on them.
 

@@ -289,9 +289,10 @@ These features are not part of R7RS-small.
 
 ## Running and Embedding
 
-The `elz-repl` binary starts an interactive session, or runs a file with
-`--file`. Uncaught runtime errors report the error code, a message, the
-source location as `At: file:line`, and the failing top-level form.
+The `elz-repl` binary starts an interactive session, or runs a file given
+as its argument. Uncaught runtime errors report the error code, a message, the
+source location as `At: file:line`, the failing top-level form, and a
+backtrace of the calls that led to the failure.
 
 Elz embeds into Zig applications through the `Interpreter` API in
 `src/lib.zig`; see the [Embedding Guide](embedding.md). `SandboxFlags`
