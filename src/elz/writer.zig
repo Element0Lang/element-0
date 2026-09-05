@@ -39,6 +39,26 @@ pub fn writeFloat(n: f64, writer: anytype) !void {
     if (std.mem.indexOfAny(u8, text, ".e") == null) try writer.writeAll(".0");
 }
 
+/// Reports whether a symbol must be written as `|...|` to read back as the
+/// same symbol: empty names, names with delimiters or whitespace, names that
+/// would read as a number or start like one, and names starting with `#`.
+fn symbolNeedsBars(name: []const u8) bool {
+    if (name.len == 0) return true;
+    if (name[0] == '#') return true;
+    for (name) |c| {
+        switch (c) {
+            ' ', '\t', '\n', '\r', '(', ')', '"', ';', '\'', '`', ',', '|' => return true,
+            else => if (c < 0x20) return true,
+        }
+    }
+    const first = name[0];
+    const digit_start = std.ascii.isDigit(first) or
+        ((first == '+' or first == '-' or first == '.') and name.len > 1 and (std.ascii.isDigit(name[1]) or name[1] == '.'));
+    if (digit_start) return true;
+    if (std.mem.eql(u8, name, ".")) return true;
+    return false;
+}
+
 /// How strings and characters are rendered. `write` produces machine-readable
 /// output (quoted strings, `#\a` characters); `display` produces human-readable
 /// output (raw string bytes and characters). The distinction applies at every
@@ -69,7 +89,21 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
     }
 
     switch (value) {
-        .symbol => |s| try writer.print("{s}", .{s}),
+        .symbol => |s| {
+            if (mode == .display or !symbolNeedsBars(s)) return writer.writeAll(s);
+            try writer.writeByte('|');
+            for (s) |c| {
+                switch (c) {
+                    '|' => try writer.writeAll("\\|"),
+                    '\\' => try writer.writeAll("\\\\"),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\t' => try writer.writeAll("\\t"),
+                    else => try writer.writeByte(c),
+                }
+            }
+            try writer.writeByte('|');
+        },
+        .eof => try writer.writeAll("#<eof>"),
         .number => |n| try writeFloat(n, writer),
         .exact_integer => |n| try writer.print("{d}", .{n}),
         .rational => |r| try writer.print("{d}/{d}", .{ r.numerator, r.denominator }),
@@ -90,7 +124,16 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
                 '\n' => try writer.writeAll("newline"),
                 '\t' => try writer.writeAll("tab"),
                 '\r' => try writer.writeAll("return"),
+                0 => try writer.writeAll("null"),
+                7 => try writer.writeAll("alarm"),
+                8 => try writer.writeAll("backspace"),
+                27 => try writer.writeAll("escape"),
+                127 => try writer.writeAll("delete"),
                 else => {
+                    if (c < 0x20) {
+                        try writer.print("x{x}", .{c});
+                        return;
+                    }
                     if (c > 0x10FFFF) {
                         try writer.writeAll("invalid-char");
                         return;
@@ -121,7 +164,13 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
                     '\n' => try writer.writeAll("\\n"),
                     '\t' => try writer.writeAll("\\t"),
                     '\r' => try writer.writeAll("\\r"),
-                    else => try writer.writeByte(c),
+                    else => {
+                        if (c < 0x20 or c == 0x7f) {
+                            try writer.print("\\x{x};", .{c});
+                        } else {
+                            try writer.writeByte(c);
+                        }
+                    },
                 }
             }
             try writer.writeAll("\"");
@@ -504,6 +553,13 @@ const AnalyzeState = struct {
     }
 
     fn analyze(self: *AnalyzeState, value: Value) !void {
+        return self.analyzeDepth(value, 0);
+    }
+
+    fn analyzeDepth(self: *AnalyzeState, value: Value, depth: usize) !void {
+        // The printer truncates beyond MAX_PRINT_DEPTH, so nothing deeper
+        // needs labels; stopping here keeps the native stack bounded.
+        if (depth > MAX_PRINT_DEPTH) return;
         switch (value) {
             .pair => {
                 // Iterate the cdr chain so long lists do not recurse deeply.
@@ -516,10 +572,10 @@ const AnalyzeState = struct {
                     if (try self.checkSeen(ptr)) break;
                     try self.states.put(self.allocator, ptr, 1);
                     try chain.append(self.allocator, ptr);
-                    try self.analyze(cur.pair.car);
+                    try self.analyzeDepth(cur.pair.car, depth + 1);
                     cur = cur.pair.cdr;
                 }
-                if (cur != .pair) try self.analyze(cur);
+                if (cur != .pair) try self.analyzeDepth(cur, depth + 1);
                 for (chain.items) |ptr| {
                     try self.states.put(self.allocator, ptr, 2);
                 }
@@ -529,7 +585,7 @@ const AnalyzeState = struct {
                 if (try self.checkSeen(ptr)) return;
                 try self.states.put(self.allocator, ptr, 1);
                 for (v.items) |item| {
-                    try self.analyze(item);
+                    try self.analyzeDepth(item, depth + 1);
                 }
                 try self.states.put(self.allocator, ptr, 2);
             },

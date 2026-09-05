@@ -23,6 +23,9 @@ const UpvalDesc = chunk.UpvalDesc;
 // Scope / local variable tracking
 // ---------------------------------------------------------------------------
 
+/// Deepest expression nesting the compiler accepts.
+const MAX_COMPILE_DEPTH: u32 = 1000;
+
 const Local = struct {
     name: []const u8,
     slot: u8,
@@ -257,7 +260,11 @@ pub const Compiler = struct {
 
     fn tryExpandMacro(self: *Compiler, head: Value, args: Value, env: *core.Environment, fuel: *u64) !?Value {
         if (head != .symbol) return null;
-        const looked_up = env.lookup(head.symbol) orelse return null;
+        const looked_up = env.lookup(head.symbol) orelse blk: {
+            // A macro name renamed by hygiene refers to the macro itself.
+            const base = macros_mod.hygieneBase(head.symbol) orelse return null;
+            break :blk env.lookup(base) orelse return null;
+        };
         switch (looked_up) {
             .syntax_rules => |sr| {
                 return try macros_mod.expandSyntaxRules(self.interp, sr, args, env, fuel);
@@ -276,6 +283,15 @@ pub const Compiler = struct {
     /// Compile one expression. `tail` is true when this expression is in tail
     /// position (may emit tail_call instead of call).
     pub fn compileExpr(self: *Compiler, expr: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
+        // Nested forms compile recursively; bound the depth so hostile or
+        // runaway (self-expanding macro) input reports an error instead of
+        // exhausting the native stack.
+        if (self.interp.compile_depth >= MAX_COMPILE_DEPTH) {
+            self.interp.last_error_message = "expression nesting too deep to compile";
+            return ElzError.InvalidArgument;
+        }
+        self.interp.compile_depth += 1;
+        defer self.interp.compile_depth -= 1;
         if (expr == .pair) {
             if (self.interp.source_locations.get(@intFromPtr(expr.pair))) |loc| {
                 self.current_line = loc.line;
@@ -312,8 +328,19 @@ pub const Compiler = struct {
         }
     }
 
-    fn compileVarLoad(self: *Compiler, name: []const u8) ElzError!void {
+    /// Resolves a variable, letting a hygiene-renamed free identifier fall
+    /// back to a local or upvalue binding of its original name at the use
+    /// site. Globals get the same fallback at run time in the VM.
+    fn resolveVarWithFallback(self: *Compiler, name: []const u8) !VarLoc {
         const loc = try self.resolveVar(name);
+        if (loc != .global) return loc;
+        const base = macros_mod.hygieneBase(name) orelse return loc;
+        const base_loc = try self.resolveVar(base);
+        return if (base_loc != .global) base_loc else loc;
+    }
+
+    fn compileVarLoad(self: *Compiler, name: []const u8) ElzError!void {
+        const loc = try self.resolveVarWithFallback(name);
         switch (loc) {
             .local => |slot| _ = try self.emitA(.load_local, slot),
             .upval => |uv| _ = try self.emitA(.load_upval, uv),
@@ -325,7 +352,7 @@ pub const Compiler = struct {
     }
 
     fn compileVarStore(self: *Compiler, name: []const u8) ElzError!void {
-        const loc = try self.resolveVar(name);
+        const loc = try self.resolveVarWithFallback(name);
         switch (loc) {
             .local => |slot| _ = try self.emitA(.store_local, slot),
             .upval => |uv| _ = try self.emitA(.store_upval, uv),
@@ -489,16 +516,16 @@ pub const Compiler = struct {
                 try self.compileQQList(expr, env, level, fuel);
             },
             .vector => |v| {
-                if (v.items.len > 255) {
-                    self.interp.last_error_message = "a quasiquoted vector may hold at most 255 elements";
-                    return ElzError.InvalidArgument;
+                // Build the elements as a quasiquoted list, so unquote-splicing
+                // inside a vector works, then convert.
+                var as_list: Value = .nil;
+                var i = v.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    as_list = try makePair(self.allocator, v.items[i], as_list);
                 }
-                var count: u8 = 0;
-                for (v.items) |item| {
-                    try self.compileQQ(item, env, level, fuel);
-                    count += 1;
-                }
-                _ = try self.emitA(.make_vector, count);
+                try self.compileQQList(as_list, env, level, fuel);
+                _ = try self.emitOp(.list_to_vector);
             },
             else => {
                 const ci = try self.addConst(expr);
@@ -520,6 +547,13 @@ pub const Compiler = struct {
         }
         const p = list.pair;
         const car = p.car;
+        // `(a . ,x)` reads as `(a unquote x)`: an unquote form in tail position
+        // is the tail itself, not two more elements.
+        if (car == .symbol and std.mem.eql(u8, car.symbol, "unquote") and
+            p.cdr == .pair and p.cdr.pair.cdr == .nil and try self.resolveVar("unquote") == .global)
+        {
+            return self.compileQQ(list, env, level, fuel);
+        }
         // Check for (unquote-splicing x) at level 1 — splice (only when unquote-splicing is global)
         const splice_is_global = blk: {
             if (car == .pair and car.pair.cdr == .pair and car.pair.car == .symbol and
@@ -624,12 +658,16 @@ pub const Compiler = struct {
             const ci = try self.addConst(Value{ .symbol = name });
             _ = try self.emitBx(.define_global, ci);
         } else {
-            // Local define inside a function body
+            // Local define inside a function body. The body scan hoisted every
+            // definition, so a name without a slot sits in expression context
+            // (inside `when`, `if`, a `do` result, ...), where a definition is
+            // a syntax error: allocating a slot here would alias stack
+            // temporaries.
             if (self.scope.findLocal(name)) |slot| {
                 _ = try self.emitA(.store_local, slot);
             } else {
-                const slot = try self.scope.addLocal(name);
-                _ = try self.emitA(.store_local, slot);
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "define: '{s}' is not at the start of a body", .{name}) catch null;
+                return ElzError.InvalidArgument;
             }
         }
     }
@@ -686,13 +724,10 @@ pub const Compiler = struct {
         err_param_pair.* = .{ .car = err_sym, .cdr = .nil };
         try self.compileLambdaArgs(Value{ .pair = err_param_pair }, handler_body, env, fuel);
 
-        // Close all upvalues for the current frame before calling %%try%%.
-        // The thunks may capture locals from the current frame as open upvalues. When
-        // %%try%% calls them via a new VM (runFromEval), those open upvalues would point
-        // into the original VM's stack — which is invalid. Closing them first copies the
-        // values into the upvalue cells so they're safe to use from any VM.
-        _ = try self.emitA(.close_upval, 0);
-
+        // The thunks may capture locals of this frame as open upvalues. Those
+        // point directly into this VM's stack, which stays valid while the
+        // nested VM runs the thunks, so the upvalues must stay open: closing
+        // them here would detach the thunks' view of a local from the frame's.
         if (tail) {
             _ = try self.emitA(.tail_call, 2);
         } else {
@@ -874,12 +909,18 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileBody(self: *Compiler, body: Value, env: *core.Environment, fuel: *u64) ElzError!void {
+        // Flatten the body first: macro uses at body level are expanded so a
+        // macro that produces definitions (define-values, define-record-type)
+        // is seen, and `begin` forms are spliced as R7RS 5.3.2 requires.
+        var forms: std.ArrayListUnmanaged(Value) = .empty;
+        defer forms.deinit(self.allocator);
+        try self.collectBodyForms(body, env, &forms, fuel);
+
         // Scan for internal defines and hoist them as locals.
-        var cur = body;
-        while (cur == .pair) {
-            const form = cur.pair.car;
+        for (forms.items) |form| {
             if (form == .pair and form.pair.car == .symbol and
-                std.mem.eql(u8, form.pair.car.symbol, "define"))
+                std.mem.eql(u8, form.pair.car.symbol, "define") and
+                try self.resolveVar("define") == .global)
             {
                 const spec = try self.requirePair("define", form.pair.cdr);
                 const target = spec.car;
@@ -888,27 +929,43 @@ pub const Compiler = struct {
                     .pair => |tp| try self.requireSymbol("define", tp.car),
                     else => return self.badForm("define"),
                 };
-                _ = try self.scope.addLocal(dname);
-                _ = try self.emitOp(.load_false); // placeholder
+                if (self.scope.findLocal(dname) == null) {
+                    _ = try self.scope.addLocal(dname);
+                    _ = try self.emitOp(.load_false); // placeholder
+                }
             }
-            cur = cur.pair.cdr;
         }
-        if (cur != .nil) return self.badForm("lambda");
 
         // Now compile body forms.
-        cur = body;
-        var idx: usize = 0;
-        const body_len = listLen(body);
-        while (cur == .pair) {
-            const form = cur.pair.car;
-            const is_last = idx == body_len - 1;
+        for (forms.items, 0..) |form, idx| {
+            const is_last = idx == forms.items.len - 1;
             try self.compileExpr(form, env, is_last, fuel);
             if (!is_last) _ = try self.emitOp(.pop);
-            cur = cur.pair.cdr;
-            idx += 1;
         }
-        if (body_len == 0) _ = try self.emitOp(.load_unspecified);
+        if (forms.items.len == 0) _ = try self.emitOp(.load_unspecified);
         _ = try self.emitOp(.return_val);
+    }
+
+    /// Appends the forms of a body to `out`, expanding macro uses at body
+    /// level and splicing `begin` forms.
+    fn collectBodyForms(self: *Compiler, body: Value, env: *core.Environment, out: *std.ArrayListUnmanaged(Value), fuel: *u64) ElzError!void {
+        var cur = body;
+        while (cur == .pair) : (cur = cur.pair.cdr) {
+            var form = cur.pair.car;
+            while (form == .pair) {
+                const expanded = try self.tryExpandMacro(form.pair.car, form.pair.cdr, env, fuel) orelse break;
+                form = expanded;
+            }
+            if (form == .pair and form.pair.car == .symbol and
+                std.mem.eql(u8, form.pair.car.symbol, "begin") and
+                try self.resolveVar("begin") == .global)
+            {
+                try self.collectBodyForms(form.pair.cdr, env, out, fuel);
+                continue;
+            }
+            try out.append(self.allocator, form);
+        }
+        if (cur != .nil) return self.badForm("lambda");
     }
 
     // -----------------------------------------------------------------------
@@ -1018,9 +1075,9 @@ pub const Compiler = struct {
             child.proto.arity = 1;
             child.proto.variadic = false;
 
-            // In the child, compile the rest of the let* as another nested lambda call,
-            // then return the result.
-            try child.compileLetStar(rest_bindings, body, env, false, fuel);
+            // In the child, compile the rest of the let* as another nested lambda
+            // call in tail position, so the nested frames do not accumulate.
+            try child.compileLetStar(rest_bindings, body, env, true, fuel);
             _ = try child.emitOp(.return_val);
 
             // Finalize child proto.
@@ -1115,7 +1172,10 @@ pub const Compiler = struct {
         }
         if (init_list.items.len >= std.math.maxInt(u8)) return ElzError.TooManyLocals;
         const argc: u8 = @intCast(init_list.items.len);
-        _ = try wrapper.emitA(.call, argc);
+        // A tail call: the wrapper frame is replaced by the loop body, so a
+        // loop in tail position of a function does not leak a frame per
+        // iteration.
+        _ = try wrapper.emitA(.tail_call, argc);
         _ = try wrapper.emitOp(.return_val);
 
         // Finalize wrapper proto.
@@ -1496,6 +1556,11 @@ pub const Compiler = struct {
         while (cur == .pair) : (cur = cur.pair.cdr) {
             const filename_val = cur.pair.car;
             if (filename_val != .string) return ElzError.InvalidArgument;
+            if (!self.interp.beginLoading(filename_val.string)) {
+                self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: '{s}' includes itself", .{filename_val.string}) catch null;
+                return ElzError.InvalidArgument;
+            }
+            defer self.interp.endLoading(filename_val.string);
             const source = std.Io.Dir.cwd().readFileAlloc(self.interp.io, filename_val.string, self.allocator, .limited(1 * 1024 * 1024)) catch {
                 self.interp.last_error_message = std.fmt.allocPrint(self.allocator, "include: cannot read '{s}'", .{filename_val.string}) catch null;
                 return ElzError.FileNotFound;

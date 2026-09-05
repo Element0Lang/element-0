@@ -60,10 +60,14 @@ pub fn time_to_components(_: *interpreter.Interpreter, env: *core.Environment, a
     const ts_val = args.items[0];
     if (ts_val != .number) return ElzError.InvalidArgument;
 
-    const timestamp: i64 = @intFromFloat(ts_val.number);
+    const secs_f = ts_val.number;
+    // Reject values that do not fit the epoch representation before casting;
+    // `@intFromFloat` on an out-of-range value is illegal behavior.
+    if (!std.math.isFinite(secs_f) or secs_f < 0 or secs_f >= 1e17) return ElzError.InvalidArgument;
+    const timestamp: u64 = @intFromFloat(secs_f);
 
     // Convert timestamp to epoch seconds
-    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = timestamp };
     const epoch_day = epoch_seconds.getEpochDay();
     const day_seconds = epoch_seconds.getDaySeconds();
     const year_day = epoch_day.calculateYearDay();
@@ -109,7 +113,9 @@ pub fn sleep_ms(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
     if (ms_val != .number) return ElzError.InvalidArgument;
 
     const ms = ms_val.number;
-    if (ms < 0 or @floor(ms) != ms) return ElzError.InvalidArgument;
+    if (!std.math.isFinite(ms) or ms < 0 or @floor(ms) != ms) return ElzError.InvalidArgument;
+    // Cap at about 292 years so the nanosecond count fits in u64.
+    if (ms > 9.2e12) return ElzError.InvalidArgument;
 
     const ns: u64 = @intFromFloat(ms * 1_000_000);
     sleepNs(ns);

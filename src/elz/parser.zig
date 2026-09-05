@@ -140,10 +140,15 @@ pub const SourceLoc = struct {
 /// Maps a Pair pointer (as usize) to the source location of its opening paren.
 pub const FormLocations = std.AutoHashMapUnmanaged(usize, SourceLoc);
 
+/// Deepest datum nesting the reader accepts. Each level costs a native stack
+/// frame, so hostile input must be bounded.
+const MAX_PARSE_DEPTH: usize = 2048;
+
 const Parser = struct {
     tokens: std.ArrayList([]const u8),
     position: usize,
     allocator: std.mem.Allocator,
+    depth: usize = 0,
     /// Set when tracking locations: the original source and its file name.
     source: []const u8 = "",
     file: []const u8 = "",
@@ -174,6 +179,9 @@ const Parser = struct {
     /// - `self`: A pointer to the parser.
     /// - `return`: The parsed `Value`.
     fn parse_form(self: *Parser) ElzError!Value {
+        if (self.depth >= MAX_PARSE_DEPTH) return ElzError.UnexpectedEndOfInput;
+        self.depth += 1;
+        defer self.depth -= 1;
         if (self.position >= self.tokens.items.len) return ElzError.UnexpectedEndOfInput;
         const token = self.tokens.items[self.position];
         self.position += 1;
@@ -306,10 +314,7 @@ const Parser = struct {
 
 /// Parses the real-number part of a complex literal: decimal, inf, or nan.
 fn parseRealText(text: []const u8) ?f64 {
-    if (std.mem.eql(u8, text, "+inf.0")) return std.math.inf(f64);
-    if (std.mem.eql(u8, text, "-inf.0")) return -std.math.inf(f64);
-    if (std.mem.eql(u8, text, "+nan.0") or std.mem.eql(u8, text, "-nan.0")) return std.math.nan(f64);
-    return std.fmt.parseFloat(f64, text) catch null;
+    return parseReal(text);
 }
 
 /// Parses a rectangular complex literal (ending in i). An exact-zero
@@ -346,7 +351,7 @@ fn parseComplex(text: []const u8, allocator: std.mem.Allocator) ElzError!Value {
     // An exact-zero imaginary part makes the value real.
     if (std.mem.eql(u8, imag_text, "+0") or std.mem.eql(u8, imag_text, "-0")) {
         if (real_text.len == 0) return Value{ .exact_integer = 0 };
-        return parse_atom(real_text, allocator);
+        return (try parseNumber(real_text, allocator)) orelse ElzError.InvalidArgument;
     }
     const imag: f64 = if (imag_text.len == 1)
         (if (imag_text[0] == '+') @as(f64, 1) else @as(f64, -1))
@@ -394,10 +399,22 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
                         i = semi + 1;
                         continue;
                     },
-                    else => {
-                        try unescaped.append(allocator, '\\');
-                        try unescaped.append(allocator, token[i + 1]);
+                    ' ', '\t', '\n', '\r' => {
+                        // Line continuation: backslash, optional intraline
+                        // whitespace, a line ending, then leading whitespace
+                        // of the next line, all dropped (R7RS 6.7).
+                        var j = i + 1;
+                        while (j < token.len - 1 and (token[j] == ' ' or token[j] == '\t')) j += 1;
+                        if (j < token.len - 1 and (token[j] == '\n' or token[j] == '\r')) {
+                            if (token[j] == '\r' and j + 1 < token.len - 1 and token[j + 1] == '\n') j += 1;
+                            j += 1;
+                            while (j < token.len - 1 and (token[j] == ' ' or token[j] == '\t')) j += 1;
+                            i = j;
+                            continue;
+                        }
+                        return ElzError.UnterminatedString;
                     },
+                    else => return ElzError.UnterminatedString,
                 }
                 i += 2;
             } else {
@@ -450,6 +467,7 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         // #\xHH... hex code point.
         if ((char_name[0] == 'x' or char_name[0] == 'X') and char_name.len > 1) {
             const cp = std.fmt.parseInt(u32, char_name[1..], 16) catch return ElzError.InvalidCharacterLiteral;
+            if (cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF)) return ElzError.InvalidCharacterLiteral;
             return Value{ .character = cp };
         }
         // A single non-ASCII UTF-8 character.
@@ -460,96 +478,197 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         }
         return ElzError.InvalidCharacterLiteral;
     }
-    // Handle exactness prefix: #e (exact) or #i (inexact)
+    if (try parseNumber(token, allocator)) |num| return num;
+    return Value{ .symbol = try allocator.dupe(u8, token) };
+}
+
+/// Validates the strict decimal syntax `[+-]? (digits [. digits*] | . digits) ([eE] [+-]? digits)?`.
+/// `std.fmt.parseFloat` alone also accepts `inf`, `nan`, hex floats, and
+/// digit separators, none of which are Scheme numbers.
+fn isDecimalSyntax(text: []const u8) bool {
+    var i: usize = 0;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+    var int_digits: usize = 0;
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) int_digits += 1;
+    var frac_digits: usize = 0;
+    if (i < text.len and text[i] == '.') {
+        i += 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) frac_digits += 1;
+    }
+    if (int_digits == 0 and frac_digits == 0) return false;
+    if (i < text.len and (text[i] == 'e' or text[i] == 'E')) {
+        i += 1;
+        if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+        var exp_digits: usize = 0;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) exp_digits += 1;
+        if (exp_digits == 0) return false;
+    }
+    return i == text.len;
+}
+
+/// Parses a decimal real, including the inf/nan spellings. Returns null when
+/// `text` is not a real number.
+pub fn parseReal(text: []const u8) ?f64 {
+    if (std.mem.eql(u8, text, "+inf.0")) return std.math.inf(f64);
+    if (std.mem.eql(u8, text, "-inf.0")) return -std.math.inf(f64);
+    if (std.mem.eql(u8, text, "+nan.0") or std.mem.eql(u8, text, "-nan.0")) return std.math.nan(f64);
+    if (!isDecimalSyntax(text)) return null;
+    return std.fmt.parseFloat(f64, text) catch null;
+}
+
+/// Parses an integer in `radix` with an optional sign. Digit separators are
+/// rejected. Returns null when `text` is not such an integer.
+pub fn parseIntegerStrict(text: []const u8, radix: u8) ?i64 {
+    var i: usize = 0;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
+    if (i >= text.len) return null;
+    for (text[i..]) |c| {
+        const d = std.fmt.charToDigit(c, radix) catch return null;
+        _ = d;
+    }
+    return std.fmt.parseInt(i64, text, radix) catch null;
+}
+
+/// Converts a decimal literal to an exact rational, for the `#e` prefix.
+fn exactFromDecimal(text: []const u8, allocator: std.mem.Allocator) ElzError!Value {
+    var i: usize = 0;
+    var negative = false;
+    if (i < text.len and (text[i] == '+' or text[i] == '-')) {
+        negative = text[i] == '-';
+        i += 1;
+    }
+    var mantissa: i128 = 0;
+    var scale: i32 = 0; // value = mantissa * 10^scale
+    var seen_dot = false;
+    while (i < text.len and text[i] != 'e' and text[i] != 'E') : (i += 1) {
+        const c = text[i];
+        if (c == '.') {
+            seen_dot = true;
+            continue;
+        }
+        mantissa = std.math.mul(i128, mantissa, 10) catch return ElzError.Overflow;
+        mantissa += c - '0';
+        if (seen_dot) scale -= 1;
+    }
+    if (i < text.len) {
+        const exp = std.fmt.parseInt(i32, text[i + 1 ..], 10) catch return ElzError.Overflow;
+        scale += exp;
+    }
+    if (negative) mantissa = -mantissa;
+    var num: i128 = mantissa;
+    var den: i128 = 1;
+    var k = scale;
+    while (k > 0) : (k -= 1) num = std.math.mul(i128, num, 10) catch return ElzError.Overflow;
+    while (k < 0) : (k += 1) den = std.math.mul(i128, den, 10) catch return ElzError.Overflow;
+    // Reduce before narrowing to i64.
+    const g = gcd128(if (num < 0) -num else num, den);
+    if (g > 1) {
+        num = @divExact(num, g);
+        den = @divExact(den, g);
+    }
+    if (num > std.math.maxInt(i64) or num < std.math.minInt(i64) or den > std.math.maxInt(i64)) return ElzError.Overflow;
+    return core.normalizeRational(@intCast(num), @intCast(den), allocator);
+}
+
+fn gcd128(a: i128, b: i128) i128 {
+    var x = a;
+    var y = b;
+    while (y != 0) {
+        const t = y;
+        y = @rem(x, y);
+        x = t;
+    }
+    return x;
+}
+
+/// Parses `token` as a number with the Scheme prefixes `#e`, `#i`, `#x`,
+/// `#o`, `#b`, and `#d` in either order. Returns null when the token is not
+/// numeric, so the caller can treat it as a symbol.
+pub fn parseNumber(token: []const u8, allocator: std.mem.Allocator) ElzError!?Value {
     var rest = token;
     var force_exact: ?bool = null;
-    if (token.len >= 2 and token[0] == '#') {
-        switch (token[1]) {
+    var radix: ?u8 = null;
+    // Up to two prefixes, in either order.
+    var prefixes: usize = 0;
+    while (prefixes < 2 and rest.len >= 2 and rest[0] == '#') : (prefixes += 1) {
+        switch (rest[1]) {
             'e', 'E' => {
+                if (force_exact != null) return null;
                 force_exact = true;
-                rest = token[2..];
             },
             'i', 'I' => {
+                if (force_exact != null) return null;
                 force_exact = false;
-                rest = token[2..];
             },
-            else => {},
+            'x', 'X' => {
+                if (radix != null) return null;
+                radix = 16;
+            },
+            'o', 'O' => {
+                if (radix != null) return null;
+                radix = 8;
+            },
+            'b', 'B' => {
+                if (radix != null) return null;
+                radix = 2;
+            },
+            'd', 'D' => {
+                if (radix != null) return null;
+                radix = 10;
+            },
+            else => return null,
         }
+        rest = rest[2..];
     }
+    const has_prefix = prefixes > 0;
+    const r: u8 = radix orelse 10;
 
-    // Radix prefixes: #x (hex), #o (octal), #b (binary), #d (decimal).
-    if (rest.len >= 2 and rest[0] == '#') {
-        const radix: ?u8 = switch (rest[1]) {
-            'x', 'X' => 16,
-            'o', 'O' => 8,
-            'b', 'B' => 2,
-            'd', 'D' => 10,
-            else => null,
-        };
-        if (radix) |r| {
-            const n = std.fmt.parseInt(i64, rest[2..], r) catch return ElzError.InvalidArgument;
-            if (force_exact == false) return Value{ .number = @floatFromInt(n) };
-            return Value{ .exact_integer = n };
-        }
-    }
-
-    // Try rational literal p/q
+    // Rational p/q.
     if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
-        const num_str = rest[0..slash];
-        const den_str = rest[slash + 1 ..];
-        const numer = std.fmt.parseInt(i64, num_str, 10) catch null;
-        const denom = std.fmt.parseInt(i64, den_str, 10) catch null;
-        if (numer != null and denom != null and denom.? != 0) {
-            const rational_val = try core.normalizeRational(numer.?, denom.?, allocator);
-            if (force_exact == false) {
-                const f = switch (rational_val) {
-                    .exact_integer => |n| @as(f64, @floatFromInt(n)),
-                    .rational => |r| r.toFloat(),
-                    else => unreachable,
-                };
-                return Value{ .number = f };
-            }
-            return rational_val;
+        const numer = parseIntegerStrict(rest[0..slash], r) orelse return if (has_prefix) ElzError.InvalidArgument else null;
+        const denom = parseIntegerStrict(rest[slash + 1 ..], r) orelse return if (has_prefix) ElzError.InvalidArgument else null;
+        if (rest[slash + 1] == '+' or rest[slash + 1] == '-') return if (has_prefix) ElzError.InvalidArgument else null;
+        if (denom == 0) return ElzError.DivisionByZero;
+        const rational_val = try core.normalizeRational(numer, denom, allocator);
+        if (force_exact == false) {
+            const f = switch (rational_val) {
+                .exact_integer => |n| @as(f64, @floatFromInt(n)),
+                .rational => |rv| rv.toFloat(),
+                else => unreachable,
+            };
+            return Value{ .number = f };
         }
+        return rational_val;
     }
 
-    // Try integer (no decimal point, no exponent)
-    const is_int = blk: {
-        var s = rest;
-        if (s.len > 0 and (s[0] == '+' or s[0] == '-')) s = s[1..];
-        if (s.len == 0) break :blk false;
-        for (s) |c| {
-            if (c < '0' or c > '9') break :blk false;
-        }
-        break :blk true;
-    };
-    if (is_int) {
-        const n = std.fmt.parseInt(i64, rest, 10) catch null;
-        if (n != null) {
-            if (force_exact == false) return Value{ .number = @floatFromInt(n.?) };
-            return Value{ .exact_integer = n.? };
-        }
+    // Integer.
+    if (parseIntegerStrict(rest, r)) |n| {
+        if (force_exact == false) return Value{ .number = @floatFromInt(n) };
+        return Value{ .exact_integer = n };
+    }
+    if (r != 10) {
+        // An integer that overflows i64 in a non-decimal radix, or garbage.
+        return if (has_prefix) ElzError.InvalidArgument else null;
     }
 
-    if (std.mem.eql(u8, rest, "+inf.0")) return Value{ .number = std.math.inf(f64) };
-    if (std.mem.eql(u8, rest, "-inf.0")) return Value{ .number = -std.math.inf(f64) };
-    if (std.mem.eql(u8, rest, "+nan.0") or std.mem.eql(u8, rest, "-nan.0")) return Value{ .number = std.math.nan(f64) };
+    // Decimal real, infinities, and NaN.
+    if (parseReal(rest)) |num| {
+        if (force_exact == true) {
+            if (!std.math.isFinite(num)) return ElzError.InvalidArgument;
+            return try exactFromDecimal(rest, allocator);
+        }
+        return Value{ .number = num };
+    }
 
     // Complex literal: <real><sign><imag>i, e.g. 3+4i, -2.5+0.0i, +inf.0i.
     if (rest.len >= 2 and (rest[rest.len - 1] == 'i' or rest[rest.len - 1] == 'I')) {
-        if (parseComplex(rest, allocator)) |v| return v else |_| {}
+        if (parseComplex(rest, allocator)) |v| {
+            if (force_exact == true) return ElzError.InvalidArgument;
+            return v;
+        } else |_| {}
     }
 
-    const num = std.fmt.parseFloat(f64, rest) catch {
-        if (force_exact != null) return ElzError.InvalidArgument;
-        return Value{ .symbol = try allocator.dupe(u8, token) };
-    };
-    if (force_exact == true) {
-        const as_int = @as(i64, @intFromFloat(num));
-        if (@as(f64, @floatFromInt(as_int)) == num) return Value{ .exact_integer = as_int };
-        return ElzError.InvalidArgument;
-    }
-    return Value{ .number = num };
+    return if (has_prefix) ElzError.InvalidArgument else null;
 }
 
 /// Reads and parses a single form from a string of source code.

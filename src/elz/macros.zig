@@ -421,14 +421,16 @@ fn expand_ellipsis(
 }
 
 const special_form_names: []const []const u8 = &.{
-    "quote",        "quasiquote",   "unquote",      "unquote-splicing",
-    "if",           "cond",         "case",         "and",
-    "or",           "define",       "define-macro", "define-syntax",
-    "syntax-rules", "syntax-error", "set!",         "lambda",
-    "begin",        "let",          "let*",         "letrec",
-    "do",           "delay",        "try",          "catch",
-    "import",       "else",         "...",          "_",
-    "reset",        "shift",
+    "quote",        "quasiquote",   "unquote",        "unquote-splicing",
+    "if",           "cond",         "case",           "and",
+    "or",           "define",       "define-macro",   "define-syntax",
+    "syntax-rules", "syntax-error", "set!",           "lambda",
+    "begin",        "let",          "let*",           "letrec",
+    "letrec*",      "do",           "delay",          "try",
+    "catch",        "import",       "else",           "=>",
+    "...",          "_",            "reset",          "shift",
+    "when",         "unless",       "let-syntax",     "letrec-syntax",
+    "include",      "include-ci",   "define-library",
 };
 
 fn is_special_form_name(name: []const u8) bool {
@@ -475,6 +477,17 @@ fn collect_introduced_identifiers(
         },
         else => {},
     }
+}
+
+/// Returns the original name behind a hygiene-renamed identifier
+/// (`name__h12` gives `name`), or null when `name` was not renamed.
+pub fn hygieneBase(name: []const u8) ?[]const u8 {
+    const at = std.mem.lastIndexOf(u8, name, "__h") orelse return null;
+    if (at == 0 or at + 3 >= name.len) return null;
+    for (name[at + 3 ..]) |c| {
+        if (!std.ascii.isDigit(c)) return null;
+    }
+    return name[0..at];
 }
 
 /// Appends `name` to `out` unless it is already there, is a pattern variable,
@@ -562,6 +575,30 @@ fn collect_template_bound(
             }
         } else if (std.mem.eql(u8, head, "do")) {
             try collect_binding_names(allocator, second, pattern_var_names, ellipsis, out);
+        } else if (std.mem.eql(u8, head, "define")) {
+            // A definition the template introduces is local to the expansion.
+            if (second == .symbol) {
+                try add_identifier(allocator, second.symbol, pattern_var_names, ellipsis, out);
+            } else if (second == .pair) {
+                if (second.pair.car == .symbol) try add_identifier(allocator, second.pair.car.symbol, pattern_var_names, ellipsis, out);
+                try collect_formals(allocator, second.pair.cdr, pattern_var_names, ellipsis, out);
+            }
+        } else if (std.mem.eql(u8, head, "let-values") or std.mem.eql(u8, head, "let*-values")) {
+            var cur = second;
+            while (cur == .pair) : (cur = cur.pair.cdr) {
+                if (cur.pair.car == .pair) try collect_formals(allocator, cur.pair.car.pair.car, pattern_var_names, ellipsis, out);
+            }
+        } else if (std.mem.eql(u8, head, "guard")) {
+            if (second == .pair and second.pair.car == .symbol) {
+                try add_identifier(allocator, second.pair.car.symbol, pattern_var_names, ellipsis, out);
+            }
+        } else if (std.mem.eql(u8, head, "shift")) {
+            if (second == .symbol) try add_identifier(allocator, second.symbol, pattern_var_names, ellipsis, out);
+        } else if (std.mem.eql(u8, head, "case-lambda")) {
+            var cur = p.cdr;
+            while (cur == .pair) : (cur = cur.pair.cdr) {
+                if (cur.pair.car == .pair) try collect_formals(allocator, cur.pair.car.pair.car, pattern_var_names, ellipsis, out);
+            }
         }
     }
     try collect_template_bound(allocator, p.car, pattern_var_names, ellipsis, out);
@@ -714,6 +751,14 @@ pub fn expandSyntaxRules(
             defer pattern_var_names.deinit(allocator);
             try collect_pattern_vars(allocator, rule.pattern, sr.literals, sr.ellipsis, &pattern_var_names);
 
+            // Hygiene by renaming: identifiers the template introduces get
+            // fresh names so they cannot capture the user's variables. That
+            // covers names the template binds itself (lambda formals,
+            // let-family names, introduced definitions) and names bound at
+            // definition time in neither the environment nor a special form.
+            // A renamed name that turns out to be a free reference to a
+            // global defined later is resolved by the VM, which falls back
+            // from `name__hN` to `name` (see `hygieneBase`).
             var introduced: std.ArrayListUnmanaged([]const u8) = .empty;
             defer introduced.deinit(allocator);
             try collect_introduced_identifiers(interp, allocator, rule.template, pattern_var_names.items, sr.env, sr.ellipsis, &introduced);

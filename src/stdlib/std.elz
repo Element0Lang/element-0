@@ -383,11 +383,18 @@
 ;;;
 ;;; Returns:
 ;;;   An unspecified value.
-(define (for-each proc lst)
-  (if (not (null? lst))
-      (begin
-        (proc (car lst))
-        (for-each proc (cdr lst)))))
+(define (for-each proc lst . more)
+  (if (null? more)
+      (let loop ((l lst))
+        (if (pair? l)
+            (begin
+              (proc (car l))
+              (loop (cdr l)))))
+      (let loop ((ls (cons lst more)))
+        (if (every? pair? ls)
+            (begin
+              (apply proc (map car ls))
+              (loop (map cdr ls)))))))
 
 ;;; ---------------------------------
 ;;; Higher-Order Functions
@@ -617,9 +624,13 @@
 ;;;
 ;;; Returns a fresh copy of the spine of lst. Improper tails are shared.
 (define (list-copy lst)
-  (if (pair? lst)
-      (cons (car lst) (list-copy (cdr lst)))
-      lst))
+  (let loop ((l lst) (acc '()))
+    (if (pair? l)
+        (loop (cdr l) (cons (car l) acc))
+        (let build ((acc acc) (result l))
+          (if (null? acc)
+              result
+              (build (cdr acc) (cons (car acc) result)))))))
 
 ;;; (symbol=? sym1 sym2 ...)
 ;;;
@@ -759,8 +770,13 @@
 ;;; (write-string str [port])
 ;;;
 ;;; Writes the characters of str to port (default: the current output port).
-(define (write-string str . port)
-  (apply display str port))
+(define (write-string str . rest)
+  (let* ((port (if (null? rest) (current-output-port) (car rest)))
+         (start (if (or (null? rest) (null? (cdr rest))) 0 (cadr rest)))
+         (end (if (or (null? rest) (null? (cdr rest)) (null? (cddr rest)))
+                  (string-length str)
+                  (caddr rest))))
+    (display (substring str start end) port)))
 
 ;;; ---------------------------------
 ;;; R7RS Derived Forms
@@ -1040,7 +1056,7 @@
 ;;;
 ;;; Returns a promise that, when forced, forces the promise produced by expr.
 (define-macro (delay-force expr)
-  `(delay (force ,expr)))
+  `(%%make-delayed%% (lambda () ,expr) #t))
 
 ;;; (interaction-environment)
 ;;;

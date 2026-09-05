@@ -181,14 +181,16 @@ fn numDiv(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
         const br: f64 = if (b == .complex) b.complex.real else toF64(b);
         const bi: f64 = if (b == .complex) b.complex.imag else 0;
         const denom = br * br + bi * bi;
-        if (denom == 0) return ElzError.DivisionByZero;
+        // An exact zero divisor is an error; an inexact one follows IEEE.
+        if (denom == 0 and isExactKind(b)) return ElzError.DivisionByZero;
         const c = alloc.create(core.Complex) catch return ElzError.OutOfMemory;
         c.* = .{ .real = (ar * br + ai * bi) / denom, .imag = (ai * br - ar * bi) / denom };
         return Value{ .complex = c };
     }
-    const denf = toF64(b);
-    if (denf == 0) return ElzError.DivisionByZero;
-    return Value{ .number = toF64(a) / denf };
+    // R7RS: dividing by an exact zero is an error, but an inexact zero
+    // divisor yields an infinity or NaN.
+    if (isExactKind(b) and ratParts(b).n == 0) return ElzError.DivisionByZero;
+    return Value{ .number = toF64(a) / toF64(b) };
 }
 
 fn numNegate(a: Value, alloc: std.mem.Allocator) ElzError!Value {
@@ -280,10 +282,44 @@ fn cmp2(a: Value, b: Value) ElzError!std.math.Order {
         return .eq;
     }
     if (a == .complex or b == .complex) return ElzError.InvalidArgument;
-    const af = toF64(a);
-    const bf = toF64(b);
-    if (af < bf) return .lt;
-    if (af > bf) return .gt;
+    if (a == .number and b == .number) {
+        if (a.number < b.number) return .lt;
+        if (a.number > b.number) return .gt;
+        if (a.number == b.number) return .eq;
+        return ElzError.InvalidArgument; // NaN involved: unordered
+    }
+    // One exact and one inexact operand: compare exactly instead of rounding
+    // the exact side to a float, so `=` stays transitive.
+    if (a == .number) return switch (try cmpExactFloat(b, a.number)) {
+        .lt => .gt,
+        .gt => .lt,
+        .eq => .eq,
+    };
+    return cmpExactFloat(a, b.number);
+}
+
+/// Compares an exact number with a float without loss of precision.
+fn cmpExactFloat(exact: Value, f: f64) ElzError!std.math.Order {
+    if (std.math.isNan(f)) return ElzError.InvalidArgument;
+    if (std.math.isInf(f)) return if (f > 0) .lt else .gt;
+    const p = ratParts(exact);
+    // The float is beyond any i64 magnitude: its sign decides.
+    if (f >= 9.3e18 or f <= -9.3e18) return if (f > 0) .lt else .gt;
+    // Compare p.n / p.d with f: scale f by the denominator first. The
+    // product stays representable when |f * d| < 2^53; beyond that the
+    // integer part alone decides, since |p.n| < 2^63 and d <= |p.n|.
+    const scaled = f * @as(f64, @floatFromInt(p.d));
+    if (@abs(scaled) < 9007199254740992.0) {
+        const whole: i64 = @intFromFloat(@floor(scaled));
+        const frac = scaled - @floor(scaled);
+        if (p.n < whole) return .lt;
+        if (p.n > whole) return .gt;
+        return if (frac > 0) .lt else .eq;
+    }
+    const whole: i128 = @intFromFloat(@floor(scaled));
+    const n: i128 = p.n;
+    if (n < whole) return .lt;
+    if (n > whole) return .gt;
     return .eq;
 }
 
@@ -291,6 +327,11 @@ fn cmp2(a: Value, b: Value) ElzError!std.math.Order {
 fn chainCompare(args: core.ValueList, comptime ok: fn (std.math.Order) bool) ElzError!Value {
     if (args.items.len < 2) return ElzError.WrongArgumentCount;
     for (args.items[0 .. args.items.len - 1], args.items[1..]) |a, b| {
+        // A NaN operand makes every ordering false.
+        if ((a == .number and std.math.isNan(a.number)) or (b == .number and std.math.isNan(b.number))) {
+            if (!a.isNumeric() or !b.isNumeric()) return ElzError.InvalidArgument;
+            return Value{ .boolean = false };
+        }
         const o = try cmp2(a, b);
         if (!ok(o)) return Value{ .boolean = false };
     }
@@ -346,6 +387,7 @@ fn numEq2(a: Value, b: Value) ElzError!bool {
         const bi: f64 = if (b == .complex) b.complex.imag else 0;
         return ar == br and ai == bi;
     }
+    if ((a == .number and std.math.isNan(a.number)) or (b == .number and std.math.isNan(b.number))) return false;
     const o = try cmp2(a, b);
     return o == .eq;
 }
@@ -430,10 +472,46 @@ pub fn atan(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueL
     return Value{ .number = std.math.atan(f) };
 }
 
-pub fn log(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
-    return Value{ .number = std.math.log(f64, std.math.e, f) };
+pub fn log(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    const z = args.items[0];
+    if (!z.isNumeric()) return ElzError.InvalidArgument;
+    if (args.items.len == 2) {
+        const base = args.items[1];
+        if (!base.isNumeric()) return ElzError.InvalidArgument;
+        if (z == .complex or base == .complex) {
+            const num = try complexLog(z, env.allocator);
+            const den = try complexLog(base, env.allocator);
+            return numDiv(num, den, env.allocator);
+        }
+        const zf = toF64(z);
+        const bf = toF64(base);
+        if (zf < 0 or bf < 0) return numDiv(try complexLog(z, env.allocator), try complexLog(base, env.allocator), env.allocator);
+        return Value{ .number = @log(zf) / @log(bf) };
+    }
+    if (z == .complex) return complexLog(z, env.allocator);
+    const f = toF64(z);
+    if (f < 0) return complexLog(z, env.allocator);
+    return Value{ .number = @log(f) };
+}
+
+/// Principal complex logarithm; a negative real yields `log|x| + pi i`.
+fn complexLog(z: Value, alloc: std.mem.Allocator) ElzError!Value {
+    const re: f64 = if (z == .complex) z.complex.real else toF64(z);
+    const im: f64 = if (z == .complex) z.complex.imag else 0;
+    const c = alloc.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = @log(std.math.hypot(re, im)), .imag = std.math.atan2(im, re) };
+    return Value{ .complex = c };
+}
+
+/// Complex exponential.
+fn complexExp(z: Value, alloc: std.mem.Allocator) ElzError!Value {
+    const re: f64 = if (z == .complex) z.complex.real else toF64(z);
+    const im: f64 = if (z == .complex) z.complex.imag else 0;
+    const m = @exp(re);
+    const c = alloc.create(core.Complex) catch return ElzError.OutOfMemory;
+    c.* = .{ .real = m * @cos(im), .imag = m * @sin(im) };
+    return Value{ .complex = c };
 }
 
 /// R7RS requires the result of `max` and `min` to be inexact when any argument
@@ -451,10 +529,18 @@ pub fn max(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
     for (args.items[1..]) |arg| {
         if (!arg.isNumeric()) return ElzError.InvalidArgument;
         if (arg == .number) saw_inexact = true;
+        if (isNanValue(arg) or isNanValue(best)) {
+            best = Value{ .number = std.math.nan(f64) };
+            continue;
+        }
         const o = try cmp2(arg, best);
         if (o == .gt) best = arg;
     }
     return contaminate(best, saw_inexact);
+}
+
+fn isNanValue(v: Value) bool {
+    return v == .number and std.math.isNan(v.number);
 }
 
 pub fn min(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -465,6 +551,10 @@ pub fn min(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueLi
     for (args.items[1..]) |arg| {
         if (!arg.isNumeric()) return ElzError.InvalidArgument;
         if (arg == .number) saw_inexact = true;
+        if (isNanValue(arg) or isNanValue(best)) {
+            best = Value{ .number = std.math.nan(f64) };
+            continue;
+        }
         const o = try cmp2(arg, best);
         if (o == .lt) best = arg;
     }
@@ -595,14 +685,31 @@ pub fn expt(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
         else
             normalizeRational(num, den, env.allocator);
     }
-    const af = a.asFloat() orelse return ElzError.InvalidArgument;
-    const bf = b.asFloat() orelse return ElzError.InvalidArgument;
+    if (a == .complex or b == .complex) {
+        // z^w = exp(w * log z), with 0^w = 0 for a nonzero w.
+        const ar: f64 = if (a == .complex) a.complex.real else toF64(a);
+        const ai: f64 = if (a == .complex) a.complex.imag else 0;
+        if (ar == 0 and ai == 0) return Value{ .number = 0.0 };
+        const l = try complexLog(a, env.allocator);
+        const prod = try numMul(b, l, env.allocator);
+        return complexExp(prod, env.allocator);
+    }
+    const af = toF64(a);
+    const bf = toF64(b);
+    // A negative base with a non-integer exponent has a complex result.
+    if (af < 0 and @floor(bf) != bf) {
+        const l = try complexLog(a, env.allocator);
+        const prod = try numMul(b, l, env.allocator);
+        return complexExp(prod, env.allocator);
+    }
     return Value{ .number = std.math.pow(f64, af, bf) };
 }
 
-pub fn exp_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn exp_fn(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const f = args.items[0].asFloat() orelse return ElzError.InvalidArgument;
+    const z = args.items[0];
+    if (z == .complex) return complexExp(z, env.allocator);
+    const f = z.asFloat() orelse return ElzError.InvalidArgument;
     return Value{ .number = std.math.exp(f) };
 }
 
@@ -615,7 +722,8 @@ pub fn even_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.Valu
             if (@floor(n) != n) return Value{ .boolean = false };
             const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
             const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
-            if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
+            // max_safe rounds up to 2^63, which itself does not fit.
+            if (n >= max_safe or n < min_safe) return ElzError.InvalidArgument;
             const i: i64 = @intFromFloat(n);
             return Value{ .boolean = @mod(i, 2) == 0 };
         },
@@ -632,7 +740,7 @@ pub fn odd_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.Value
             if (@floor(n) != n) return Value{ .boolean = false };
             const max_safe: f64 = @floatFromInt(std.math.maxInt(i64));
             const min_safe: f64 = @floatFromInt(std.math.minInt(i64));
-            if (n > max_safe or n < min_safe) return ElzError.InvalidArgument;
+            if (n >= max_safe or n < min_safe) return ElzError.InvalidArgument;
             const i: i64 = @intFromFloat(n);
             return Value{ .boolean = @mod(i, 2) != 0 };
         },
@@ -719,59 +827,81 @@ pub fn inexact_to_exact(_: *interpreter.Interpreter, env: *core.Environment, arg
     };
 }
 
-pub fn quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+/// Arguments to the integer division operators: exact integers, or inexact
+/// integers (R7RS allows both), never a zero divisor. Results are inexact
+/// when either argument is.
+const IntDiv = struct { a: i64, b: i64, inexact: bool };
+
+fn integerDivArgs(args: core.ValueList) ElzError!IntDiv {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .exact_integer or b != .exact_integer) return ElzError.InvalidArgument;
-    if (b.exact_integer == 0) return ElzError.DivisionByZero;
-    return Value{ .exact_integer = @divTrunc(a.exact_integer, b.exact_integer) };
+    const a = try integralToI64(args.items[0]);
+    const b = try integralToI64(args.items[1]);
+    if (b == 0) return ElzError.DivisionByZero;
+    return .{ .a = a, .b = b, .inexact = args.items[0] == .number or args.items[1] == .number };
+}
+
+fn integralToI64(v: Value) ElzError!i64 {
+    return switch (v) {
+        .exact_integer => |i| i,
+        .number => |n| blk: {
+            if (!std.math.isFinite(n) or @floor(n) != n) break :blk ElzError.InvalidArgument;
+            if (n >= 9223372036854775808.0 or n < -9223372036854775808.0) break :blk ElzError.InvalidArgument;
+            break :blk @intFromFloat(n);
+        },
+        else => ElzError.InvalidArgument,
+    };
+}
+
+fn divResult(n: i64, inexact: bool) Value {
+    return if (inexact) Value{ .number = @floatFromInt(n) } else Value{ .exact_integer = n };
+}
+
+pub fn quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    const p = try integerDivArgs(args);
+    if (p.a == std.math.minInt(i64) and p.b == -1) return ElzError.Overflow;
+    return divResult(@divTrunc(p.a, p.b), p.inexact);
 }
 
 pub fn remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .exact_integer or b != .exact_integer) return ElzError.InvalidArgument;
-    if (b.exact_integer == 0) return ElzError.DivisionByZero;
-    return Value{ .exact_integer = @rem(a.exact_integer, b.exact_integer) };
+    const p = try integerDivArgs(args);
+    if (p.b == -1) return divResult(0, p.inexact);
+    return divResult(@rem(p.a, p.b), p.inexact);
 }
 
 pub fn modulo(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .exact_integer or b != .exact_integer) return ElzError.InvalidArgument;
-    if (b.exact_integer == 0) return ElzError.DivisionByZero;
-    return Value{ .exact_integer = @mod(a.exact_integer, b.exact_integer) };
+    const p = try integerDivArgs(args);
+    if (p.b == -1) return divResult(0, p.inexact);
+    return divResult(@mod(p.a, p.b), p.inexact);
 }
 
 pub fn gcd_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return Value{ .exact_integer = 0 };
     var acc: u64 = 0;
+    var inexact = false;
     for (args.items) |arg| {
-        if (arg != .exact_integer) return ElzError.InvalidArgument;
-        const a = absU64(arg.exact_integer);
+        if (arg == .number) inexact = true;
+        const a = absU64(try integralToI64(arg));
         acc = if (acc == 0) a else gcdU64(acc, a);
     }
     if (acc > @as(u64, std.math.maxInt(i64))) return ElzError.Overflow;
-    return Value{ .exact_integer = @intCast(acc) };
+    return divResult(@intCast(acc), inexact);
 }
 
 pub fn lcm_fn(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len == 0) return Value{ .exact_integer = 1 };
     var acc: u64 = 1;
+    var inexact = false;
     for (args.items) |arg| {
-        if (arg != .exact_integer) return ElzError.InvalidArgument;
-        const a = absU64(arg.exact_integer);
-        if (a == 0) return Value{ .exact_integer = 0 };
+        if (arg == .number) inexact = true;
+        const a = absU64(try integralToI64(arg));
+        if (a == 0) return divResult(0, inexact);
         const g = gcdU64(acc, a);
         const prod = @mulWithOverflow(acc, a / g);
         if (prod[1] != 0) return ElzError.Overflow;
         acc = prod[0];
     }
     if (acc > @as(u64, std.math.maxInt(i64))) return ElzError.Overflow;
-    return Value{ .exact_integer = @intCast(acc) };
+    return divResult(@intCast(acc), inexact);
 }
 
 // --- Rational accessors ---
@@ -982,14 +1112,10 @@ pub fn nan_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.Value
 
 // --- Floor and truncate division families ---
 
-fn intDivArgs(args: core.ValueList) ElzError!struct { a: i64, b: i64 } {
-    if (args.items.len != 2) return ElzError.WrongArgumentCount;
-    const a = args.items[0];
-    const b = args.items[1];
-    if (a != .exact_integer or b != .exact_integer) return ElzError.InvalidArgument;
-    if (b.exact_integer == 0) return ElzError.DivisionByZero;
-    if (a.exact_integer == std.math.minInt(i64) and b.exact_integer == -1) return ElzError.Overflow;
-    return .{ .a = a.exact_integer, .b = b.exact_integer };
+fn intDivArgs(args: core.ValueList) ElzError!IntDiv {
+    const p = try integerDivArgs(args);
+    if (p.a == std.math.minInt(i64) and p.b == -1) return ElzError.Overflow;
+    return p;
 }
 
 fn twoValues(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
@@ -1003,40 +1129,32 @@ fn twoValues(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
 
 pub fn floor_div(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return twoValues(
-        Value{ .exact_integer = @divFloor(p.a, p.b) },
-        Value{ .exact_integer = @mod(p.a, p.b) },
-        env.allocator,
-    );
+    return twoValues(divResult(@divFloor(p.a, p.b), p.inexact), divResult(@mod(p.a, p.b), p.inexact), env.allocator);
 }
 
 pub fn floor_quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return Value{ .exact_integer = @divFloor(p.a, p.b) };
+    return divResult(@divFloor(p.a, p.b), p.inexact);
 }
 
 pub fn floor_remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return Value{ .exact_integer = @mod(p.a, p.b) };
+    return divResult(@mod(p.a, p.b), p.inexact);
 }
 
 pub fn truncate_div(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return twoValues(
-        Value{ .exact_integer = @divTrunc(p.a, p.b) },
-        Value{ .exact_integer = @rem(p.a, p.b) },
-        env.allocator,
-    );
+    return twoValues(divResult(@divTrunc(p.a, p.b), p.inexact), divResult(@rem(p.a, p.b), p.inexact), env.allocator);
 }
 
 pub fn truncate_quotient(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return Value{ .exact_integer = @divTrunc(p.a, p.b) };
+    return divResult(@divTrunc(p.a, p.b), p.inexact);
 }
 
 pub fn truncate_remainder(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const p = try intDivArgs(args);
-    return Value{ .exact_integer = @rem(p.a, p.b) };
+    return divResult(@rem(p.a, p.b), p.inexact);
 }
 
 // --- Complex accessors and constructors ---

@@ -21,13 +21,13 @@ pub const Cell = struct {
     content: Value,
 };
 
-/// Returns a `Value` whose inline slices (symbol name, string bytes) are owned by
-/// `allocator`, while heap-allocated reference variants pass through unchanged so that
-/// aliased bindings observe each other's mutations.
+/// Returns a `Value` whose symbol name is owned by `allocator`. Strings and
+/// heap-allocated reference variants pass through unchanged, so aliased
+/// bindings observe each other's mutations (`string-set!` on a string reached
+/// through two global names must be visible through both).
 fn own_value_slices(value: Value, allocator: std.mem.Allocator) !Value {
     return switch (value) {
         .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-        .string => |s| Value{ .string = try allocator.dupe(u8, s) },
         else => value,
     };
 }
@@ -238,6 +238,16 @@ pub const Escape = struct {
 pub const Continuation = struct {
     stack: []Value,
     frames: []CallFrame,
+    /// Upvalues that were open into the captured segment when it was taken.
+    /// Reinstating the segment re-opens them onto the new copy, so closures
+    /// created inside the segment and the resumed frames share one location.
+    upvals: []CapturedUpvalue = &.{},
+
+    pub const CapturedUpvalue = struct {
+        upvalue: *Upvalue,
+        /// Stack slot relative to the prompt base.
+        offset: usize,
+    };
 };
 
 /// Represents a macro transformer in Element 0.
@@ -423,8 +433,10 @@ pub const Port = struct {
     is_open: bool,
     /// Name used in error messages and `write` output.
     name: []const u8,
-    /// One-byte lookahead buffer used by `peekChar`.
-    peek_buffer: ?u8 = null,
+    /// Bytes read ahead by the peek operations and not yet consumed.
+    pushback: [4]u8 = undefined,
+    pushback_len: u8 = 0,
+    pushback_pos: u8 = 0,
     /// Whether this is a binary port (bytevector or binary file backed).
     binary: bool = false,
 
@@ -555,12 +567,25 @@ pub const Port = struct {
         return try out.toOwnedSlice(allocator);
     }
 
-    pub fn readChar(self: *Port) !?u8 {
-        if (!self.is_input or !self.is_open) return null;
-        if (self.peek_buffer) |c| {
-            self.peek_buffer = null;
-            return c;
-        }
+    /// Number of bytes peeked but not yet consumed.
+    pub fn pendingBytes(self: *const Port) usize {
+        return self.pushback_len - self.pushback_pos;
+    }
+
+    /// Discards any peeked bytes.
+    pub fn clearPushback(self: *Port) void {
+        self.pushback_len = 0;
+        self.pushback_pos = 0;
+    }
+
+    fn unreadBytes(self: *Port, bytes: []const u8) void {
+        // Only called when the pushback buffer has been fully consumed.
+        @memcpy(self.pushback[0..bytes.len], bytes);
+        self.pushback_len = @intCast(bytes.len);
+        self.pushback_pos = 0;
+    }
+
+    fn readRawByte(self: *Port) !?u8 {
         switch (self.kind) {
             .file => |fk| {
                 var buf: [1]u8 = undefined;
@@ -578,15 +603,56 @@ pub const Port = struct {
         }
     }
 
-    pub fn peekChar(self: *Port) !?u8 {
+    pub fn readChar(self: *Port) !?u8 {
         if (!self.is_input or !self.is_open) return null;
-        if (self.peek_buffer) |c| return c;
-        const c_opt = try self.readChar();
-        if (c_opt) |c| {
-            self.peek_buffer = c;
+        if (self.pushback_pos < self.pushback_len) {
+            const c = self.pushback[self.pushback_pos];
+            self.pushback_pos += 1;
+            if (self.pushback_pos == self.pushback_len) self.clearPushback();
             return c;
         }
-        return null;
+        return self.readRawByte();
+    }
+
+    pub fn peekChar(self: *Port) !?u8 {
+        if (!self.is_input or !self.is_open) return null;
+        if (self.pushback_pos < self.pushback_len) return self.pushback[self.pushback_pos];
+        const c = (try self.readRawByte()) orelse return null;
+        self.unreadBytes(&.{c});
+        return c;
+    }
+
+    /// Reads one UTF-8 encoded character. Invalid sequences yield the
+    /// replacement character so a text port never returns half a character.
+    pub fn readCodepoint(self: *Port) !?u32 {
+        const first = (try self.readChar()) orelse return null;
+        const len = std.unicode.utf8ByteSequenceLength(first) catch return 0xFFFD;
+        if (len == 1) return first;
+        var buf: [4]u8 = undefined;
+        buf[0] = first;
+        var i: usize = 1;
+        while (i < len) : (i += 1) {
+            buf[i] = (try self.readChar()) orelse return 0xFFFD;
+        }
+        return std.unicode.utf8Decode(buf[0..len]) catch 0xFFFD;
+    }
+
+    /// Returns the next character without consuming it.
+    pub fn peekCodepoint(self: *Port) !?u32 {
+        if (!self.is_input or !self.is_open) return null;
+        var buf: [4]u8 = undefined;
+        var n: usize = 0;
+        const first = (try self.readChar()) orelse return null;
+        buf[0] = first;
+        n = 1;
+        const len = std.unicode.utf8ByteSequenceLength(first) catch 1;
+        while (n < len) : (n += 1) {
+            const c = (try self.readChar()) orelse break;
+            buf[n] = c;
+        }
+        self.unreadBytes(buf[0..n]);
+        if (n != len) return 0xFFFD;
+        return std.unicode.utf8Decode(buf[0..n]) catch 0xFFFD;
     }
 
     pub fn writeString(self: *Port, str: []const u8) !void {
@@ -616,6 +682,12 @@ pub const Promise = struct {
     forced: bool,
     /// The cached result, valid only when `forced` is true.
     result: Value,
+    /// True for promises made by `delay-force`: a promise-valued result is
+    /// forced in turn rather than being the value.
+    is_delay_force: bool = false,
+    /// Set when another promise adopted this one's computation; forcing this
+    /// promise then forces that one.
+    forward: ?*Promise = null,
 };
 
 /// `Value` is the core data type in the Elz interpreter.
@@ -679,6 +751,8 @@ pub const Value = union(enum) {
     nil,
     /// An unspecified or void value.
     unspecified,
+    /// The end-of-file object returned by the read procedures.
+    eof,
 
     /// Checks if the `Value` is a specific symbol.
     ///
@@ -695,13 +769,14 @@ pub const Value = union(enum) {
         };
     }
 
-    /// Returns the numeric value as f64 if this is any numeric type, or null otherwise.
+    /// Returns the numeric value as f64 if this is a real numeric type, or null
+    /// otherwise. A complex number has no single real value, so callers that
+    /// only handle reals reject it instead of silently using the real part.
     pub fn asFloat(self: Value) ?f64 {
         return switch (self) {
             .number => |n| n,
             .exact_integer => |n| @floatFromInt(n),
             .rational => |r| @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator)),
-            .complex => |c| c.real,
             else => null,
         };
     }
@@ -724,7 +799,7 @@ pub const Value = union(enum) {
     pub fn deep_clone(self: Value, allocator: std.mem.Allocator) !Value {
         return switch (self) {
             .symbol => |s| Value{ .symbol = try allocator.dupe(u8, s) },
-            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified => self,
+            .number, .exact_integer, .boolean, .character, .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .nil, .unspecified, .eof => self,
             .rational => |r| blk: {
                 const new_r = try allocator.create(Rational);
                 new_r.* = r.*;

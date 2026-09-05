@@ -121,6 +121,17 @@ pub const Interpreter = struct {
     /// Location of the most recent uncaught runtime error, when known.
     last_error_file: ?[]const u8 = null,
     last_error_line: ?u32 = null,
+    /// Nesting depth of evalString/evalForm calls. The time-limit clock starts
+    /// with the outermost call only, so nested evaluation (macro expansion,
+    /// `eval`, `load`) cannot extend the budget.
+    eval_depth: u32 = 0,
+    /// Current expression nesting depth inside the compiler.
+    compile_depth: u32 = 0,
+    /// Current nesting of VM runs started by primitive callbacks.
+    native_depth: u32 = 0,
+    /// Files currently being loaded by `include`, `import`, or `load`, so a
+    /// file that includes itself is reported instead of recursing forever.
+    loading_files: std.StringHashMapUnmanaged(void) = .empty,
 
     /// Initializes a new `Interpreter` instance.
     /// Sets up the GC, creates the root environment, populates it with primitives
@@ -220,11 +231,8 @@ pub const Interpreter = struct {
 
         if (forms.items.len == 0) return .unspecified;
 
-        // Set the eval start time for time-limited execution
-        if (self.time_limit_ms != null) {
-            self.eval_start_ms = currentTimeMs();
-            self.time_check_counter = 0;
-        }
+        self.beginEval();
+        defer self.endEval();
 
         const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, forms.items, self.root_env, fuel);
         // Protos are GC-allocated and may be referenced by closures stored in the environment.
@@ -249,6 +257,12 @@ pub const Interpreter = struct {
         if (self.module_cache.get(path_str)) |cached_mod_ptr| {
             return core.Value{ .module = cached_mod_ptr };
         }
+
+        if (!self.beginLoading(path_str)) {
+            self.last_error_message = std.fmt.allocPrint(self.allocator, "import: '{s}' imports itself", .{path_str}) catch null;
+            return core.ElzError.InvalidArgument;
+        }
+        defer self.endLoading(path_str);
 
         const source_bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path_str, self.allocator, .limited(1024 * 1024)) catch {
             self.last_error_message = "Failed to read module file.";
@@ -316,6 +330,8 @@ pub const Interpreter = struct {
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
     pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
+        self.beginEval();
+        defer self.endEval();
         const forms = [_]core.Value{form.*};
         const proto = try compiler.Compiler.compileTopLevel(self.allocator, self, &forms, self.root_env, fuel);
         // Protos are GC-allocated and may be referenced by closures stored in the environment.
@@ -325,6 +341,32 @@ pub const Interpreter = struct {
         defer machine.deinit();
 
         return wrapEvalResult(self, machine.runProto(proto, fuel));
+    }
+
+    /// Starts the time-limit clock for an outermost evaluation.
+    fn beginEval(self: *Interpreter) void {
+        if (self.eval_depth == 0 and self.time_limit_ms != null) {
+            self.eval_start_ms = currentTimeMs();
+            self.time_check_counter = 0;
+        }
+        self.eval_depth += 1;
+    }
+
+    fn endEval(self: *Interpreter) void {
+        self.eval_depth -= 1;
+    }
+
+    /// Marks `path` as being loaded. Returns false when it is already in
+    /// progress, which means the file recursively includes or imports itself.
+    pub fn beginLoading(self: *Interpreter, path: []const u8) bool {
+        if (self.loading_files.contains(path)) return false;
+        const owned = self.allocator.dupe(u8, path) catch return true;
+        self.loading_files.put(self.allocator, owned, {}) catch {};
+        return true;
+    }
+
+    pub fn endLoading(self: *Interpreter, path: []const u8) void {
+        _ = self.loading_files.remove(path);
     }
 
     /// Converts internal CPS signals into embedder-facing errors at the API boundary.

@@ -52,6 +52,7 @@ pub const OpCode = enum(u8) {
     // --- Aggregate constructors ---
     make_list, // a = count; pops count items (first item pushed last), pushes list
     make_vector, // a = count; pops count items, pushes vector
+    list_to_vector, // replace the list on top with a vector of its elements
 
     // --- Quasiquote helpers ---
     append_lists, // pops two lists, pushes appended list (for splicing)

@@ -4,6 +4,15 @@ const Value = core.Value;
 const ElzError = @import("../errors.zig").ElzError;
 const interpreter = @import("../interpreter.zig");
 const vm_mod = @import("../vm.zig");
+const predicates = @import("predicates.zig");
+
+/// Charges one unit of work while a primitive walks a list, so a circular
+/// list or a very long one stays inside the caller's fuel and time budget.
+fn tick(interp: *interpreter.Interpreter, fuel: *u64) ElzError!void {
+    try interp.checkTimeBudget();
+    if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
+    fuel.* -= 1;
+}
 
 /// `cons` creates a new pair.
 ///
@@ -79,11 +88,14 @@ pub fn list(_: *interpreter.Interpreter, env: *core.Environment, args: core.Valu
 ///
 /// Returns:
 /// The length of the list as a `Value.number`.
-pub fn list_length(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_length(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    // A circular list has no length (R7RS: it is an error).
+    if (!predicates.isProperList(args.items[0])) return ElzError.InvalidArgument;
     var count: i64 = 0;
     var current = args.items[0];
     while (current != .nil) {
+        try tick(interp, fuel);
         const p = switch (current) {
             .pair => |pair_val| pair_val,
             else => return ElzError.InvalidArgument,
@@ -116,13 +128,14 @@ fn toIndex(v: Value) ElzError!usize {
 ///
 /// Returns:
 /// A new list containing the elements of all the input lists.
-pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn append(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len == 0) return Value.nil;
     var result_head: core.Value = .nil;
     var result_tail: ?*core.Pair = null;
     for (args.items[0 .. args.items.len - 1]) |list_val| {
         var current_node = list_val;
         while (current_node != .nil) {
+            try tick(interp, fuel);
             const p_node = switch (current_node) {
                 .pair => |p| p,
                 else => return ElzError.InvalidArgument,
@@ -159,11 +172,12 @@ pub fn append(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
 ///
 /// Returns:
 /// A new list with the elements in reverse order.
-pub fn reverse(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn reverse(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     var head: core.Value = .nil;
     var current = args.items[0];
     while (current != .nil) {
+        try tick(interp, fuel);
         const p_node = switch (current) {
             .pair => |p| p,
             else => return ElzError.InvalidArgument,
@@ -205,6 +219,7 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
             }
         }
         if (any_done) break;
+        try tick(interp, fuel);
         // Collect one element from each list.
         call_args.items.len = 0;
         for (0..num_lists) |i| {
@@ -229,12 +244,13 @@ pub fn map(interp: *interpreter.Interpreter, env: *core.Environment, args: core.
 
 /// `list_ref` returns the k-th element of a list.
 /// Syntax: (list-ref list k)
-pub fn list_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_ref(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         current = current.pair.cdr;
     }
@@ -244,12 +260,13 @@ pub fn list_ref(_: *interpreter.Interpreter, _: *core.Environment, args: core.Va
 
 /// `list_tail` returns the sublist of a list starting at position k.
 /// Syntax: (list-tail list k)
-pub fn list_tail(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_tail(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const list_val = args.items[0];
     var idx = try toIndex(args.items[1]);
     var current = list_val;
     while (idx > 0) : (idx -= 1) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         current = current.pair.cdr;
     }
@@ -258,12 +275,13 @@ pub fn list_tail(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
 /// `memq` returns the first sublist whose car is eq? to obj, or #f.
 /// Syntax: (memq obj list)
-pub fn memq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn memq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const obj = args.items[0];
     var current = args.items[1];
 
     while (current != .nil) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         const p = current.pair;
         // eq? comparison - pointer/value equality
@@ -275,31 +293,21 @@ pub fn memq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueL
     return Value{ .boolean = false };
 }
 
-/// Helper for eq? check
+/// Helper for eq? check: `eq?` and `eqv?` coincide in this implementation, so
+/// procedures, strings, and other heap objects compare by identity here too.
 fn eqCheck(a: Value, b: Value) bool {
-    return switch (a) {
-        .nil => b == .nil,
-        .boolean => |av| if (b == .boolean) av == b.boolean else false,
-        .number => |av| if (b == .number) av == b.number else false,
-        .exact_integer => |av| if (b == .exact_integer) av == b.exact_integer else false,
-        .rational => |av| if (b == .rational) (av.numerator == b.rational.numerator and av.denominator == b.rational.denominator) else false,
-        .complex => |av| if (b == .complex) (av.real == b.complex.real and av.imag == b.complex.imag) else false,
-        .character => |av| if (b == .character) av == b.character else false,
-        .symbol => |av| if (b == .symbol) std.mem.eql(u8, av, b.symbol) else false,
-        .pair => |av| if (b == .pair) av == b.pair else false,
-        .vector => |av| if (b == .vector) av == b.vector else false,
-        else => false,
-    };
+    return predicates.is_eqv_internal(a, b);
 }
 
 /// `assq` returns the first pair in alist whose car is eq? to obj, or #f.
 /// Syntax: (assq obj alist)
-pub fn assq(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn assq(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
     const obj = args.items[0];
     var current = args.items[1];
 
     while (current != .nil) {
+        try tick(interp, fuel);
         if (current != .pair) return ElzError.InvalidArgument;
         const p = current.pair;
         if (p.car != .pair) return ElzError.InvalidArgument;

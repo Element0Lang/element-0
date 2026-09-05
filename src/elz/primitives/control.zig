@@ -142,6 +142,13 @@ pub fn apply(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     }
 
     var current_node = last_arg;
+    // Reject circular argument lists instead of looping forever.
+    var probe = last_arg;
+    var steps: usize = 0;
+    while (probe == .pair) : (probe = probe.pair.cdr) {
+        steps += 1;
+        if (steps > 10_000_000) return ElzError.InvalidArgument;
+    }
     while (current_node != .nil) {
         const p = switch (current_node) {
             .pair => |pair_val| pair_val,
@@ -263,14 +270,16 @@ pub fn make_promise(interp: *interpreter.Interpreter, env: *core.Environment, ar
 /// requires it to treat its argument as an already-computed value.
 /// Called by the compiler as: (%%make-delayed%% (lambda () expr))
 pub fn make_delayed(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
-    if (args.items.len != 1) return ElzError.WrongArgumentCount;
+    // (%%make-delayed%% thunk) for `delay`; (%%make-delayed%% thunk #t) for
+    // `delay-force`, whose promise-valued result is forced in turn.
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     const thunk = args.items[0];
     switch (thunk) {
         .vm_closure, .procedure, .foreign_procedure => {},
         else => return ElzError.InvalidArgument,
     }
     const pr = try env.allocator.create(core.Promise);
-    pr.* = .{ .expr = thunk, .env = interp.root_env, .forced = false, .result = .unspecified };
+    pr.* = .{ .expr = thunk, .env = interp.root_env, .forced = false, .result = .unspecified, .is_delay_force = args.items.len == 2 };
     return core.Value{ .promise = pr };
 }
 
@@ -279,20 +288,37 @@ pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
     const arg = args.items[0];
     if (arg != .promise) return arg;
 
-    const pr = arg.promise;
-    if (pr.forced) return pr.result;
-
-    // The expr field holds either a thunk (a procedure) from `delay`
-    // or a raw AST value for promises created directly.
-    const result = if (pr.expr == .vm_closure or pr.expr == .procedure or pr.expr == .foreign_procedure) blk: {
+    var pr = arg.promise;
+    while (pr.forward) |f| pr = f;
+    // Iterative forcing: a `delay-force` promise whose thunk yields another
+    // promise adopts that promise's thunk and loops, so a chain of any length
+    // runs in constant native stack space (R7RS 7.3 "space-safe").
+    while (!pr.forced) {
         var no_args = core.ValueList.init(env.allocator);
         defer no_args.deinit();
-        break :blk try vm_mod.callProc(interp, pr.expr, no_args, fuel);
-    } else try interp.evalForm(&pr.expr, fuel);
-
-    pr.result = result;
-    pr.forced = true;
-    return result;
+        const result = if (pr.expr == .vm_closure or pr.expr == .procedure or pr.expr == .foreign_procedure)
+            try vm_mod.callProc(interp, pr.expr, no_args, fuel)
+        else
+            try interp.evalForm(&pr.expr, fuel);
+        // The thunk may have forced this promise re-entrantly.
+        if (pr.forced) break;
+        if (pr.is_delay_force and result == .promise) {
+            const inner = result.promise;
+            if (inner.forced) {
+                pr.result = inner.result;
+                pr.forced = true;
+            } else {
+                pr.expr = inner.expr;
+                pr.is_delay_force = inner.is_delay_force;
+                // Let the inner promise share the outcome.
+                inner.forward = pr;
+            }
+            continue;
+        }
+        pr.result = result;
+        pr.forced = true;
+    }
+    return pr.result;
 }
 
 /// `eval_proc` is the implementation of the `eval` primitive function.
@@ -390,13 +416,21 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
         // An escape continuation jumping past this `try` is not an error the
         // handler should see: let it reach its own call/ec frame.
         if (err == ElzError.EscapeContinuationInvoked) return err;
-        // A raised value takes precedence; otherwise fall back to the message.
+        // A raised value takes precedence; otherwise wrap the runtime error in
+        // an error object so `error-object?`, `file-error?`, and
+        // `read-error?` classify it.
         const err_val: core.Value = if (interp.current_exception) |exc| blk: {
             interp.current_exception = null;
             break :blk exc;
         } else blk: {
             const msg = interp.last_error_message orelse @errorName(err);
-            break :blk core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
+            const msg_val = core.Value.from(env.allocator, msg) catch return ElzError.OutOfMemory;
+            const kind: core.Value = switch (err) {
+                ElzError.FileNotFound, ElzError.FileNotWritable, ElzError.IOError => .{ .symbol = "file" },
+                ElzError.UnterminatedString, ElzError.UnexpectedEndOfInput, ElzError.UnmatchedOpenParen, ElzError.UnexpectedCloseParen, ElzError.InvalidCharacterLiteral, ElzError.InvalidDottedPair => .{ .symbol = "read" },
+                else => .{ .symbol = "runtime" },
+            };
+            break :blk makeErrorObject(interp, env.allocator, kind, msg_val, .nil) catch msg_val;
         };
         interp.last_error_message = null;
         interp.last_error_line = null;

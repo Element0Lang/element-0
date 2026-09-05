@@ -439,42 +439,35 @@ pub fn string_to_number(_: *interpreter.Interpreter, env: *core.Environment, arg
     if (str_val != .string) return ElzError.InvalidArgument;
 
     const str = str_val.string;
+    const parser = @import("../parser.zig");
 
-    // With an explicit radix, parse as integer only.
     if (args.items.len == 2) {
-        const radix_val = args.items[1];
-        const radix_num = try toI64(radix_val);
-        if (radix_num < 2 or radix_num > 36) return ElzError.InvalidArgument;
-        const radix: u8 = @intCast(radix_num);
-        if (std.fmt.parseInt(i64, str, radix) catch null) |n| {
-            return Value{ .exact_integer = n };
+        const radix_num = try toI64(args.items[1]);
+        if (radix_num != 2 and radix_num != 8 and radix_num != 10 and radix_num != 16) return ElzError.InvalidArgument;
+        if (radix_num != 10) {
+            // A radix prefix in the string overrides the argument (R7RS 6.2.7).
+            if (str.len >= 2 and str[0] == '#') {
+                const v = parser.parseNumber(str, env.allocator) catch return Value{ .boolean = false };
+                return v orelse Value{ .boolean = false };
+            }
+            const radix: u8 = @intCast(radix_num);
+            if (std.mem.indexOfScalar(u8, str, '/')) |slash| {
+                const n = parser.parseIntegerStrict(str[0..slash], radix) orelse return Value{ .boolean = false };
+                const d = parser.parseIntegerStrict(str[slash + 1 ..], radix) orelse return Value{ .boolean = false };
+                if (d <= 0) return Value{ .boolean = false };
+                return normalizeRationalValue(n, d, env.allocator);
+            }
+            if (parser.parseIntegerStrict(str, radix)) |n| return Value{ .exact_integer = n };
+            return Value{ .boolean = false };
         }
-        return Value{ .boolean = false };
     }
 
-    // Try rational a/b
-    if (std.mem.indexOfScalar(u8, str, '/')) |slash_idx| {
-        if (slash_idx != 0 and slash_idx != str.len - 1) {
-            const num_part = str[0..slash_idx];
-            const den_part = str[slash_idx + 1 ..];
-            if (std.fmt.parseInt(i64, num_part, 10) catch null) |n| {
-                if (std.fmt.parseInt(i64, den_part, 10) catch null) |d| {
-                    if (d == 0) return Value{ .boolean = false };
-                    const math_prim = @import("math.zig");
-                    return math_prim.normalizeRational(n, d, env.allocator) catch return Value{ .boolean = false };
-                }
-            }
-        }
-    }
-    // Try integer
-    if (std.fmt.parseInt(i64, str, 10) catch null) |i| {
-        return Value{ .exact_integer = i };
-    }
-    // Try float
-    const num = std.fmt.parseFloat(f64, str) catch {
-        return Value{ .boolean = false };
-    };
-    return Value{ .number = num };
+    const v = parser.parseNumber(str, env.allocator) catch return Value{ .boolean = false };
+    return v orelse Value{ .boolean = false };
+}
+
+fn normalizeRationalValue(n: i64, d: i64, alloc: std.mem.Allocator) Value {
+    return @import("math.zig").normalizeRational(n, d, alloc) catch Value{ .boolean = false };
 }
 
 /// `string_split` splits a string by a delimiter into a list of strings.

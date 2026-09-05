@@ -6,7 +6,7 @@ const interpreter = @import("../interpreter.zig");
 
 /// Checks if a value is a proper list (i.e., it ends with `nil`).
 /// Uses Floyd's tortoise-and-hare algorithm to detect cycles.
-fn isProperList(v: Value) bool {
+pub fn isProperList(v: Value) bool {
     var slow = v;
     var fast = v;
     while (true) {
@@ -116,7 +116,7 @@ fn equal_values(allocator: std.mem.Allocator, val1: Value, val2: Value) !bool {
 }
 
 /// Internal implementation of `eqv?`.
-fn is_eqv_internal(a: Value, b: Value) bool {
+pub fn is_eqv_internal(a: Value, b: Value) bool {
     return switch (a) {
         .nil => b == .nil,
         .boolean => |av| switch (b) {
@@ -124,7 +124,8 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .number => |av| switch (b) {
-            .number => |bv| av == bv,
+            // 0.0 and -0.0 are numerically equal but not eqv? (R7RS 6.1).
+            .number => |bv| av == bv and std.math.signbit(av) == std.math.signbit(bv),
             else => false,
         },
         .exact_integer => |av| switch (b) {
@@ -228,6 +229,7 @@ fn is_eqv_internal(a: Value, b: Value) bool {
             else => false,
         },
         .unspecified => b == .unspecified,
+        .eof => b == .eof,
     };
 }
 

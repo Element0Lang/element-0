@@ -121,6 +121,11 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     if (filename_val != .string) return ElzError.InvalidArgument;
 
     const filename = filename_val.string;
+    if (!interp.beginLoading(filename)) {
+        interp.last_error_message = std.fmt.allocPrint(interp.allocator, "load: '{s}' loads itself", .{filename}) catch null;
+        return ElzError.InvalidArgument;
+    }
+    defer interp.endLoading(filename);
     const source = std.Io.Dir.cwd().readFileAlloc(interp.io, filename, env.allocator, .limited(1 * 1024 * 1024)) catch |err| {
         interp.last_error_message = std.fmt.allocPrint(interp.allocator, "Failed to load file '{s}': {s}", .{ filename, @errorName(err) }) catch null;
         return ElzError.ForeignFunctionError;
@@ -149,7 +154,11 @@ pub fn load(interp: *interpreter.Interpreter, env: *core.Environment, args: core
 ///
 /// Returns:
 /// The parsed S-expression as a Value, or an error if parsing fails.
-pub fn read_string(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn read_string(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
+    // R7RS form: (read-string k [port]) reads up to k characters.
+    if (args.items.len >= 1 and args.items[0] == .exact_integer) {
+        return @import("ports.zig").read_string_k(interp, env, args, fuel);
+    }
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const str_val = args.items[0];
     if (str_val != .string) return ElzError.InvalidArgument;
@@ -158,7 +167,7 @@ pub fn read_string(_: *interpreter.Interpreter, env: *core.Environment, args: co
     return parser.read(source, env.allocator) catch |err| switch (err) {
         // Match the port-based `read` and produce the eof object for empty input rather
         // than surfacing a parser-internal error.
-        ElzError.EmptyInput => return Value{ .symbol = "eof" },
+        ElzError.EmptyInput => return Value.eof,
         else => return err,
     };
 }

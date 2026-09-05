@@ -375,4 +375,177 @@
 (test-case "a call with more than 255 arguments is an error"
   (eq? 'caught (try (eval (cons '+ (make-list 300 1))) (catch e 'caught))))
 
+;; --- Arithmetic edge cases no longer abort the process ---
+(test-case "quotient at the i64 minimum reports overflow"
+  (eq? 'caught (try (quotient -9223372036854775808 -1) (catch e 'caught))))
+(test-case "remainder at the i64 minimum is zero"
+  (= 0 (remainder -9223372036854775808 -1)))
+(test-case "even? rejects a float just past the i64 range"
+  (eq? 'caught (try (even? 9223372036854775808.0) (catch e 'caught))))
+(test-case "division by inexact zero yields an infinity"
+  (and (= (/ 1.0 0.0) +inf.0) (nan? (/ 0.0 0.0)) (= (/ -1 0.0) -inf.0)))
+(test-case "division by exact zero is still an error"
+  (eq? 'caught (try (/ 1.0 0) (catch e 'caught))))
+(test-case "mixed exact and inexact comparison is exact"
+  (and (not (= 9007199254740993 9007199254740992.0))
+       (< 9007199254740992.0 9007199254740993)
+       (= 1/2 0.5)))
+(test-case "integer division accepts inexact integers"
+  (and (= 3.0 (quotient 7.0 2)) (equal? (call-with-values (lambda () (floor/ 7.0 -2)) list) '(-4.0 -1.0))))
+(test-case "two-argument log"
+  (and (= 3.0 (log 8 2)) (= 2.0 (log 100 10))))
+(test-case "complex exp and expt do not drop the imaginary part"
+  (and (> (imag-part (expt 1+i 2)) 1.9) (> (imag-part (exp +i)) 0.8)))
+(test-case "max with a NaN argument is NaN regardless of order"
+  (and (nan? (max 1 +nan.0)) (nan? (max +nan.0 1))))
+(test-case "eqv? distinguishes 0.0 from -0.0"
+  (and (not (eqv? 0.0 -0.0)) (= 0.0 -0.0)))
+
+;; --- Reader and string->number ---
+(test-case "inf and nan read as symbols"
+  (and (symbol? 'inf) (symbol? 'nan) (symbol? 'infinity)))
+(test-case "string->number rejects digit separators and hex floats"
+  (and (not (string->number "1_000")) (not (string->number "0x10")) (not (string->number "inf"))))
+(test-case "string->number understands radix and exactness prefixes"
+  (and (= 255 (string->number "#xff")) (= 3/2 (string->number "#e1.5")) (= 5.0 (string->number "5." 10))))
+(test-case "exactness prefix on a decimal literal"
+  (and (= 3/2 #e1.5) (= 1000 #e1e3) (= 16.0 #i#x10)))
+(test-case "string line continuation"
+  (string=? "linecontinued" (read (open-input-string "\"line\\\n   continued\""))))
+
+;; --- Quasiquote ---
+(test-case "unquote in a dotted tail"
+  (equal? `(a . ,(+ 1 2)) '(a . 3)))
+(test-case "unquote in both halves of a pair"
+  (equal? `((,1 . ,2)) '((1 . 2))))
+(test-case "unquote-splicing inside a vector"
+  (equal? `#(1 ,@(list 2 3) 4) #(1 2 3 4)))
+(test-case "splicing a long list does not overflow the native stack"
+  (= 100000 (length `(,@(make-list 100000 0)))))
+
+;; --- Bodies and definitions ---
+(test-case "begin with definitions is spliced into a body"
+  (= 3 ((lambda () (begin (define a 1) (define b 2)) (+ a b)))))
+(test-case "define-values inside a body"
+  (equal? '(1 2) ((lambda () (define-values (a b) (values 1 2)) (list a b)))))
+(test-case "define-record-type inside a body"
+  (= 5 ((lambda () (define-record-type pt (mk x) pt? (x px)) (px (mk 5))))))
+(test-case "a define in expression context is a syntax error, not stack corruption"
+  (eq? 'caught (try (eval '(define (f) (when #t (define y 5)) (list 1 2 y))) (catch e 'caught))))
+
+;; --- Tail calls through derived forms ---
+(test-case "let* in tail position does not leak frames"
+  (letrec ((c (lambda (n) (let* ((m (- n 1))) (if (< m 0) 'ok (c m))))))
+    (eq? 'ok (c 200000))))
+(test-case "do in tail position does not leak frames"
+  (letrec ((c (lambda (n) (do ((i 0 (+ i 1))) ((= i 1) (if (= n 0) 'ok (c (- n 1))))))))
+    (eq? 'ok (c 200000))))
+(test-case "named let in tail position does not leak frames"
+  (letrec ((c (lambda (n) (let loop ((i 0)) (if (= i 1) (if (= n 0) 'ok (c (- n 1))) (loop (+ i 1)))))))
+    (eq? 'ok (c 200000))))
+
+;; --- guard and try keep same-frame mutations ---
+(test-case "set! inside a guard body is visible afterwards"
+  (= 1 (let ((n 0)) (guard (e (#t #f)) (set! n 1)) n)))
+(test-case "set! inside a guard handler is visible afterwards"
+  (equal? '(err boom)
+          ((lambda () (define result 'none) (guard (e (#t (set! result (list 'err e)))) (raise 'boom)) result))))
+(test-case "dynamic-wind after thunk runs when a guard catches"
+  (equal? '(in out caught)
+          (let ((log '()))
+            (guard (e (#t (set! log (cons 'caught log))))
+              (dynamic-wind (lambda () (set! log (cons 'in log)))
+                            (lambda () (raise 'x))
+                            (lambda () (set! log (cons 'out log)))))
+            (reverse log))))
+
+;; --- Delimited continuations share locals with closures ---
+(test-case "a closure sees a local mutated after the segment is resumed"
+  (= 5 (reset (let ((x 1)) (define (g) x) (shift k (k 0)) (set! x 5) (g)))))
+(test-case "a closure mutation after resumption is visible to the frame"
+  (= 7 (reset (let ((x 1)) (define (g) (set! x 7)) (shift k (k 0)) (g) x))))
+(test-case "a captured local persists across invocations of the continuation"
+  (equal? '(6 7)
+          (let ((r (reset (let ((x 5)) (define (g) x) (shift k k) (set! x (+ x 1)) (g)))))
+            (list (r 0) (r 0)))))
+
+;; --- Strings, ports, and the EOF object ---
+(test-case "global definitions alias the same string"
+  (equal? "zzz" (begin (define %s (make-string 3 #\a)) (define %t %s) (string-fill! %s #\z) %t)))
+(test-case "read-char returns whole characters"
+  (equal? '(#\h #\é #\é #\l) (let ((p (open-input-string "héllo"))) (list (read-char p) (peek-char p) (read-char p) (read-char p)))))
+(test-case "read-string reads k characters"
+  (string=? "hél" (read-string 3 (open-input-string "héllo"))))
+(test-case "the symbol eof is not the eof object"
+  (and (not (eof-object? 'eof)) (eq? 'eof (read (open-input-string "eof")))))
+(test-case "write escapes symbols that would not read back"
+  (string=? "|a b|" (let ((p (open-output-string))) (write '|a b| p) (get-output-string p))))
+(test-case "write-string accepts start and end"
+  (string=? "y" (let ((p (open-output-string))) (write-string "xyz" p 1 2) (get-output-string p))))
+(test-case "for-each takes several lists"
+  (equal? '(22 11) (let ((acc '())) (for-each (lambda (a b) (set! acc (cons (+ a b) acc))) '(1 2 3) '(10 20)) acc)))
+(test-case "memq finds a procedure by identity"
+  (pair? (memq car (list car))))
+
+;; --- Errors raised by primitives are error objects ---
+(test-case "a primitive type error is an error object"
+  (guard (e (#t (error-object? e))) (car 1)))
+(test-case "a failed file open is a file error"
+  (guard (e (#t (file-error? e))) (open-input-file "/nonexistent/definitely-missing")))
+(test-case "a parse failure is a read error"
+  (guard (e (#t (read-error? e))) (read (open-input-string "(1 2"))))
+(test-case "a raised non-error object is passed through unchanged"
+  (eq? 'x (guard (e (#t e)) (raise 'x))))
+
+;; --- Macro hygiene ---
+(test-case "a template may name a global defined later"
+  (begin
+    (define-syntax %call-helper (syntax-rules () ((_ x) (%helper x))))
+    (define (%use) (%call-helper 1))
+    (define (%helper x) (* x 10))
+    (= 10 (%use))))
+(test-case "a template may use when, unless, and =>"
+  (begin
+    (define-syntax %my-when (syntax-rules () ((_ c e ...) (when c e ...))))
+    (define-syntax %my-arrow (syntax-rules () ((_ v) (cond (v => (lambda (x) (list 'got x))) (else 'none)))))
+    (and (= 2 (%my-when #t 1 2)) (equal? '(got 5) (%my-arrow 5)))))
+(test-case "a definition introduced by a template stays hidden"
+  (begin
+    (define-syntax %my-def (syntax-rules () ((_) (define %hidden 42))))
+    (%my-def)
+    (eq? 'hidden (guard (e (#t 'hidden)) %hidden))))
+(test-case "a self-expanding macro is reported, not a crash"
+  (eq? 'caught (try (eval '(begin (define-syntax %loop (syntax-rules () ((_ n) (%loop n)))) (%loop 5))) (catch e 'caught))))
+
+;; --- Large and hostile inputs ---
+(test-case "apply passes more than 255 arguments to a primitive"
+  (= 49995000 (apply + (let loop ((i 9999) (acc '())) (if (< i 0) acc (loop (- i 1) (cons i acc)))))))
+(test-case "apply passes more than 255 arguments to a variadic closure"
+  (= 1000 (apply (lambda args (length args)) (make-list 1000 0))))
+(test-case "a call with exactly 255 arguments works"
+  (= 255 (length (eval (cons 'list (make-list 255 1))))))
+(test-case "length on a circular list is an error"
+  (let ((l (list 1 2))) (set-cdr! (cdr l) l) (eq? 'caught (try (length l) (catch e 'caught)))))
+(test-case "deep nesting through apply reports StackOverflow"
+  (letrec ((c (lambda (n) (apply (lambda (m) (if (= m 0) 'ok (c (- m 1)))) (list n)))))
+    (eq? 'caught (try (c 5000) (catch e 'caught)))))
+(test-case "delay-force chains force iteratively"
+  (letrec ((s (lambda (n) (if (= n 0) (delay 'done) (delay-force (s (- n 1)))))))
+    (eq? 'done (force (s 100000)))))
+(test-case "reading deeply nested data is an error, not a crash"
+  (eq? 'caught (try (read (open-input-string (string-append (make-string 5000 #\() (make-string 5000 #\))))) (catch e 'caught))))
+(test-case "writing deeply nested data terminates"
+  (string? (let loop ((i 0) (l 1))
+             (if (< i 5000)
+                 (loop (+ i 1) (list l))
+                 (let ((p (open-output-string))) (write l p) (get-output-string p))))))
+(test-case "json-deserialize decodes unicode escapes"
+  (string=? "é😀\n/" (json-deserialize "\"\\u00e9\\ud83d\\ude00\\n\\/\"")))
+(test-case "json-serialize reports a cyclic structure"
+  (let ((l (list 1))) (set-cdr! l l) (eq? 'caught (try (json-serialize l) (catch e 'caught)))))
+(test-case "json-deserialize rejects hostile nesting"
+  (eq? 'caught (try (json-deserialize (make-string 2000 #\[)) (catch e 'caught))))
+(test-case "time->components rejects out-of-range input"
+  (eq? 'caught (try (time->components 1e30) (catch e 'caught))))
+
 (report-summary)

@@ -77,31 +77,51 @@ pub fn read_line(interp: *interpreter.Interpreter, env: *core.Environment, args:
     if (line) |l| {
         return Value{ .string = l };
     }
-    // Return EOF symbol
-    return Value{ .symbol = "eof" };
+    return EOF_VALUE;
 }
 
 /// `read_char` reads a single character from an input port.
 /// Syntax: (read-char) or (read-char port)
 pub fn read_char(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const port = try inputPortArg(interp, args);
-    const char = port.readChar() catch return ElzError.IOError;
+    const char = port.readCodepoint() catch return ElzError.IOError;
     if (char) |c| {
         return Value{ .character = c };
     }
-    // Return EOF symbol
-    return Value{ .symbol = "eof" };
+    return EOF_VALUE;
 }
 
 /// `peek_char` returns the next character on an input port without consuming it.
 /// Syntax: (peek-char) or (peek-char port)
 pub fn peek_char(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     const port = try inputPortArg(interp, args);
-    const char = port.peekChar() catch return ElzError.IOError;
+    const char = port.peekCodepoint() catch return ElzError.IOError;
     if (char) |c| {
         return Value{ .character = c };
     }
-    return Value{ .symbol = "eof" };
+    return EOF_VALUE;
+}
+
+/// `read_string` reads up to k characters from a textual input port.
+/// Syntax: (read-string k) or (read-string k port)
+pub fn read_string_k(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+    if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
+    if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0) return ElzError.InvalidArgument;
+    const k: usize = @intCast(args.items[0].exact_integer);
+    var port_args = args;
+    port_args.items = args.items[1..];
+    const port = try inputPortArg(interp, port_args);
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(env.allocator);
+    var count: usize = 0;
+    while (count < k) : (count += 1) {
+        const cp = (port.readCodepoint() catch return ElzError.IOError) orelse break;
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(@intCast(cp), &buf) catch return ElzError.IOError;
+        out.appendSlice(env.allocator, buf[0..len]) catch return ElzError.OutOfMemory;
+    }
+    if (count == 0 and k > 0) return EOF_VALUE;
+    return Value{ .string = out.toOwnedSlice(env.allocator) catch return ElzError.OutOfMemory };
 }
 
 /// `char_ready_p` reports whether a character is available on an input port.
@@ -230,8 +250,50 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
             }
         }
 
+        // A comment inside a datum runs to the end of the line.
+        if (c == ';') {
+            while (true) {
+                const cc = port.readChar() catch null;
+                if (cc == null or cc.? == '\n') break;
+            }
+            if (depth == 0 and seen_content) break;
+            continue;
+        }
+
         try buf.append(allocator, c);
         seen_content = true;
+
+        if (c == '#') {
+            const nx = port.peekChar() catch null;
+            if (nx != null and nx.? == '\\') {
+                // Character literal: the byte after the backslash is part of
+                // the literal even when it is a delimiter such as `)`.
+                _ = port.readChar() catch null;
+                try buf.append(allocator, '\\');
+                if (port.readChar() catch null) |lit| try buf.append(allocator, lit);
+                if (depth == 0) break;
+                continue;
+            }
+            if (nx != null and nx.? == '|') {
+                // Block comment: copy it through and let the parser drop it.
+                _ = port.readChar() catch null;
+                try buf.append(allocator, '|');
+                var nesting: usize = 1;
+                var prev: u8 = 0;
+                while (nesting > 0) {
+                    const cc = (port.readChar() catch null) orelse break;
+                    try buf.append(allocator, cc);
+                    if (prev == '|' and cc == '#') {
+                        nesting -= 1;
+                        prev = 0;
+                    } else if (prev == '#' and cc == '|') {
+                        nesting += 1;
+                        prev = 0;
+                    } else prev = cc;
+                }
+                continue;
+            }
+        }
 
         if (c == '"') {
             in_string = true;
@@ -276,17 +338,16 @@ pub fn read(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     // the bytes the datum consumed.
     switch (port.kind) {
         .string_input => |*sk| {
-            var start = sk.pos;
-            if (port.peek_buffer != null) {
-                // A pending peek holds a byte already consumed from the stream.
-                port.peek_buffer = null;
-                if (start > 0) start -= 1;
-            }
-            if (start >= sk.source.len) return Value{ .symbol = "eof" };
+            // Bytes held by a pending peek were already consumed from the
+            // stream; rewind over them.
+            const pending = port.pendingBytes();
+            port.clearPushback();
+            const start = sk.pos - @min(pending, sk.pos);
+            if (start >= sk.source.len) return EOF_VALUE;
             const one = parser.readOne(sk.source[start..], env.allocator) catch |err| return err;
             if (one == null) {
                 sk.pos = sk.source.len;
-                return Value{ .symbol = "eof" };
+                return EOF_VALUE;
             }
             sk.pos = start + one.?.consumed;
             return one.?.value;
@@ -295,11 +356,11 @@ pub fn read(interp: *interpreter.Interpreter, env: *core.Environment, args: core
     }
 
     const slurped = slurp_one_datum(port, env.allocator) catch return ElzError.IOError;
-    if (slurped == null) return Value{ .symbol = "eof" };
+    if (slurped == null) return EOF_VALUE;
     defer env.allocator.free(slurped.?);
 
     return parser.read(slurped.?, env.allocator) catch |err| switch (err) {
-        ElzError.EmptyInput => return Value{ .symbol = "eof" },
+        ElzError.EmptyInput => return EOF_VALUE,
         else => return err,
     };
 }
@@ -375,11 +436,7 @@ pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.En
 /// Syntax: (eof-object? obj)
 pub fn eof_object_p(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
-    const v = args.items[0];
-    if (v == .symbol) {
-        return Value{ .boolean = std.mem.eql(u8, v.symbol, "eof") };
-    }
-    return Value{ .boolean = false };
+    return Value{ .boolean = args.items[0] == .eof };
 }
 
 test "port primitives" {
@@ -398,7 +455,7 @@ test "port primitives" {
 
     // Test eof_object_p with eof symbol
     args.clearRetainingCapacity();
-    try args.append(Value{ .symbol = "eof" });
+    try args.append(Value.eof);
     const eof_result = try eof_object_p(&interp, interp.root_env, args, &fuel);
     try testing.expect(eof_result == .boolean);
     try testing.expect(eof_result.boolean == true);
@@ -446,7 +503,7 @@ test "string port primitives" {
     try testing.expectEqual(@as(u32, 'i'), c2.character);
 
     const eof_val = try read_char(&interp, interp.root_env, args, &fuel);
-    try testing.expect(eof_val == .symbol);
+    try testing.expect(eof_val == .eof);
 
     // open-output-string / get-output-string
     args.clearRetainingCapacity();
@@ -468,7 +525,7 @@ test "string port primitives" {
 // Binary ports and port plumbing (R7RS)
 // ---------------------------------------------------------------------------
 
-const EOF_VALUE = Value{ .symbol = "eof" };
+pub const EOF_VALUE: Value = .eof;
 
 /// Resolves the port argument for an output primitive at args[index]: explicit
 /// when given, the current output port when omitted.
