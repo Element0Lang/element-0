@@ -44,6 +44,9 @@
             ZIG = "${zig}/bin/zig";
 
             shellHook = ''
+              # An interactive shell sources the user's rc files, which may put
+              # another Zig ahead on PATH; keep the pinned one first.
+              export PATH="${zig}/bin:$PATH"
               echo "Element 0 development environment"
               echo "Zig: $(zig version 2>/dev/null || echo 'not found')"
               echo "uv: $(uv --version 2>/dev/null || echo 'not found')"
