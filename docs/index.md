@@ -5,9 +5,9 @@ Elz is its implementation, a bytecode compiler and stack-based virtual machine w
 
 ## Key Features
 
-* Close to complete R7RS-small: proper tail calls, hygienic `syntax-rules`, records, bytevectors, string and binary ports, parameters, promises, and the exception system. The vendored Chibi Scheme conformance suite passes 976 of 977 checks.
+* Close to complete R7RS-small: proper tail calls, hygienic `syntax-rules`, records, bytevectors, string and binary ports, parameters, promises, and the exception system. The vendored Chibi Scheme conformance suite passes all 977 checks.
 * The full numeric tower: fixnums that promote to arbitrary-precision integers, exact rationals, inexact reals, and complex numbers, with exact comparison across all of them.
-* Delimited continuations (`reset` and `shift`) that are multi-shot, plus escape continuations through `call/cc`.
+* Full, multi-shot `call/cc` with `dynamic-wind`, plus delimited continuations (`reset` and `shift`).
 * A small embedding API: one `Interpreter` struct, `evalString`, and `define_foreign_func`, which maps ordinary Zig function signatures to Scheme procedures.
 * Sandboxing built in: capability flags for filesystem, process, and I/O access, a wall-clock limit, an instruction budget, and hard nesting limits, so untrusted scripts cannot crash or hang the host.
 * Batteries a scripting user expects: JSON, regular expressions, hash maps, `format`, filesystem and time procedures, and Unicode strings with full case mappings.

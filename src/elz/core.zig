@@ -216,8 +216,9 @@ pub const CallFrame = struct {
     stack_base: usize,
 };
 
-/// An escape continuation created by `call/ec` (and by `call/cc`, which is
-/// escape-only). Invoking it unwinds to the `call/ec` frame that created it:
+/// An escape continuation created by `call/ec` (and by `call/cc` when it is
+/// reached through a native path such as `apply`, where nothing more can be
+/// captured). Invoking it unwinds to the `call/ec` frame that created it:
 /// the `id` lets that frame recognise its own jump, so an inner `call/ec` no
 /// longer swallows a jump aimed at an outer one. `active` becomes false once
 /// the creating frame has returned, which makes a stale invocation reportable.
@@ -226,22 +227,45 @@ pub const Escape = struct {
     active: bool = true,
 };
 
-/// A delimited continuation captured by `shift`: the value-stack and frame
-/// segment between the enclosing `reset` prompt and the shift call site.
-/// Frame stack_base values are stored relative to the prompt base, so the
-/// segment can be reinstated at any stack position (multi-shot).
+/// An active `reset` prompt: the stack height where the reset expression's
+/// value belongs and the frame count at the prompt.
+pub const Prompt = struct {
+    stack_base: usize,
+    boundary_frames: usize,
+};
+
+/// A captured continuation. `shift` captures the value-stack and frame
+/// segment between the enclosing `reset` prompt and the call site, with frame
+/// bases relative to the prompt so the segment can be reinstated anywhere.
+/// `call/cc` captures the whole state of the current VM run (`full` is set),
+/// and reinstating it replaces that run's stack, frames, and prompts.
+/// Both kinds are multi-shot.
 pub const Continuation = struct {
     stack: []Value,
     frames: []CallFrame,
-    /// Upvalues that were open into the captured segment when it was taken.
-    /// Reinstating the segment re-opens them onto the new copy, so closures
-    /// created inside the segment and the resumed frames share one location.
+    /// Upvalues that were open into the captured region when it was taken.
+    /// Reinstating re-opens them onto the new copy, so closures created inside
+    /// the region and the resumed frames share one location.
     upvals: []CapturedUpvalue = &.{},
+    /// Present for a full continuation.
+    full: ?Full = null,
 
     pub const CapturedUpvalue = struct {
         upvalue: *Upvalue,
-        /// Stack slot relative to the prompt base.
+        /// Stack slot relative to the captured region's base.
         offset: usize,
+    };
+
+    pub const Full = struct {
+        /// The prompts in effect at capture.
+        prompts: []Prompt,
+        /// The dynamic-wind frames in effect at capture. Reinstating runs the
+        /// `after` thunks of frames being left and the `before` thunks of
+        /// frames being re-entered.
+        winders: ?*Winder,
+        /// The VM run the continuation belongs to. It can only be reinstated
+        /// while that run is active, since native frames cannot be copied.
+        run_id: u64,
     };
 };
 

@@ -62,6 +62,11 @@ pub const CpsState = struct {
     escape_counter: u64 = 0,
     /// Innermost active dynamic-wind frame, null when none is in effect.
     winders: ?*core.Winder = null,
+    /// A full continuation that was invoked from a VM run other than its own,
+    /// travelling up the native stack as `EscapeContinuationInvoked` until the
+    /// run it belongs to reinstates it.
+    pending_cont: ?*core.Continuation = null,
+    pending_value: core.Value = .unspecified,
 };
 
 /// What a hygiene-renamed identifier stands for.
@@ -178,6 +183,16 @@ pub const RuntimeState = struct {
     /// function address, so a failure inside a primitive can be attributed
     /// even when the primitive supplied no message of its own.
     primitive_names: std.AutoHashMapUnmanaged(usize, []const u8) = .empty,
+    /// Hands out identities to VM runs (see `vm.VM.runGuarded`).
+    run_counter: u64 = 0,
+    /// The runs currently on the native stack, outermost first. A full
+    /// continuation may only be reinstated into one of these.
+    active_runs: std.ArrayListUnmanaged(u64) = .empty,
+    /// The `call/cc` primitive. The VM recognises a call to it and captures
+    /// the continuation inline; when it is reached through a native path such
+    /// as `apply`, the primitive itself runs and yields an escape-only
+    /// continuation, since the native frame cannot be captured.
+    callcc_fn: ?core.PrimitiveFn = null,
 };
 
 /// `Interpreter` is the top-level handle for the Elz scripting engine.
@@ -224,6 +239,14 @@ pub const Interpreter = struct {
         try self.root_env.set(name, core.Value{ .procedure = f });
         const entry = try self.runtime.primitive_names.getOrPut(self.allocator, @intFromPtr(f));
         if (!entry.found_existing) entry.value_ptr.* = name;
+    }
+
+    /// Whether the VM run with this id is still on the native stack.
+    pub fn isActiveRun(self: *const Interpreter, run_id: u64) bool {
+        for (self.runtime.active_runs.items) |id| {
+            if (id == run_id) return true;
+        }
+        return false;
     }
 
     /// The name `f` was first registered under, if it is a known primitive.

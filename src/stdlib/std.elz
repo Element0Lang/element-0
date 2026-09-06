@@ -926,6 +926,21 @@
                            (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
                                  more)))))))))
 
+;;; (dynamic-wind before thunk after)
+;;;
+;;; Calls before, then thunk, then after, and returns the value of thunk. The
+;;; before and after thunks also run when control leaves or re-enters the
+;;; extent of thunk through a continuation, and after runs when thunk raises.
+;;; The frame is kept by the VM so a continuation captured inside thunk sees
+;;; it, which is why this is not a Zig primitive.
+(define (dynamic-wind before thunk after)
+  (before)
+  (%wind-push! before after)
+  (let ((result (thunk)))
+    (%wind-pop!)
+    (after)
+    result))
+
 ;;; (call-with-port port proc)
 ;;;
 ;;; Calls proc with port, closes the port when proc returns, and returns

@@ -115,7 +115,7 @@ A disabled group's procedures are not bound at all, so a script that calls one g
 
 The time limit is checked every few hundred instructions and inside the list primitives, and starts with the outermost `evalString` or `evalForm` call, so nested evaluation (`eval`, `load`, macro expansion) cannot extend it. Combine it with the fuel counter for a deterministic bound.
 
-Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack. Expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
+Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack. Expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call-with-values`, `guard`, and the like) nest at most 600 levels deep.
 
 Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use one interpreter per thread.
 
