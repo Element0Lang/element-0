@@ -31,7 +31,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs shell install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -157,6 +157,10 @@ serve-docs: ## Serve the documentation site locally with live reload
 	@$(ZIG) build docs
 	@uv sync --extra docs
 	@uv run mkdocs serve
+
+shell: ## Enter the Nix development shell (defined in flake.nix)
+	@command -v nix >/dev/null 2>&1 || { echo "nix is not installed; see https://nixos.org/download"; exit 1; }
+	@nix develop
 
 install-deps: ## Install system dependencies (for Debian-based systems)
 	@echo "Installing system dependencies..."

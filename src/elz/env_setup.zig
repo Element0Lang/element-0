@@ -207,7 +207,11 @@ pub fn populate_control(interp: *interpreter.Interpreter, flags: interpreter.San
     try interp.definePrimitive("call/ec", control.call_with_escape_continuation);
     try interp.definePrimitive("call-with-current-continuation", control.call_with_current_continuation);
     try interp.definePrimitive("call/cc", control.call_with_current_continuation);
-    try interp.definePrimitive("dynamic-wind", control.dynamic_wind);
+    interp.runtime.callcc_fn = control.call_with_current_continuation;
+    // dynamic-wind itself is defined in std.elz over these two, so its body
+    // runs in the caller's VM run and continuations can be captured inside it.
+    try interp.definePrimitive("%wind-push!", control.wind_push);
+    try interp.definePrimitive("%wind-pop!", control.wind_pop);
     try interp.definePrimitive("force", control.force);
     try interp.definePrimitive("make-promise", control.make_promise);
     try interp.definePrimitive("%%make-delayed%%", control.make_delayed);

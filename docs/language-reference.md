@@ -201,17 +201,38 @@ recommended form.
 
 ## Continuations
 
-Element 0 deliberately does not provide full first-class continuations.
-`call-with-current-continuation` and `call/cc` are aliases for
-`call-with-escape-continuation` (`call/ec`); the continuation they capture
-is one-shot and upward-only, valid only during the dynamic extent of the
-call. This supports early exit and exception-like control flow but not
-generators or re-entry. Full `call/cc` cannot capture the Zig frames that
-sit between Elz frames when embedded code calls back into the interpreter,
-so this restriction is permanent; it matches the choices of other practical
-embedded languages.
+`call-with-current-continuation` (`call/cc`) captures a full, multi-shot
+continuation. Invoking it later, even after the capturing expression has
+returned, resumes the computation at that point with the value supplied, and
+`dynamic-wind` frames are left and re-entered on the way. This is what
+generators, backtracking, and the R7RS `dynamic-wind` example need.
 
-Composable control flow is provided by delimited continuations instead.
+```scheme
+(define k #f)
+(define n 0)
+(call/cc (lambda (c) (set! k c)))
+(set! n (+ n 1))
+(if (< n 3) (k 'again) n)                  ; => 3
+```
+
+One rule follows from the implementation. A continuation is a copy of the
+VM's stack, so it is valid only within the VM run that captured it. Every
+Zig primitive that calls back into Element 0, such as `map`, `apply`,
+`call-with-values`, and `try`, starts a nested run. A continuation may escape
+out of such a callback to the run that created it, but a continuation
+captured inside the callback cannot be resumed once the callback has
+returned, because the Zig frames between are gone. Doing so raises an error.
+Procedures written in Element 0 itself (`for-each`, `dynamic-wind`,
+`with-exception-handler` bodies, and the standard library in general) do not
+start a run, so continuations pass through them freely. `call/cc` reached
+through a native path, for example `(apply call/cc (list f))`, captures an
+escape-only continuation for the same reason.
+
+`call-with-escape-continuation` (`call/ec`) remains available as a cheaper
+one-shot, upward-only continuation for early exit.
+
+Delimited continuations provide composable control flow with an explicit
+boundary.
 
 ```scheme
 (reset (+ 1 (shift k (+ (k 1) (k 2)))))   ; => 5
@@ -229,7 +250,7 @@ the other side of a Zig primitive (for example, inside a `map` callback)
 raises an error rather than capturing across the boundary. `for-each` is
 written in Element 0, so a `shift` inside it works.
 
-A local variable that a closure captured inside the captured segment stays
+The following applies to both kinds of continuation. A local variable that a closure captured inside the captured segment stays
 shared. After `k` resumes the segment, the closure and the resumed code see
 the same variable, and a value assigned in one invocation of `k` is visible
 in the next.
@@ -303,22 +324,25 @@ Fixed limits keep hostile input from exhausting the native stack and are
 reported as errors. Expressions nest at most 1000 levels in the compiler and
 2048 levels in the reader, a JSON document nests at most 512 levels, the VM
 holds at most 65536 call frames, and callbacks from primitives (`map`,
-`apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
+`apply`, `call-with-values`, `guard`, and the like) nest at most 600 levels deep.
 
 ## Deviations from R7RS-small
 
-The vendored Chibi Scheme conformance suite passes 976 of 977 checks; run it
-with `make test-conformance`. The known gaps follow.
+The vendored Chibi Scheme conformance suite passes all 977 checks; run it
+with `make test-conformance`. The remaining deviations are outside what the
+suite exercises.
 
 * Exact integers have arbitrary size, but rationals use 64-bit components.
   A rational whose numerator or denominator would not fit, or a rational
   combined with an integer that does not fit, raises `Overflow`.
-* `call/cc` captures escape-only continuations, as described above. This is
-  the one failing conformance check, since a `dynamic-wind` cannot be
-  re-entered through a continuation.
-* `shift` does not capture across a native primitive such as `map`.
-* `dynamic-wind` before and after thunks do not re-fire when a captured
-  segment is reinstated.
+* A continuation does not survive the return of the native callback it was
+  captured in, and `shift` does not capture across a native primitive such as
+  `map`, as described above.
+* `dynamic-wind` before and after thunks do not re-fire when a delimited
+  (`shift`) segment is reinstated. Full continuations do wind and unwind.
+* A local variable that no closure captures reverts to its captured value
+  when a continuation is re-entered, since the stack is copied. Variables
+  that a closure captures, and globals, keep their latest values.
 * `define-library` evaluates its body in the global environment; private
   definitions leak into the global namespace even though `import` binds
   only the declared exports.

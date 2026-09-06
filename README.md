@@ -190,8 +190,6 @@ Result of (* 10 5) is: 50
 Result of (zig-mul 7 6) is: 42.0
 ```
 
-The result is `42.0` rather than `42` because `zig_multiply` returns an `f64`, which becomes an inexact number.
-
 ##### Restricting What a Script Can Do
 
 `Interpreter.init` takes a `SandboxFlags` value that selects which built-in capabilities the script can reach.

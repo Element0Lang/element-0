@@ -103,4 +103,90 @@
         (lambda () (set! log (cons 'after log))))))
     (equal? (reverse log) '(before body after))))
 
+;; ============================================================================
+;; full continuation tests (re-entry)
+;; ============================================================================
+
+(test-case "the R7RS dynamic-wind example re-enters and re-fires the thunks"
+  (equal? '(connect talk1 disconnect connect talk2 disconnect)
+          (let ((path '()) (c #f))
+            (let ((add (lambda (s) (set! path (cons s path)))))
+              (dynamic-wind (lambda () (add 'connect))
+                            (lambda () (add (call-with-current-continuation
+                                              (lambda (c0) (set! c c0) 'talk1))))
+                            (lambda () (add 'disconnect)))
+              (if (< (length path) 4) (c 'talk2) (reverse path))))))
+
+(test-case "a continuation can be re-entered several times"
+  (begin
+    (define %cc-count 0)
+    (define %cc-k #f)
+    (= 3 (begin (call/cc (lambda (k) (set! %cc-k k)))
+                (set! %cc-count (+ %cc-count 1))
+                (if (< %cc-count 3) (%cc-k 'again) %cc-count)))))
+
+(test-case "the value passed on re-entry becomes the value of the call/cc"
+  (begin
+    (define %cc-seen '())
+    (define %cc-k2 #f)
+    (equal? '(1 2 3)
+            (begin
+              (set! %cc-seen (cons (call/cc (lambda (k) (set! %cc-k2 k) 1)) %cc-seen))
+              (if (< (length %cc-seen) 3) (%cc-k2 (+ (car %cc-seen) 1)) (reverse %cc-seen))))))
+
+(test-case "a generator built from call/cc yields each element then done"
+  (begin
+    (define (%make-gen lst)
+      (define return #f)
+      (define resume #f)
+      (lambda ()
+        (call/cc (lambda (r)
+          (set! return r)
+          (if resume
+              (resume #f)
+              (begin
+                (for-each (lambda (x) (call/cc (lambda (next) (set! resume next) (return x)))) lst)
+                (set! resume (lambda (v) (return 'done)))
+                (return 'done)))))))
+    (let ((g (%make-gen '(1 2 3))))
+      (equal? '(1 2 3 done) (list (g) (g) (g) (g))))))
+
+(test-case "an escape out of a native map still works"
+  (eq? 'found (call/cc (lambda (k) (map (lambda (x) (if (= x 3) (k 'found) x)) '(1 2 3 4))))))
+
+(test-case "a continuation captured in a finished native callback cannot be resumed"
+  (begin
+    (define %cc-stale #f)
+    (map (lambda (x) (call/cc (lambda (k) (set! %cc-stale k) x))) '(1))
+    (string? (try (begin (%cc-stale 5) #f) (catch e (error-object-message e))))))
+
+(test-case "call/cc reached through apply still escapes"
+  (= 41 (apply call/cc (list (lambda (k) (+ 1 (k 41)))))))
+
+(test-case "dynamic-wind after runs when the thunk raises"
+  (begin
+    (define %dw-log '())
+    (try (dynamic-wind (lambda () (set! %dw-log (cons 'in %dw-log)))
+                       (lambda () (car 1))
+                       (lambda () (set! %dw-log (cons 'out %dw-log))))
+         (catch e #f))
+    (equal? '(in out) (reverse %dw-log))))
+
+(test-case "dynamic-wind passes multiple values through"
+  (equal? '(1 2) (call-with-values
+                   (lambda () (dynamic-wind (lambda () #f) (lambda () (values 1 2)) (lambda () #f)))
+                   list)))
+
+(test-case "leaving nested dynamic-winds by continuation runs the afters innermost first"
+  (begin
+    (define %dw-order '())
+    (call/cc (lambda (k)
+      (dynamic-wind (lambda () #f)
+                    (lambda ()
+                      (dynamic-wind (lambda () #f)
+                                    (lambda () (k 'out))
+                                    (lambda () (set! %dw-order (cons 'inner %dw-order)))))
+                    (lambda () (set! %dw-order (cons 'outer %dw-order))))))
+    (equal? '(inner outer) (reverse %dw-order))))
+
 (report-summary)

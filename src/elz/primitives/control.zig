@@ -453,38 +453,25 @@ pub fn call_with_current_continuation(
     return call_with_escape_continuation(interp, env, args, fuel);
 }
 
-/// `dynamic-wind`: (dynamic-wind before thunk after)
-/// Calls `before`, then `thunk` (returning its value), then `after`.
-/// The `after` thunk is called even if the body exits via an escape continuation.
-pub fn dynamic_wind(
-    interp: *interpreter.Interpreter,
-    env: *core.Environment,
-    args: core.ValueList,
-    fuel: *u64,
-) ElzError!core.Value {
-    if (args.items.len != 3) return ElzError.WrongArgumentCount;
-    const before = args.items[0];
-    const thunk = args.items[1];
-    const after_proc = args.items[2];
-
-    var no_args = core.ValueList.init(env.allocator);
-    defer no_args.deinit();
-
-    // Register winder so call/ec escape can find it.
-    const winder = try env.allocator.create(core.Winder);
-    winder.* = .{ .before = before, .after = after_proc, .next = interp.runtime.cps.winders };
-    const saved_winders = interp.runtime.cps.winders;
-
-    _ = try vm_mod.callProc(interp, before, no_args, fuel);
-
+/// `%wind-push!` records a dynamic-wind frame. `dynamic-wind` in std.elz
+/// calls `before`, pushes the frame, runs the thunk, pops the frame, and calls
+/// `after`. The VM pops frames left behind by an error or a continuation jump
+/// and runs their `after` thunks (see `vm.VM.runGuarded`).
+/// Syntax: (%wind-push! before after)
+pub fn wind_push(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    const winder = env.allocator.create(core.Winder) catch return ElzError.OutOfMemory;
+    winder.* = .{ .before = args.items[0], .after = args.items[1], .next = interp.runtime.cps.winders };
     interp.runtime.cps.winders = winder;
-    const thunk_result = vm_mod.callProc(interp, thunk, no_args, fuel);
-    interp.runtime.cps.winders = saved_winders;
+    return core.Value.unspecified;
+}
 
-    // Always call after, even if thunk errored (e.g. escape continuation).
-    _ = vm_mod.callProc(interp, after_proc, no_args, fuel) catch {};
-
-    return thunk_result;
+/// `%wind-pop!` removes the innermost dynamic-wind frame without running it.
+/// Syntax: (%wind-pop!)
+pub fn wind_pop(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!core.Value {
+    if (args.items.len != 0) return ElzError.WrongArgumentCount;
+    if (interp.runtime.cps.winders) |w| interp.runtime.cps.winders = w.next;
+    return core.Value.unspecified;
 }
 
 test "control primitives" {

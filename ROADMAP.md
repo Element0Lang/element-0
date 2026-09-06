@@ -8,13 +8,11 @@ It outlines the features to be implemented and their current status.
 
 ### Design Decisions
 
-* Continuations are delimited, not first-class. Elz provides escape continuations
-  (`call/ec`, with `call-with-current-continuation` as an alias) and delimited
-  continuations (`shift`/`reset`) instead of full re-entrant `call/cc`. Full
-  `call/cc` interacts badly with the Zig FFI boundary because native frames cannot be
-  captured. Delimited continuations cover the practical use cases, such as generators,
-  early exit, and async patterns. This is a deliberate, permanent departure from the
-  standard, and it matches what practical embedded Schemes do.
+* Continuations are copies of the VM stack. `call/cc` is full and multi-shot within
+  the VM run that captured it, and `dynamic-wind` frames are wound and unwound on
+  re-entry. A continuation cannot be resumed after the native callback it was
+  captured in has returned, because Zig frames cannot be copied; that case raises
+  an error. `shift`/`reset` and `call/ec` are provided as well.
 * The numeric tower is kept. Exact integers of arbitrary size, exact rationals, complex
   numbers, and exact/inexact tagging are implemented.
 
@@ -183,12 +181,15 @@ the capture point.
 
 * [x] `reset`/`shift` (prompt and capture opcodes, and segment copy and restore;
   continuations are multi-shot and survive their reset)
-* [ ] `dynamic-wind` integration with captured segments (before and after thunks
-  do not re-fire when a captured segment is reinstated)
+* [x] Full `call/cc` (whole-run capture, multi-shot, winds and unwinds
+  `dynamic-wind` frames on re-entry; `dynamic-wind` moved into `std.elz` so its
+  body runs in the caller's VM run)
+* [ ] `dynamic-wind` integration with `shift` segments (before and after thunks
+  do not re-fire when a delimited segment is reinstated)
 * [x] FFI boundary rule (prompts are per VM run, so a shift inside a nested
   native call raises instead of capturing across the boundary)
-* [ ] Documentation of the `call/cc` = `call/ec` semantics (the language reference was
-  removed pending a rewrite; see the design decisions above)
+* [x] Documentation of the continuation semantics and the native-frame rule (the
+  language reference's Continuations section)
 
 ---
 
@@ -199,9 +200,8 @@ the capture point.
   runtime errors report `At: file:line` and a backtrace of the calls that led
   to the failure (`Interpreter.collect_backtrace`).
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
-  `tests/vendor/` and runs via `make test-conformance`. Current score: 976 of
-  977 checks pass. The remaining case re-enters a `dynamic-wind` through a full
-  continuation. The suite reports but does not gate the build.
+  `tests/vendor/` and runs via `make test-conformance`. Current score: all 977
+  checks pass. The suite reports but does not gate the build.
 * [ ] Documentation: a language reference covering the lexical syntax, special forms,
   standard procedures, extensions, and deviations (removed pending a rewrite). The
   embedding API is covered by the generated API documentation.
