@@ -1,8 +1,8 @@
 //! End-to-end tests for the `elz-repl` binary. Each test spawns the real
 //! executable (its path comes from `build_options.repl_path`), feeds it input
 //! on stdin or the command line, and checks stdout and the exit status.
-//! The interactive features that need a terminal (line editing, completion,
-//! Ctrl-C) are out of reach here; everything that works through a pipe is in.
+//! Piped sessions run on all platforms. Linux also tests terminal output with
+//! a pseudo-terminal.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -108,6 +108,60 @@ test "a piped session prints each value with write" {
     defer r.deinit();
     try testing.expectEqual(@as(u8, 0), r.status);
     try testing.expectEqualStrings("3\n\"two\"\n#\\a\n(1 \"b\")\n", r.stdout);
+}
+
+test "display writes numbers and strings without adding a newline" {
+    const r = try runRepl(&.{}, "(display 12)\n(display \"12\")\n", .inherit);
+    defer r.deinit();
+    try testing.expectEqualStrings("1212", r.stdout);
+}
+
+extern "c" fn openpty(master: *c_int, slave: *c_int, name: ?[*]u8, term: ?*const anyopaque, size: ?*const anyopaque) c_int;
+
+fn read_pty_until(fd: c_int, marker: []const u8, buffer: []u8) ![]const u8 {
+    var used: usize = 0;
+    for (0..20) |_| {
+        var pollfd = [_]std.c.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+        if (std.c.poll(&pollfd, 1, 1000) < 0) return error.PollFailed;
+        if (pollfd[0].revents == 0) continue;
+        if (used == buffer.len) return error.OutputTooLong;
+        const n = std.c.read(fd, buffer[used..].ptr, buffer.len - used);
+        if (n <= 0) return error.ReadFailed;
+        used += @intCast(n);
+        if (std.mem.indexOf(u8, buffer[0..used], marker) != null) return buffer[0..used];
+    }
+    return error.PromptTimeout;
+}
+
+test "interactive display remains visible before the next prompt" {
+    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+    var master: c_int = undefined;
+    var slave: c_int = undefined;
+    const Size = extern struct { rows: u16, columns: u16, xpixel: u16, ypixel: u16 };
+    const size = Size{ .rows = 24, .columns = 80, .xpixel = 0, .ypixel = 0 };
+    if (openpty(&master, &slave, null, null, &size) != 0) return error.OpenPtyFailed;
+    const master_file: std.Io.File = .{ .handle = master, .flags = .{ .nonblocking = false } };
+    defer master_file.close(io);
+    const slave_file: std.Io.File = .{ .handle = slave, .flags = .{ .nonblocking = false } };
+    defer slave_file.close(io);
+    var child = try std.process.spawn(io, .{
+        .argv = &.{ build_options.repl_path, "--no-rc" },
+        .stdin = .{ .file = slave_file },
+        .stdout = .{ .file = slave_file },
+        .stderr = .ignore,
+    });
+    defer child.kill(io);
+    var buffer: [16384]u8 = undefined;
+    _ = try read_pty_until(master, "[1]>", &buffer);
+    try master_file.writeStreamingAll(io, "(display 12)\r");
+    const number = try read_pty_until(master, "[2]>", &buffer);
+    try expectContains(number, "\n12\r\n");
+    try master_file.writeStreamingAll(io, "(display \"12\")\r");
+    const string = try read_pty_until(master, "[3]>", &buffer);
+    try expectContains(string, "\n12\r\n");
+    try master_file.writeStreamingAll(io, ".exit\r");
+    const term = try child.wait(io);
+    try testing.expect(term == .exited and term.exited == 0);
 }
 
 test "a form spread over several lines is read as one" {

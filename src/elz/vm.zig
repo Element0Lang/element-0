@@ -7,6 +7,7 @@
 /// a ValueList from the stack and calling the native function directly.
 const std = @import("std");
 const core = @import("core.zig");
+const gc = @import("gc.zig");
 const chunk = @import("chunk.zig");
 const Value = core.Value;
 const ElzError = core.ElzError;
@@ -261,6 +262,11 @@ pub const VM = struct {
                 }
                 var args = try self.buildArgList(argc); // pops args + callee
                 defer args.deinit();
+                var args_root: gc.Root = .{};
+                self.interp.protect(&args_root, &args);
+                defer args_root.deinit();
+                self.interp.gc_state.paused += 1;
+                defer self.interp.gc_state.paused -= 1;
                 // A primitive that calls back into Elz (map, apply, ...) runs
                 // the callee under the same fuel budget as this VM.
                 var unlimited: u64 = std.math.maxInt(u64);
@@ -272,6 +278,8 @@ pub const VM = struct {
             .foreign_procedure => |ff| {
                 var args = try self.buildArgList(argc);
                 defer args.deinit();
+                self.interp.gc_state.paused += 1;
+                defer self.interp.gc_state.paused -= 1;
                 const ffi_mod = @import("ffi.zig");
                 const prev = ffi_mod.active_interp;
                 ffi_mod.active_interp = self.interp;
@@ -418,11 +426,17 @@ pub const VM = struct {
     /// and calls their `after` thunks, then propagates.
     pub fn runGuarded(self: *VM) ElzError!Value {
         const interp = self.interp;
+        var machine_root: gc.Root = .{};
+        interp.protect(&machine_root, self);
+        defer machine_root.deinit();
         interp.runtime.run_counter += 1;
         self.run_id = interp.runtime.run_counter;
         interp.runtime.active_runs.append(interp.allocator, self.run_id) catch return ElzError.OutOfMemory;
         defer _ = interp.runtime.active_runs.pop();
         const entry_winders = interp.runtime.cps.winders;
+        var winders_root: gc.Root = .{};
+        interp.protect(&winders_root, &entry_winders);
+        defer winders_root.deinit();
         while (true) {
             const result = self.run() catch |err| {
                 if (err == ElzError.EscapeContinuationInvoked) {
@@ -541,6 +555,7 @@ pub const VM = struct {
 
     pub fn run(self: *VM) ElzError!Value {
         while (true) {
+            self.interp.gc_state.checkpoint(self.interp);
             if (self.frame_count == 0) return self.pop();
             const frame = &self.frames[self.frame_count - 1];
             const proto = frame.closure.proto;
@@ -923,6 +938,7 @@ const VM_POOL_LIMIT = 8;
 
 fn acquireVm(interp: *@import("interpreter.zig").Interpreter) ElzError!*VM {
     if (interp.runtime.vm_pool.pop()) |machine| {
+        machine.interp = interp;
         machine.reset();
         return machine;
     }
@@ -993,6 +1009,15 @@ pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosu
 /// VM's frame eventually exits, `closeUpvaluesAbove` will overwrite the open state
 /// with a closed copy — leaving the pointer dangling but the cell valid.
 pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, args: core.ValueList, fuel: ?*u64) ElzError!Value {
+    var args_root: gc.Root = .{};
+    interp.protect(&args_root, &args);
+    defer args_root.deinit();
+    var proc_root: gc.Root = .{};
+    interp.protect(&proc_root, &proc);
+    defer proc_root.deinit();
+    // shortcut: collection pauses across native calls until their locals are rooted.
+    interp.gc_state.paused += 1;
+    defer interp.gc_state.paused -= 1;
     // Native callees need no VM frame, and this path has no argument limit.
     switch (proc) {
         .procedure => |prim| {

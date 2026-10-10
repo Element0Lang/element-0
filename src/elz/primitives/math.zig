@@ -1335,6 +1335,7 @@ test "math primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
+        .gc_state = undefined,
         .allocator = allocator,
         .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,

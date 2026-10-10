@@ -8,7 +8,9 @@ const assert = std.debug.assert;
 
 pub const Heap = struct {
     memory: []u8,
+    block_index: []u64,
     first: *Block,
+    allocation_cursor: *Block,
     roots: ?*Root = null,
     pending: ?*Block = null,
     collecting: bool = false,
@@ -57,6 +59,28 @@ pub const Heap = struct {
     pub const Visitor = struct {
         heap: *Heap,
 
+        /// Retains a buffer, including when a slice starts inside it.
+        pub fn mark_buffer(self: *Visitor, ptr: *const anyopaque) void {
+            const address = @intFromPtr(ptr);
+            const block = self.heap.find_block(ptr) orelse return;
+            if (block.owner != null and address >= @intFromPtr(block) + block.payload_offset)
+                self.mark(@ptrFromInt(@intFromPtr(block) + block.payload_offset));
+        }
+
+        /// Registers tracing from the type of a reachable object reference.
+        pub fn mark_typed(self: *Visitor, comptime T: type, ptr: *const T, comptime trace: fn (*const T, *Visitor) void) void {
+            if (!self.heap.contains(ptr)) return;
+            const block = self.heap.block_for(ptr);
+            if (block.marked) return;
+            block.trace = struct {
+                fn visit(current: *Block, visitor: *Visitor) void {
+                    const object: *const T = @ptrFromInt(@intFromPtr(current) + current.payload_offset);
+                    trace(object, visitor);
+                }
+            }.visit;
+            self.mark(ptr);
+        }
+
         /// Marks an exact object pointer from this heap. Null is ignored.
         pub fn mark(self: *Visitor, value: ?*const anyopaque) void {
             const block = self.heap.block_for(value orelse return);
@@ -70,12 +94,18 @@ pub const Heap = struct {
     /// Uses only this region. Leading and trailing bytes needed to align the
     /// block headers are excluded from `memory` and its usable capacity.
     pub fn init(memory: []u8) error{OutOfMemory}!Heap {
-        const start = std.mem.alignForward(usize, @intFromPtr(memory.ptr), block_alignment);
+        const start = std.mem.alignForward(usize, @intFromPtr(memory.ptr), @max(block_alignment, @alignOf(u64)));
         const end = std.mem.alignBackward(usize, @intFromPtr(memory.ptr) + memory.len, block_alignment);
         if (end < start or end - start < minimum_block_size) return error.OutOfMemory;
-        const first: *Block = @ptrFromInt(start);
-        first.* = .{ .size = end - start };
-        return .{ .memory = @as([*]u8, @ptrFromInt(start))[0 .. end - start], .first = first };
+        const word_count = std.math.divCeil(usize, (end - start) / block_alignment, 64) catch return error.OutOfMemory;
+        const index_bytes = word_count * @sizeOf(u64);
+        if (end - start < index_bytes + minimum_block_size) return error.OutOfMemory;
+        const index = @as([*]u64, @ptrFromInt(start))[0..word_count];
+        @memset(index, 0);
+        index[0] = 1;
+        const first: *Block = @ptrFromInt(start + index_bytes);
+        first.* = .{ .size = end - start - index_bytes };
+        return .{ .memory = @as([*]u8, @ptrFromInt(start + index_bytes))[0 .. end - start - index_bytes], .first = first, .allocation_cursor = first, .block_index = index };
     }
 
     /// Allocates and initializes one object. Null tracing is for objects without
@@ -120,8 +150,16 @@ pub const Heap = struct {
     fn allocate(self: *Heap, len: usize, alignment: usize) error{OutOfMemory}!*Block {
         assert(!self.collecting);
         const payload_alignment = @max(alignment, @alignOf(*Block));
-        var cursor: ?*Block = self.first;
-        while (cursor) |block| : (cursor = block.next) {
+        const start = self.allocation_cursor;
+        var cursor: ?*Block = start;
+        var wrapped = false;
+        while (cursor) |block| {
+            if (wrapped and block == start) break;
+            cursor = block.next;
+            if (cursor == null and !wrapped) {
+                cursor = self.first;
+                wrapped = true;
+            }
             if (block.owner != null) continue;
             const base = @intFromPtr(block);
             const payload = std.mem.alignForward(usize, base + minimum_block_size, payload_alignment);
@@ -133,6 +171,7 @@ pub const Heap = struct {
             if (block.size - required >= minimum_block_size) {
                 const remainder: *Block = @ptrFromInt(base + required);
                 remainder.* = .{ .size = block.size - required, .next = block.next };
+                self.set_header(remainder, true);
                 block.next = remainder;
                 block.size = required;
             }
@@ -142,6 +181,7 @@ pub const Heap = struct {
             block.payload_offset = offset;
             self.bytes_used += block.size;
             self.object_count += 1;
+            self.allocation_cursor = block.next orelse self.first;
             return block;
         }
         return error.OutOfMemory;
@@ -158,16 +198,24 @@ pub const Heap = struct {
     /// Traces roots and reachable objects, then reclaims and coalesces free
     /// blocks. The intrusive worklist needs no separate marking allocation.
     pub fn collect(self: *Heap) void {
+        self.collect_with_roots({}, struct {
+            fn trace(_: void, _: *Visitor) void {}
+        }.trace);
+    }
+
+    /// Adds roots described by the runtime without allocating root records.
+    pub fn collect_with_roots(self: *Heap, context: anytype, comptime trace: fn (@TypeOf(context), *Visitor) void) void {
         assert(!self.collecting);
         self.collecting = true;
         defer self.collecting = false;
         var visitor = Visitor{ .heap = self };
+        trace(context, &visitor);
         var root_cursor = self.roots;
         while (root_cursor) |root| : (root_cursor = root.next) visitor.mark(root.value);
         while (self.pending) |block| {
             self.pending = block.pending_next;
             block.pending_next = null;
-            if (block.trace) |trace| trace(block, &visitor);
+            if (block.trace) |trace_object| trace_object(block, &visitor);
         }
 
         var cursor: ?*Block = self.first;
@@ -190,6 +238,7 @@ pub const Heap = struct {
                 if (block.next) |next| {
                     if (next.owner == null) {
                         block.size += next.size;
+                        self.set_header(next, false);
                         block.next = next.next;
                         continue;
                     }
@@ -197,6 +246,42 @@ pub const Heap = struct {
             }
             cursor = block.next;
         }
+        self.allocation_cursor = self.first;
+    }
+
+    /// Weak tables can discard addresses reclaimed by the most recent sweep.
+    pub fn is_reclaimed(self: *Heap, ptr: *const anyopaque) bool {
+        if (!self.contains(ptr)) return false;
+        const block = self.find_block(ptr) orelse return true;
+        return block.owner == null or @intFromPtr(block) + block.payload_offset != @intFromPtr(ptr);
+    }
+
+    fn find_block(self: *Heap, ptr: *const anyopaque) ?*Block {
+        if (!self.contains(ptr)) return null;
+        const address = @intFromPtr(ptr);
+        if (address == @intFromPtr(self.memory.ptr) + self.memory.len) return null;
+        const slot = (address - @intFromPtr(self.memory.ptr)) / block_alignment;
+        var word_index = slot / 64;
+        const bit: u6 = @intCast(slot % 64);
+        var word = self.block_index[word_index] & (@as(u64, std.math.maxInt(u64)) >> (63 - bit));
+        while (word == 0) {
+            word_index -= 1;
+            word = self.block_index[word_index];
+        }
+        const header_slot = word_index * 64 + 63 - @clz(word);
+        return @ptrFromInt(@intFromPtr(self.memory.ptr) + header_slot * block_alignment);
+    }
+
+    fn contains(self: *const Heap, ptr: *const anyopaque) bool {
+        const address = @intFromPtr(ptr);
+        const start = @intFromPtr(self.memory.ptr);
+        return address >= start and address <= start + self.memory.len;
+    }
+
+    fn set_header(self: *Heap, block: *Block, present: bool) void {
+        const slot = (@intFromPtr(block) - @intFromPtr(self.memory.ptr)) / block_alignment;
+        const mask = @as(u64, 1) << @as(u6, @intCast(slot % 64));
+        if (present) self.block_index[slot / 64] |= mask else self.block_index[slot / 64] &= ~mask;
     }
 
     fn block_for(self: *Heap, ptr: *const anyopaque) *Block {

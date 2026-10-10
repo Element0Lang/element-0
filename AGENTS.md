@@ -20,7 +20,7 @@ Element 0 is a small Lisp dialect based on R7RS-small. Elz, its implementation i
 
 ## Writing Style
 
-Applies to code comments, documentation pages, commit messages, and chat.
+These guidelines apply to code comments, documentation pages, commit messages, and chat.
 
 - Write in plain English with short sentences and everyday words. No colorful adjectives ("parser", not "robust parser").
 - No em dashes. Restructure the sentence or use a semicolon.
@@ -47,7 +47,7 @@ The pipeline is parser, compiler, VM, writer, tied together by `Interpreter` in 
 - Built-ins are registered with `interp.definePrimitive(name, f)`, which also records the name so an unlabelled `WrongArgumentCount`, `InvalidArgument`, or `DivisionByZero` still gets attributed.
 - A catch site calls `interp.last_error.clear()` after consuming a report.
 - `core.Environment` does not know about the interpreter. A caller that wants a message on `SymbolNotFound` attaches it.
-- Memory is Boehm-collected on native targets. On wasm, `gc.zig` substitutes a global arena with no teardown. Values must stay reachable from the interpreter, the VM stacks, or a Zig local; nothing else is a root.
+- Each interpreter owns a precise heap on native and WASI targets. Collection runs at VM instruction boundaries and pauses during compilation and native calls. Zig locals that must survive evaluation or collection need explicit roots through `Interpreter.protect`. `deinit` releases the heap.
 - Primitives that call back into Element 0 go through `vm.callProc`, never a VM of their own.
 
 ## Validation

@@ -7,76 +7,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const io = b.graph.io;
 
-    // WebAssembly cannot host the Boehm collector (it scans the native stack),
-    // so wasm builds skip the C library and gc.zig falls back to an arena.
     const is_wasm = target.result.cpu.arch.isWasm();
-
-    // --- GC dependency ---
-    const gc: ?*std.Build.Step.Compile = if (is_wasm) null else blk: {
-        const gc_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-        });
-
-        const gc_lib = b.addLibrary(.{
-            .name = "gc",
-            .root_module = gc_module,
-        });
-        {
-            var cflags: std.ArrayListUnmanaged([]const u8) = .empty;
-            var src_files: std.ArrayListUnmanaged([]const u8) = .empty;
-            defer cflags.deinit(b.allocator);
-            defer src_files.deinit(b.allocator);
-
-            cflags.appendSlice(b.allocator, &.{
-                "-DNO_EXECUTE_PERMISSION",
-                "-DGC_THREADS", // Enable threading support
-                "-DGC_BUILTIN_ATOMIC", // Use the compiler's built-in atomic functions
-            }) catch unreachable;
-
-            if (optimize != .debug) {
-                cflags.append(b.allocator, "-DNDEBUG") catch unreachable;
-            }
-
-            // Add base GC source files (matching official bdwgc build)
-            src_files.appendSlice(b.allocator, &.{
-                "allchblk.c", "alloc.c",    "blacklst.c", "dbg_mlc.c",  "dyn_load.c",
-                "finalize.c", "headers.c",  "mach_dep.c", "malloc.c",   "mallocx.c",
-                "mark.c",     "mark_rts.c", "misc.c",     "new_hblk.c", "obj_map.c",
-                "os_dep.c",   "ptr_chck.c", "reclaim.c",  "typd_mlc.c",
-            }) catch unreachable;
-
-            // Add platform-specific source files for threading
-            // Note: Use target.result.os.tag (resolved target) instead of target.query.os_tag
-            // because query.os_tag is null for native builds
-            const os_tag = target.result.os.tag;
-            switch (os_tag) {
-                .windows => {
-                    cflags.append(b.allocator, "-D_WIN32") catch unreachable;
-                    src_files.appendSlice(b.allocator, &.{ "win32_threads.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
-                    gc_module.linkSystemLibrary("user32", .{});
-                },
-                .macos => {
-                    // Required flags for POSIX/Darwin threading
-                    cflags.append(b.allocator, "-D_REENTRANT") catch unreachable;
-                    // Add threading source files (matching official bdwgc build)
-                    src_files.appendSlice(b.allocator, &.{ "gc_dlopen.c", "pthread_start.c", "pthread_support.c", "darwin_stop_world.c" }) catch unreachable;
-                },
-                else => { // Assume other POSIX-like systems
-                    src_files.appendSlice(b.allocator, &.{ "pthread_stop_world.c", "pthread_support.c", "pthread_start.c" }) catch unreachable;
-                },
-            }
-
-            gc_module.linkSystemLibrary("c", .{});
-            // Use bdwgc from Zig dependencies
-            const bdwgc_dep = b.dependency("bdwgc", .{});
-            gc_module.addIncludePath(bdwgc_dep.path("include"));
-            for (src_files.items) |src| {
-                gc_module.addCSourceFile(.{ .file = bdwgc_dep.path(src), .flags = cflags.items });
-            }
-        }
-        break :blk gc_lib;
-    };
 
     // --- Library Setup ---
     const lib_source = b.path("src/lib.zig");
@@ -91,19 +22,16 @@ pub fn build(b: *std.Build) void {
         .name = "elz",
         .root_module = lib_module,
     });
-    // Use bdwgc from Zig dependencies
-    const bdwgc_dep_lib = b.dependency("bdwgc", .{});
-    lib_module.addIncludePath(bdwgc_dep_lib.path("include"));
-    if (gc) |g| lib_module.linkLibrary(g);
     lib_module.linkSystemLibrary("c", .{});
     b.installArtifact(lib);
 
     // Export the module so downstream projects can use it
-    _ = b.addModule("elz", .{
+    const exported_module = b.addModule("elz", .{
         .root_source_file = lib_source,
         .target = target,
         .optimize = optimize,
     });
+    exported_module.linkSystemLibrary("c", .{});
 
     // --- REPL Executable ---
     // The REPL needs a terminal, signals, and process arguments, none of which
@@ -174,11 +102,7 @@ pub fn build(b: *std.Build) void {
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
     });
-    // Use bdwgc from Zig dependencies for tests
-    const bdwgc_dep_test = b.dependency("bdwgc", .{});
-    test_module.addIncludePath(bdwgc_dep_test.path("include"));
-    if (gc) |g| test_module.linkLibrary(g);
-
+    test_module.linkSystemLibrary("c", .{});
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
@@ -226,10 +150,6 @@ pub fn build(b: *std.Build) void {
             }
 
             const t = b.addTest(.{ .root_module = t_module });
-            const bdwgc_dep_t = b.dependency("bdwgc", .{});
-            t_module.addIncludePath(bdwgc_dep_t.path("include"));
-            if (gc) |g| t_module.linkLibrary(g);
-
             const run_t = b.addRunArtifact(t);
             if (is_prop_test) {
                 test_prop_step.dependOn(&run_t.step);

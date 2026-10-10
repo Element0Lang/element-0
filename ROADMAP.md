@@ -207,13 +207,13 @@ the capture point.
   embedding API is covered by the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
 * [x] WebAssembly: the library and examples build for `wasm32-wasi`, with an
-  arena in place of the Boehm collector. The arena is global and currently has
-  no teardown.
-* [ ] A precise garbage collector, which would remove the C dependency, make
-  memory use predictable, and give wasm builds a real collection.
+  interpreter-owned precise collector and heap teardown.
+* [x] A precise garbage collector in Zig with a bounded heap on native and WASI
+  targets. Boehm is no longer a dependency.
     * [x] Standalone fixed heap with typed allocation, explicit roots, manual
       mark-and-sweep collection, and a buffer allocator. See
-      [Standalone Garbage Collector](docs/garbage-collector.md).
-    * [ ] Object tracing and root registration throughout the interpreter
-    * [ ] Automatic collection and native FFI rooting
-    * [ ] Boehm removal and MCU platform support
+      [Garbage Collection](docs/garbage-collector.md).
+    * [x] Typed object tracing and root registration throughout the interpreter
+    * [x] Automatic collection at VM boundaries and explicit native roots
+    * [x] Boehm removal
+    * [ ] Full MCU interpreter support

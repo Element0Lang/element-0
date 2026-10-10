@@ -4,10 +4,6 @@
     .fingerprint = 0xc8c56c5048e5528a, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        .bdwgc = .{
-            .url = "https://github.com/bdwgc/bdwgc/archive/refs/tags/v8.2.12.tar.gz",
-            .hash = "N-V-__8AACFbLwCc_S3bi22OQGduAL6tPehcttjX9PFqjkP-",
-        },
         .minish = .{
             .url = "https://github.com/CogitatorTech/minish/archive/refs/tags/v0.5.0.tar.gz",
             .hash = "minish-0.5.0-SQtSTXUkAwA1iUHhQRCfM-092BYRlYDLTFCSodBi_EFq",

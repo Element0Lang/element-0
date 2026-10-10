@@ -469,6 +469,8 @@ pub const Port = struct {
     pushback_pos: u8 = 0,
     /// Whether this is a binary port (bytevector or binary file backed).
     binary: bool = false,
+    /// Whether the most recent write ended inside a line.
+    line_open: bool = false,
 
     pub const Kind = union(enum) {
         /// An OS file handle.
@@ -692,6 +694,7 @@ pub const Port = struct {
             .string_output => |*sk| try sk.buffer.appendSlice(sk.allocator, str),
             .string_input => return error.InvalidPort,
         }
+        if (str.len != 0) self.line_open = str[str.len - 1] != '\n';
     }
 };
 

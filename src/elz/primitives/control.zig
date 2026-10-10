@@ -290,10 +290,14 @@ pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
 
     var pr = arg.promise;
     while (pr.forward) |f| pr = f;
+    var promise_root: @import("../gc.zig").Root = .{};
+    interp.protect(&promise_root, &pr);
+    defer promise_root.deinit();
     // Iterative forcing: a `delay-force` promise whose thunk yields another
     // promise adopts that promise's thunk and loops, so a chain of any length
     // runs in constant native stack space (R7RS 7.3 "space-safe").
     while (!pr.forced) {
+        interp.gc_state.checkpoint_native(interp);
         var no_args = core.ValueList.init(env.allocator);
         defer no_args.deinit();
         const result = if (pr.expr == .vm_closure or pr.expr == .procedure or pr.expr == .foreign_procedure)

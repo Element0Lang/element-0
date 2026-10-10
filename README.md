@@ -234,4 +234,3 @@ Element 0 is licensed under the Apache License, Version 2.0 (see [LICENSE](LICEN
 * [Bestline](https://github.com/jart/bestline) is used for the REPL's line editing and history features.
 * [Chibi-Scheme](https://github.com/ashinn/chibi-scheme) R7RS test suite is used for conformance testing.
 * [Chilli](https://github.com/CogitatorTech/chilli) is used for the CLI.
-* [BDWGC](https://github.com/bdwgc/bdwgc) is used for the garbage collector.

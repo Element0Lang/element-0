@@ -105,6 +105,9 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
         return err;
     };
     defer forms.deinit(interpreter.allocator);
+    var forms_root: elz.Root = .{};
+    interpreter.protect(&forms_root, &forms);
+    defer forms_root.deinit();
     if (forms.items.len == 0) return true;
 
     var out: Out = undefined;
@@ -378,6 +381,13 @@ const Repl = struct {
         if (self.load_rc) try self.loadRcFile();
 
         while (true) {
+            if (self.reader.interactive) {
+                if (self.interp.runtime.stdout_port) |port| {
+                    if (port.kind == .file and port.kind.file.persistent and port.line_open) {
+                        try port.writeString("\n");
+                    }
+                }
+            }
             const prompt: [:0]const u8 = if (self.pending.items.len == 0)
                 std.mem.printSentinel(&self.prompt_buffer, "[{d}]> ", .{self.input_number}, 0) catch "> "
             else
@@ -438,6 +448,9 @@ const Repl = struct {
             },
         };
         defer forms.deinit(interp.allocator);
+        var forms_root: elz.Root = .{};
+        interp.protect(&forms_root, &forms);
+        defer forms_root.deinit();
 
         self.input_number += 1;
         try self.evalForms(forms.items, stdout, true);
@@ -452,6 +465,9 @@ const Repl = struct {
             return;
         };
         defer forms.deinit(interp.allocator);
+        var forms_root: elz.Root = .{};
+        interp.protect(&forms_root, &forms);
+        defer forms_root.deinit();
         try self.evalForms(forms.items, stdout, print_values);
     }
 
@@ -469,6 +485,7 @@ const Repl = struct {
             if (print_values and result != .unspecified) {
                 try elz.write(result, stdout);
                 try stdout.writeAll("\n");
+                if (interp.runtime.stdout_port) |port| port.line_open = false;
                 self.rememberValue(result);
             }
         }
@@ -552,6 +569,9 @@ const Repl = struct {
 fn runRepl(interpreter: *elz.Interpreter, quiet: bool, load_rc: bool) !void {
     var repl = Repl.init(interpreter, quiet, load_rc);
     defer repl.deinit();
+    var repl_root: elz.Root = .{};
+    interpreter.protect(&repl_root, &repl);
+    defer repl_root.deinit();
     try repl.run();
 }
 
@@ -647,7 +667,7 @@ fn rootExec(ctx: chilli.CommandContext) !void {
 var program_name: []const u8 = "elz";
 
 fn setCommandLine(interpreter: *elz.Interpreter, filename: []const u8, args: []const []const u8) !void {
-    const allocator = elz.gc_allocator;
+    const allocator = interpreter.allocator;
     var argv: elz.Value = .nil;
     var i = args.len;
     while (i > 0) {
@@ -666,16 +686,19 @@ fn setCommandLine(interpreter: *elz.Interpreter, filename: []const u8, args: []c
 /// This function initializes the interpreter and the command-line interface.
 /// It can either start a REPL or execute a source file, based on the command-line arguments.
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
-    const interpreter_ptr = try elz.gc_allocator.create(elz.Interpreter);
-    interpreter_ptr.* = try elz.Interpreter.init(.{});
-    elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
+    var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
+    const interpreter_ptr = &interpreter;
+    var program_root: elz.Root = .{};
+    interpreter.protect(&program_root, &program_name);
+    defer program_root.deinit();
 
     interpreter_ptr.last_error.collect_backtrace = true;
 
     {
-        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);
+        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, interpreter.allocator);
         defer arg_it.deinit();
-        if (arg_it.next()) |argv0| program_name = try elz.gc_allocator.dupe(u8, argv0);
+        if (arg_it.next()) |argv0| program_name = try interpreter.allocator.dupe(u8, argv0);
     }
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;

@@ -1,19 +1,29 @@
-# Standalone Garbage Collector
+# Garbage Collection
 
-`src/elz/managed_heap.zig` contains the first step toward a precise collector for Element 0.
-It is an internal module.
-The interpreter still uses Boehm on native targets and the existing arena on WebAssembly.
+`src/elz/managed_heap.zig` implements the precise, non-moving collector used by
+Element 0 on native and WASI targets. `src/elz/gc.zig` describes the interpreter's
+typed references and roots. Neither module depends on Boehm.
+
+Each interpreter owns a fixed heap, with a default limit of 64 MiB. Collection
+runs between VM instructions. Compilation and native calls pause collection to
+protect their temporary Zig values. Hosts use `elz.Root` and
+`Interpreter.protect` for values retained across evaluation or collection. See
+the [Embedding Guide](embedding.md#the-interpreter).
+
+The lower-level `Heap` API below also works independently of the interpreter.
 
 ## Heap and Roots
 
 The caller supplies a memory region and owns its lifetime. The heap stores object
-headers and a marking worklist in that region. Allocation splits free blocks.
+headers, a block-location bitmap, and a marking worklist in that region.
+Allocation splits free blocks.
 Manual collection traces explicit roots, sweeps unreachable objects, and joins
 adjacent free blocks. Objects stay at the same addresses.
 
 `bytes_used` counts occupied blocks, including headers, pointer prefixes,
 alignment padding, and tails too small to split. Leading and trailing bytes used
-to align the region are excluded from `heap.memory`. Root records belong to the
+to align the region and the bitmap storage are excluded from `heap.memory`.
+Root records belong to the
 caller and use additional memory outside the region. The collector allocates
 nothing during marking or sweeping.
 
@@ -87,19 +97,26 @@ can run out of contiguous space even when its total free space would be enough.
 Objects that own external resources need explicit cleanup. Finalizers are not
 implemented.
 
-## Remaining Integration
+## Remaining MCU Work
 
-The next step is to describe all references in parser, compiler, and runtime
-objects, then register interpreter, VM, and native temporary roots. Automatic
-collection needs safe allocation and publication rules. Boehm can be removed
-only after tests force collection throughout those paths. The MCU port also
-needs replacements for the host I/O, clock, and environment calls.
+Typed tracing covers parser values, compiled prototypes, environments, VM stacks,
+upvalues, continuations, records, ports, and interpreter state. Rooted native
+values are traced through their declared Zig types. Raw buffers have no reference
+tracing of their own, so their owners describe their initialized contents.
+
+The collector does not scan native stacks or collect inside an allocation.
+Native calls defer collection, except that the rooted `force` primitive may
+collect between promise-chain iterations. `OutOfMemory` remains possible during a long
+native operation. The full MCU interpreter port still needs replacements for
+host I/O, clock, and environment calls, and a memory budget for the standard
+library and compiler.
 
 ## Pico Hardware Test
 
-The standalone collector passed nine checks on a Pico 2 WH with a 128 KiB heap
+The initial standalone collector passed nine checks on a Pico 2 WH with a 128 KiB heap
 and Zig 0.17.0 safety checks enabled. The checks cover cycles, roots, exhaustion,
 coalescing, alignment, buffers, a 1,500-object chain, 10,000 collection cycles,
 and heap boundaries. The harness is in `tools/pico-gc`, with build and flash
 instructions in its `README.md`. It uses the Pico SDK and does not run the
 Element 0 interpreter.
+That hardware run predates interpreter integration and the block-location bitmap.

@@ -4,7 +4,7 @@ This guide covers building the interpreter, using the REPL, running script files
 
 ## Prerequisites
 
-Building Elz needs Zig 0.17.0 and GNU Make. The garbage collector is compiled from vendored C sources, so a C compiler must be available, which Zig provides itself.
+Building Elz needs Zig 0.17.0 and GNU Make. The garbage collector is written in Zig. The REPL links a C line editor, which Zig compiles itself.
 
 ```bash
 # Debian and Ubuntu
@@ -59,6 +59,10 @@ Backtrace:
 ```
 
 On Linux and macOS the REPL has line editing, a history file at `~/.elz_history`, and Tab completion of global names and special forms. Ctrl-C discards the input typed so far. The Windows build reads plain lines from the console without these features.
+
+`display` writes text without a newline. The interactive REPL finishes an open
+output line before drawing its next prompt, so the text remains visible. Scripts
+and piped sessions keep the usual behavior and need `newline` when they want one.
 
 If `~/.elzrc` exists, the REPL runs it before the first prompt, which is the place for personal helper definitions. Pass `--no-rc` to skip it, and `--quiet` to suppress the banner.
 
@@ -116,7 +120,10 @@ zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
 node tools/run_wasi.mjs zig-out/wasm/bin/e1_ffi_pow.wasm
 ```
 
-WebAssembly gives a program no view of its own stack, which the Boehm collector needs, so wasm builds allocate from a global arena instead. The arena has no teardown, and creating a fresh interpreter does not reclaim its memory. A script that runs to completion behaves exactly as it does natively. Repeated evaluation can grow memory without bound until the WASM instance is discarded.
+Native and WASI builds use the same precise collector. Each interpreter owns its
+heap, and `deinit` releases it. Native Zig locals must be protected with explicit
+roots when they need to survive evaluation or collection. See the
+[Embedding Guide](embedding.md#the-interpreter).
 
 ## Using Elz from Zig
 

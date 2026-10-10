@@ -7,8 +7,6 @@ const gc = @import("gc.zig");
 const compiler = @import("./compiler.zig");
 const vm = @import("./vm.zig");
 
-var gc_initialized = std.atomic.Value(bool).init(false);
-
 const filetime_unix_offset: i64 = 116444736000000000;
 
 pub fn currentTimeMs() i64 {
@@ -19,12 +17,6 @@ pub fn currentTimeMs() i64 {
         var ts: std.c.timespec = undefined;
         _ = std.c.clock_gettime(.REALTIME, &ts);
         return @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000);
-    }
-}
-
-fn ensureGcInitialized() void {
-    if (gc_initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
-        gc.init();
     }
 }
 
@@ -48,6 +40,8 @@ pub const SandboxFlags = struct {
     enable_process: bool = true,
     /// Maximum wall-clock execution time in milliseconds. Null means no limit.
     time_limit_ms: ?u64 = null,
+    /// Maximum managed heap size, including collector metadata.
+    heap_limit_bytes: usize = 64 * 1024 * 1024,
 };
 
 /// Escape-continuation and dynamic-wind state.
@@ -219,6 +213,19 @@ pub const Interpreter = struct {
     compiler: CompilerState = .{},
     /// VM and primitive state.
     runtime: RuntimeState = .{},
+    /// Precise heap owned by this interpreter.
+    gc_state: *gc.State,
+
+    /// Protects the references in a Zig local across evaluation and collection.
+    pub fn protect(self: *Interpreter, root: *gc.Root, ptr: anytype) void {
+        self.gc_state.protect(root, ptr);
+    }
+
+    /// Collects unreachable objects. Native calls defer collection until they return.
+    pub fn collect(self: *Interpreter) error{CollectionUnsafe}!void {
+        if (self.gc_state.paused != 0) return error.CollectionUnsafe;
+        self.gc_state.collect(self);
+    }
 
     /// Records `message` as the detail for `err` and returns `err`, so a
     /// failing operation can be written as `return interp.fail(...)`.
@@ -278,14 +285,16 @@ pub const Interpreter = struct {
     /// Returns:
     /// An initialized `Interpreter`, or an error if initialization fails.
     pub fn init(flags: SandboxFlags) !Interpreter {
-        ensureGcInitialized();
-        const allocator = gc.allocator;
+        const state = try gc.State.init(flags.heap_limit_bytes);
+        errdefer state.deinit();
+        const allocator = state.heap.allocator();
 
         var self: Interpreter = .{
             .allocator = allocator,
             .io = std.Io.Threaded.global_single_threaded.io(),
             .root_env = undefined,
             .flags = flags,
+            .gc_state = state,
         };
 
         const root_env = try allocator.create(core.Environment);
@@ -295,7 +304,6 @@ pub const Interpreter = struct {
             .allocator = allocator,
         };
         try root_env.bindings.ensureTotalCapacity(8);
-        gc.add_roots(@intFromPtr(root_env), @intFromPtr(root_env) + @sizeOf(core.Environment));
         self.root_env = root_env;
 
         try root_env.set("nil", core.Value.nil);
@@ -330,6 +338,9 @@ pub const Interpreter = struct {
         const std_lib_source = @embedFile("../stdlib/std.elz");
         var std_lib_forms = try parser.readAllTracked(std_lib_source, allocator, "<stdlib>", &self.compiler.source_locations);
         defer std_lib_forms.deinit(allocator);
+        var forms_root: gc.Root = .{};
+        self.protect(&forms_root, &std_lib_forms);
+        defer forms_root.deinit();
 
         if (std_lib_forms.items.len > 0) {
             var fuel: u64 = std.math.maxInt(u64);
@@ -358,8 +369,15 @@ pub const Interpreter = struct {
     /// Returns:
     /// The `core.Value` of the last evaluated expression, or an error if parsing or evaluation fails.
     pub fn evalString(self: *Interpreter, source: []const u8, fuel: *u64) !core.Value {
+        var source_root: gc.Root = .{};
+        self.protect(&source_root, &source);
+        defer source_root.deinit();
+        self.gc_state.checkpoint(self);
         var forms = try parser.readAllTracked(source, self.allocator, "<eval>", &self.compiler.source_locations);
         defer forms.deinit(self.allocator);
+        var forms_root: gc.Root = .{};
+        self.protect(&forms_root, &forms);
+        defer forms_root.deinit();
 
         if (forms.items.len == 0) return .unspecified;
 
@@ -379,6 +397,8 @@ pub const Interpreter = struct {
     /// Loads a module file, evaluates every form in it, and caches the result.
     /// Returns the cached `core.Value.module` if the path was already loaded.
     pub fn importModule(self: *Interpreter, path_val: core.Value) core.ElzError!core.Value {
+        self.gc_state.paused += 1;
+        defer self.gc_state.paused -= 1;
         if (path_val != .string) return core.ElzError.InvalidArgument;
         if (!self.flags.enable_filesystem) {
             return self.failWith(core.ElzError.PermissionDenied, "import: filesystem access is disabled");
@@ -458,6 +478,10 @@ pub const Interpreter = struct {
     /// Useful when the caller controls parsing (e.g., the REPL) and needs per-form
     /// error handling without going through `evalString`.
     pub fn evalForm(self: *Interpreter, form: *const core.Value, fuel: *u64) core.ElzError!core.Value {
+        var form_root: gc.Root = .{};
+        self.protect(&form_root, form);
+        defer form_root.deinit();
+        self.gc_state.checkpoint(self);
         self.beginEval();
         defer self.endEval();
         const forms = [_]core.Value{form.*};
@@ -535,6 +559,7 @@ pub const Interpreter = struct {
         }
         self.runtime.vm_pool.deinit(self.allocator);
         self.compiler.pending_globals.deinit(self.allocator);
+        self.gc_state.deinit();
     }
 
     /// Returns the lazily initialized port that wraps the host's standard input stream.
