@@ -38,6 +38,7 @@ pub const special_form_names = @import("elz/compiler.zig").special_form_names;
 // transitively imports `core`, `interpreter`, `compiler`, `vm`, and the primitives, so the
 // full suite of inline unit tests runs together.
 test {
+    _ = @import("elz/managed_heap.zig");
     _ = @import("elz/core.zig");
     _ = @import("elz/parser.zig");
     _ = @import("elz/writer.zig");

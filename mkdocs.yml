@@ -47,6 +47,7 @@ nav:
   - Language Reference: language-reference.md
   - Procedures: procedures.md
   - Embedding Guide: embedding.md
+  - Standalone Garbage Collector: garbage-collector.md
   - Examples: examples.md
   - Zig API Reference: zig-api/index.html
 

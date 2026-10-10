@@ -5,7 +5,7 @@ const mem = std.mem;
 /// WebAssembly has no way to scan the native stack, which the Boehm collector
 /// depends on, so wasm builds fall back to an arena that never frees. Scripts
 /// that run to completion work unchanged; a long-lived interpreter grows
-/// without bound until `deinit`.
+/// without bound. The global arena currently has no teardown.
 pub const uses_arena = builtin.cpu.arch.isWasm();
 
 /// The Boehm collector's C API. Only present in native builds.
@@ -63,7 +63,7 @@ const GcAllocator = struct {
 var gc_allocator_instance = GcAllocator{};
 
 /// The arena behind wasm builds. Frees are ignored, matching the collector's
-/// allocator contract, and the memory comes back only at `deinit`.
+/// allocator contract. The global arena currently has no teardown.
 var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
 fn arenaAlloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {

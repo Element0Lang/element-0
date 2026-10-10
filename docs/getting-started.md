@@ -116,7 +116,7 @@ zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall --prefix zig-out/wasm
 node tools/run_wasi.mjs zig-out/wasm/bin/e1_ffi_pow.wasm
 ```
 
-WebAssembly gives a program no view of its own stack, which the Boehm collector needs, so wasm builds allocate from an arena instead and never free until the interpreter is torn down. A script that runs to completion behaves exactly as it does natively. A long-lived interpreter that keeps evaluating will grow without bound, so create a fresh one per unit of work.
+WebAssembly gives a program no view of its own stack, which the Boehm collector needs, so wasm builds allocate from a global arena instead. The arena has no teardown, and creating a fresh interpreter does not reclaim its memory. A script that runs to completion behaves exactly as it does natively. Repeated evaluation can grow memory without bound until the WASM instance is discarded.
 
 ## Using Elz from Zig
 
