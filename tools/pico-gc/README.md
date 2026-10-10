@@ -28,12 +28,11 @@ GC RESULT PASS failures=0 heap_bytes=131072 elapsed_us=182329
 
 The elapsed time includes the full test run and USB reporting.
 It is not a measurement of collection pauses. The same checks also passed on the host.
-The original flash image was restored and verified after the test, and the
-USB console confirmed that NuttX was running again.
+The original flash image was restored and verified after the test, and the USB console confirmed that NuttX was running again.
 
 ### Build
 
-Set `PLAYGROUND` to the existing microcontroller playground checkout, and set `ZIG` to the Zig 0.17.0 executable.
+Set `PLAYGROUND` to the existing microcontroller playground checkout and set `ZIG` to the Zig 0.17.0 executable.
 Run these commands from the Element 0 root.
 They write build output to `zig-out/pico-gc` and do not change the playground.
 
@@ -45,14 +44,14 @@ nix develop "$PLAYGROUND" --command cmake --build zig-out/pico-gc -j4
 ```
 
 The UF2 is built for `pico2_w` and the Cortex-M33 cores. Zig uses the soft-float
-calling convention to match the SDK. A 16 KiB stack is reserved at the top of
-main SRAM because Zig's safety diagnostics do not fit in a 4 KiB scratch bank.
+calling convention to match the SDK.
+A 16-KiB stack is reserved at the top of the main SRAM because Zig's safety diagnostics do not fit in a 4-KiB scratch bank.
 
 ### Flash and Run
 
 Put the Pico in BOOTSEL mode. Save its current flash before loading the test.
-The backup may contain saved settings, so keep it private and out of version
-control. The commands assume one connected Pico.
+The backup may contain saved settings, so keep it private and out of version control.
+The commands assume one connected Pico.
 
 ```bash
 umask 077
@@ -62,13 +61,13 @@ nix develop "$PLAYGROUND" --command picotool load -v -x zig-out/pico-gc/gc_test.
 "$PLAYGROUND/.venv/bin/python" tools/pico-gc/read_results.py
 ```
 
-The reader uses the playground's existing pyserial dependency. Pass `--port`
-if the Pico has a different serial device name. The firmware runs a suite each
-time it receives `r`. The reader requires all nine passes and a successful final
-result, and exits with an error on a failure, panic, or timeout.
+The reader uses the playground's existing pyserial dependency.
+Pass `--port` if the Pico has a different serial device name.
+The firmware runs a suite each time it receives `r`.
+The reader requires all nine passes and a successful final result, and exits with an error on a failure, panic, or timeout.
 
-The test firmware supports the SDK's USB reset interface. Restore the original
-flash without another BOOTSEL button press:
+The test firmware supports the SDK's USB reset interface.
+Restore the original flash without another BOOTSEL button press:
 
 ```bash
 nix develop "$PLAYGROUND" --command picotool load -f -v -x \

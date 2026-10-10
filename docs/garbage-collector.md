@@ -1,8 +1,8 @@
 # Standalone Garbage Collector
 
-`src/elz/managed_heap.zig` contains the first step toward a precise collector for
-Element 0. It is an internal module. The interpreter still uses Boehm on native
-targets and the existing arena on WebAssembly.
+`src/elz/managed_heap.zig` contains the first step toward a precise collector for Element 0.
+It is an internal module.
+The interpreter still uses Boehm on native targets and the existing arena on WebAssembly.
 
 ## Heap and Roots
 
