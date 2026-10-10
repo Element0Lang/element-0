@@ -9,9 +9,13 @@ const mem = std.mem;
 pub const uses_arena = builtin.cpu.arch.isWasm();
 
 /// The Boehm collector's C API. Only present in native builds.
-pub const c = if (uses_arena) struct {} else @cImport({
-    @cInclude("gc.h");
-});
+pub const c = if (uses_arena) struct {} else struct {
+    pub extern "c" fn GC_memalign(alignment: usize, len: usize) ?*anyopaque;
+    pub extern "c" fn GC_malloc_uncollectable(len: usize) ?*anyopaque;
+    pub extern "c" fn GC_init() void;
+    pub extern "c" fn GC_set_all_interior_pointers(enabled: c_int) void;
+    pub extern "c" fn GC_add_roots(start: ?*anyopaque, end: ?*anyopaque) void;
+};
 
 fn gcAlloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
     _ = ret_addr;

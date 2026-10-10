@@ -8,9 +8,14 @@ const is_windows = builtin.os.tag == .windows;
 
 /// Bestline is POSIX-only (it needs poll.h and termios), so the Windows build
 /// reads lines from stdin without editing, history, or completion.
-const bestline = if (is_windows) struct {} else @cImport({
-    @cInclude("bestline.h");
-});
+const bestline = if (is_windows) struct {} else struct {
+    const bestlineCompletions = opaque {};
+    extern "c" fn bestline(prompt: [*c]const u8) [*c]u8;
+    extern "c" fn bestlineWithHistory(prompt: [*c]const u8, path: [*c]const u8) [*c]u8;
+    extern "c" fn bestlineFree(line: ?*anyopaque) void;
+    extern "c" fn bestlineAddCompletion(completions: *bestlineCompletions, line: [*c]const u8) void;
+    extern "c" fn bestlineSetCompletionCallback(callback: *const fn ([*c]const u8, c_int, *bestlineCompletions) callconv(.c) void) void;
+};
 
 const filetime_unix_offset: i64 = 116444736000000000;
 
@@ -184,7 +189,7 @@ const LineReader = struct {
             else
                 bestline.bestline(prompt.ptr);
             if (line == null) {
-                const errno: std.posix.E = @enumFromInt(std.c._errno().*);
+                const errno: std.posix.E = @fromBackingInt(@intCast(std.c._errno().*));
                 self.last_end = if (errno == .INTR) .interrupted else .eof;
                 return null;
             }
@@ -201,7 +206,7 @@ const LineReader = struct {
     }
 };
 
-const SigParam = if (is_windows) void else @typeInfo(@typeInfo(std.posix.Sigaction.handler_fn).pointer.child).@"fn".params[0].type.?;
+const SigParam = if (is_windows) void else @typeInfo(@typeInfo(std.posix.Sigaction.handler_fn).pointer.child).@"fn".param_types[0].?;
 
 fn onSigint(_: SigParam) callconv(.c) void {}
 
@@ -248,7 +253,7 @@ fn matchingNames(allocator: std.mem.Allocator, interp: *elz.Interpreter, prefix:
     return names.toOwnedSlice(allocator);
 }
 
-fn completionCallback(buf_ptr: [*c]const u8, pos_c: c_int, completions: [*c]bestline.bestlineCompletions) callconv(.c) void {
+fn completionCallback(buf_ptr: [*c]const u8, pos_c: c_int, completions: *bestline.bestlineCompletions) callconv(.c) void {
     const interp = completion_interp orelse return;
     const buf = std.mem.sliceTo(buf_ptr, 0);
     const pos: usize = @min(@as(usize, @intCast(@max(pos_c, 0))), buf.len);
@@ -334,9 +339,9 @@ const Repl = struct {
         else
             "";
         return if (home.len > 0)
-            std.fmt.bufPrintZ(buffer, "{s}/{s}", .{ home, name }) catch null
+            std.mem.printSentinel(buffer, "{s}/{s}", .{ home, name }, 0) catch null
         else
-            std.fmt.bufPrintZ(buffer, "{s}", .{name}) catch null;
+            std.mem.printSentinel(buffer, "{s}", .{name}, 0) catch null;
     }
 
     /// Runs `~/.elzrc` when it exists. Errors are reported and do not stop
@@ -374,7 +379,7 @@ const Repl = struct {
 
         while (true) {
             const prompt: [:0]const u8 = if (self.pending.items.len == 0)
-                std.fmt.bufPrintZ(&self.prompt_buffer, "[{d}]> ", .{self.input_number}) catch "> "
+                std.mem.printSentinel(&self.prompt_buffer, "[{d}]> ", .{self.input_number}, 0) catch "> "
             else
                 "... ";
             const line = (try self.reader.readLine(io, prompt)) orelse {

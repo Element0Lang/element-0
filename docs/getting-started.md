@@ -4,14 +4,16 @@ This guide covers building the interpreter, using the REPL, running script files
 
 ## Prerequisites
 
-Building Elz needs Zig 0.16.0 and GNU Make. The garbage collector is compiled from vendored C sources, so a C compiler must be available, which Zig provides itself.
+Building Elz needs Zig 0.17.0 and GNU Make. The garbage collector is compiled from vendored C sources, so a C compiler must be available, which Zig provides itself.
 
 ```bash
 # Debian and Ubuntu
 sudo apt-get install make
 ```
 
-Zig is available from [ziglang.org/download](https://ziglang.org/download/). The Makefile looks for it at `~/.local/share/zig/0.16.0/zig` and falls back to `zig` on the `PATH`; override the location with `make ZIG=/path/to/zig <target>`.
+With Nix installed, `make shell` enters a development shell from `flake.nix` that provides Zig 0.17.0 and every other tool the Makefile uses, so nothing below needs installing by hand.
+
+Zig is available from [ziglang.org/download](https://ziglang.org/download/). The Makefile looks for it at `~/.local/share/zig/0.17.0/zig` and falls back to `zig` on the `PATH`; override the location with `make ZIG=/path/to/zig <target>`.
 
 ## Build from Source
 

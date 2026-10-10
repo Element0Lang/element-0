@@ -34,7 +34,7 @@ Applies to code comments, documentation pages, commit messages, and chat.
 
 ## Conventions
 
-- Zig 0.16.0. The Makefile looks for it at `~/.local/share/zig/0.16.0/zig` before falling back to `PATH`.
+- Zig 0.17.0. The Makefile looks for it at `~/.local/share/zig/0.17.0/zig` before falling back to `PATH`.
 - `zig fmt` is enforced; `make lint` checks it, `make format` applies it.
 - Zig names are `snake_case` for functions and variables and `PascalCase` for types. Element 0 names are `kebab-case`.
 - `src/elz/unicode.zig` is generated. Edit `tools/gen_unicode.py` or its template and regenerate; never edit the output.

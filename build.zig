@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
                 "-DGC_BUILTIN_ATOMIC", // Use the compiler's built-in atomic functions
             }) catch unreachable;
 
-            if (optimize != .Debug) {
+            if (optimize != .debug) {
                 cflags.append(b.allocator, "-DNDEBUG") catch unreachable;
             }
 
@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate API documentation");
     const doc_install_path = "docs/zig-api";
 
-    b.build_root.handle.createDirPath(b.graph.io, doc_install_path) catch {};
+    b.root.root_dir.handle.createDirPath(b.graph.io, doc_install_path) catch {};
 
     const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
         b.graph.zig_exe,

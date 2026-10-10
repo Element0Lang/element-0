@@ -26,8 +26,8 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -sSfL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz | tar -xJ
-          echo "$PWD/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+          curl -sSfL https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz | tar -xJ
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
 
       - name: Install System Dependencies
         run: |

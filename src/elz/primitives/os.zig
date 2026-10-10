@@ -15,7 +15,7 @@ pub fn getenv(interp: *interpreter.Interpreter, env: *core.Environment, args: co
 
     const name = name_val.string.bytes;
 
-    const name_z = env.allocator.dupeZ(u8, name) catch return ElzError.OutOfMemory;
+    const name_z = env.allocator.dupeSentinel(u8, name, 0) catch return ElzError.OutOfMemory;
     defer env.allocator.free(name_z);
 
     if (std.c.getenv(name_z.ptr)) |value_ptr| {
