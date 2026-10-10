@@ -7,6 +7,7 @@ BUILD_OPTS      = -Doptimize=$(BUILD_TYPE)
 JOBS          ?= $(shell nproc || echo 2)
 SRC_DIR       := src
 EXAMPLES_DIR  := examples
+TOOLS_DIR 	  := tools
 BUILD_DIR     := zig-out
 CACHE_DIR     := .zig-cache
 BINARY_NAME   := example
@@ -139,7 +140,7 @@ clean: ## Remove docs, build artifacts, and cache directories
 
 lint: ## Check code style and formatting of Zig files
 	@echo "Running code style checks..."
-	@$(ZIG) fmt --check $(SRC_DIR) $(EXAMPLES_DIR)
+	@$(ZIG) fmt --check $(SRC_DIR) $(EXAMPLES_DIR) $(TOOLS_DIR)
 
 format: ## Format Zig files
 	@echo "Formatting Zig files..."

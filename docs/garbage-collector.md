@@ -94,3 +94,12 @@ objects, then register interpreter, VM, and native temporary roots. Automatic
 collection needs safe allocation and publication rules. Boehm can be removed
 only after tests force collection throughout those paths. The MCU port also
 needs replacements for the host I/O, clock, and environment calls.
+
+## Pico Hardware Test
+
+The standalone collector passed nine checks on a Pico 2 WH with a 128 KiB heap
+and Zig 0.17.0 safety checks enabled. The checks cover cycles, roots, exhaustion,
+coalescing, alignment, buffers, a 1,500-object chain, 10,000 collection cycles,
+and heap boundaries. The harness is in `tools/pico-gc`, with build and flash
+instructions in its `README.md`. It uses the Pico SDK and does not run the
+Element 0 interpreter.
