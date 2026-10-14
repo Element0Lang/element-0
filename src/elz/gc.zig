@@ -1,126 +1,198 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const mem = std.mem;
+const core = @import("core.zig");
+const Interpreter = @import("interpreter.zig").Interpreter;
+const VM = @import("vm.zig").VM;
+const Heap = @import("managed_heap.zig").Heap;
 
-/// WebAssembly has no way to scan the native stack, which the Boehm collector
-/// depends on, so wasm builds fall back to an arena that never frees. Scripts
-/// that run to completion work unchanged; a long-lived interpreter grows
-/// without bound until `deinit`.
-pub const uses_arena = builtin.cpu.arch.isWasm();
+/// A native root describes a typed Zig local. Keep both at stable addresses
+/// until `deinit`, and keep the interpreter alive for the whole root scope.
+pub const Root = struct {
+    state: ?*State = null,
+    next: ?*Root = null,
+    context: *const anyopaque = undefined,
+    trace: *const fn (*const anyopaque, *Heap.Visitor) void = undefined,
 
-/// The Boehm collector's C API. Only present in native builds.
-pub const c = if (uses_arena) struct {} else @cImport({
-    @cInclude("gc.h");
-});
-
-fn gcAlloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
-    _ = ctx;
-    // Use GC_memalign for proper alignment, but ensure it's configured to scan.
-    const res = c.GC_memalign(mem.Alignment.toByteUnits(alignment), len);
-    if (res == null) return null;
-    return @ptrCast(res);
-}
-
-fn gcResize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = ctx;
-    _ = buf;
-    _ = buf_align;
-    _ = new_len;
-    _ = ret_addr;
-    return false;
-}
-
-fn gcRemap(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    _ = buf;
-    _ = buf_align;
-    _ = new_len;
-    _ = ret_addr;
-    return null;
-}
-
-fn gcFree(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, ret_addr: usize) void {
-    _ = ctx;
-    _ = buf;
-    _ = buf_align;
-    _ = ret_addr;
-}
-
-const GcAllocator = struct {
-    vtable: mem.Allocator.VTable = .{
-        .alloc = gcAlloc,
-        .resize = gcResize,
-        .remap = gcRemap,
-        .free = gcFree,
-    },
-};
-
-var gc_allocator_instance = GcAllocator{};
-
-/// The arena behind wasm builds. Frees are ignored, matching the collector's
-/// allocator contract, and the memory comes back only at `deinit`.
-var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-
-fn arenaAlloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    return arena_instance.allocator().rawAlloc(len, alignment, ret_addr);
-}
-
-fn arenaResize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = ctx;
-    return arena_instance.allocator().rawResize(buf, buf_align, new_len, ret_addr);
-}
-
-fn arenaRemap(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    return arena_instance.allocator().rawRemap(buf, buf_align, new_len, ret_addr);
-}
-
-var arena_vtable: mem.Allocator.VTable = .{
-    .alloc = arenaAlloc,
-    .resize = arenaResize,
-    .remap = arenaRemap,
-    .free = gcFree,
-};
-
-/// Allocates memory that is not subject to garbage collection.
-pub fn allocUncollectable(len: usize) ?*anyopaque {
-    if (uses_arena) {
-        const bytes = arena_instance.allocator().alignedAlloc(u8, .@"16", len) catch return null;
-        return @ptrCast(bytes.ptr);
+    pub fn deinit(self: *Root) void {
+        const state = self.state.?;
+        var link = &state.roots;
+        while (link.* != self) link = &link.*.?.next;
+        link.* = self.next;
+        self.* = .{};
     }
-    return c.GC_malloc_uncollectable(len);
-}
-
-/// A `std.mem.Allocator` whose memory is reclaimed by the collector. Values,
-/// environments, and everything else a script can reach are allocated here.
-/// On wasm this is the arena described above.
-pub const allocator: mem.Allocator = if (uses_arena) .{
-    .ptr = &arena_instance,
-    .vtable = &arena_vtable,
-} else .{
-    .ptr = &gc_allocator_instance,
-    .vtable = &gc_allocator_instance.vtable,
 };
 
-/// Initializes the garbage collector.
-pub fn init() void {
-    if (uses_arena) return;
-    c.GC_init();
-    // Enable recognition of all interior pointers to ensure HashMap internals are scanned
-    c.GC_set_all_interior_pointers(1);
+/// Each interpreter owns one precise heap, including its marking worklist.
+pub const State = struct {
+    heap: Heap,
+    memory: []u8,
+    roots: ?*Root = null,
+    // Weak references keep file handles available for cleanup without retaining ports.
+    file_ports: std.ArrayList(*core.Port) = .empty,
+    paused: usize = 0,
+    next_collection: usize = 1024 * 1024,
+    collections: usize = 0,
+    collect_every_instruction: bool = false,
+
+    pub fn init(limit: usize) !*State {
+        const backing = std.heap.page_allocator;
+        const state = try backing.create(State);
+        errdefer backing.destroy(state);
+        const memory = try backing.alloc(u8, limit);
+        errdefer backing.free(memory);
+        state.* = .{ .heap = try Heap.init(memory), .memory = memory };
+        return state;
+    }
+
+    pub fn deinit(self: *State) void {
+        std.debug.assert(self.roots == null);
+        for (self.file_ports.items) |port| port.close();
+        self.file_ports.deinit(std.heap.page_allocator);
+        std.heap.page_allocator.free(self.memory);
+        std.heap.page_allocator.destroy(self);
+    }
+
+    pub fn protect(self: *State, root: *Root, ptr: anytype) void {
+        const T = @typeInfo(@TypeOf(ptr)).pointer.child;
+        std.debug.assert(root.state == null);
+        root.* = .{ .state = self, .next = self.roots, .context = @ptrCast(ptr), .trace = struct {
+            fn trace(context: *const anyopaque, visitor: *Heap.Visitor) void {
+                const value: *const T = @ptrCast(@alignCast(context));
+                visitor.mark_buffer(context);
+                visit(value.*, visitor);
+            }
+        }.trace };
+        self.roots = root;
+    }
+
+    pub fn collect(self: *State, interp: *Interpreter) void {
+        std.debug.assert(self.paused == 0);
+        self.heap.collect_with_roots(interp, trace_interpreter);
+        // Sweep leaves payload bytes intact until the next allocation.
+        var port_index: usize = 0;
+        while (port_index < self.file_ports.items.len) {
+            const port = self.file_ports.items[port_index];
+            if (self.heap.is_reclaimed(port)) {
+                port.close();
+                _ = self.file_ports.swapRemove(port_index);
+            } else port_index += 1;
+        }
+        var locations = interp.compiler.source_locations.iterator();
+        while (locations.next()) |entry| {
+            if (self.heap.is_reclaimed(@ptrFromInt(entry.key_ptr.*))) {
+                _ = interp.compiler.source_locations.remove(entry.key_ptr.*);
+            }
+        }
+        self.collections += 1;
+        const threshold_limit = self.heap.memory.len - self.heap.memory.len / 4;
+        self.next_collection = @min(threshold_limit, @max(self.heap.bytes_used * 2, self.heap.bytes_used + 256 * 1024));
+    }
+
+    pub fn checkpoint(self: *State, interp: *Interpreter) void {
+        if (self.paused == 0 and (self.collect_every_instruction or self.heap.bytes_used >= self.next_collection)) self.collect(interp);
+    }
+
+    /// A fully rooted primitive may yield between iterations. An enclosing
+    /// native call or compiler scope still prevents collection.
+    pub fn checkpoint_native(self: *State, interp: *Interpreter) void {
+        if (self.paused != 1) return;
+        self.paused = 0;
+        defer self.paused = 1;
+        self.checkpoint(interp);
+    }
+};
+
+fn trace_interpreter(interp: *Interpreter, visitor: *Heap.Visitor) void {
+    visit(interp.root_env, visitor);
+    visit(interp.command_line, visitor);
+    visit(interp.last_error, visitor);
+    visit(interp.compiler, visitor);
+    visit(interp.runtime, visitor);
+    var cursor = interp.gc_state.roots;
+    while (cursor) |root| : (cursor = root.next) {
+        visitor.mark_buffer(root);
+        root.trace(root.context, visitor);
+    }
 }
 
-/// Adds a memory region to the set of roots for garbage collection. A no-op
-/// under the arena, which never collects.
-pub fn add_roots(start: usize, end: usize) void {
-    if (uses_arena) return;
-    c.GC_add_roots(@ptrFromInt(start), @ptrFromInt(end));
+/// Trace typed edges rather than scanning arbitrary bytes or native stacks.
+fn visit(value: anytype, visitor: *Heap.Visitor) void {
+    const T = @TypeOf(value);
+    if (comptime T == std.mem.Allocator or T == std.Io or T == State or T == Interpreter) return;
+    if (comptime T == VM) {
+        visitor.mark_buffer(value.stack.ptr);
+        visitor.mark_buffer(value.frames.ptr);
+        visit(value.stack[0..value.stack_top], visitor);
+        visit(value.frames[0..value.frame_count], visitor);
+        visit(value.open_upvalues, visitor);
+        visit(value.prompts, visitor);
+        return;
+    }
+    if (comptime T == core.Upvalue) {
+        switch (value.state) {
+            .open => |ptr| {
+                visitor.mark_buffer(ptr);
+                visit(ptr.*, visitor);
+            },
+            .closed => |closed| visit(closed, visitor),
+        }
+        visit(value.next, visitor);
+        return;
+    }
+    switch (@typeInfo(T)) {
+        .pointer => |info| {
+            if (comptime info.child == anyopaque or @typeInfo(info.child) == .@"fn" or @typeInfo(info.child) == .@"opaque") return;
+            switch (info.size) {
+                .one => visitor.mark_typed(info.child, value, struct {
+                    fn trace(ptr: *const info.child, v: *Heap.Visitor) void {
+                        visit(ptr.*, v);
+                    }
+                }.trace),
+                .slice => {
+                    if (value.len == 0) return;
+                    visitor.mark_buffer(@ptrCast(value.ptr));
+                    if (comptime @typeInfo(info.child) != .int and @typeInfo(info.child) != .float) {
+                        for (value) |item| visit(item, visitor);
+                    }
+                },
+                .many, .c => visitor.mark_buffer(value),
+            }
+        },
+        .optional => if (value) |present| visit(present, visitor),
+        .error_union => if (value) |present| visit(present, visitor) else |_| {},
+        .array => |info| {
+            if (comptime @typeInfo(info.child) != .int and @typeInfo(info.child) != .float) {
+                for (value) |item| visit(item, visitor);
+            }
+        },
+        .@"union" => |info| {
+            if (comptime info.tag_type != null) switch (value) {
+                inline else => |field| visit(field, visitor),
+            };
+        },
+        .@"struct" => |info| {
+            if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
+                if (value.capacity != 0) visitor.mark_buffer(@ptrCast(value.items.ptr));
+                visit(value.items, visitor);
+            } else if (comptime @hasDecl(T, "iterator") and @hasDecl(T, "capacity")) {
+                var map = value;
+                if (comptime @hasField(T, "unmanaged")) {
+                    visit(map.unmanaged, visitor);
+                } else {
+                    if (map.metadata) |metadata| visitor.mark_buffer(metadata);
+                    var entries = map.iterator();
+                    while (entries.next()) |entry| {
+                        visit(entry.key_ptr.*, visitor);
+                        visit(entry.value_ptr.*, visitor);
+                    }
+                }
+            } else inline for (info.field_names) |name| visit(@field(value, name), visitor);
+        },
+        else => {},
+    }
 }
 
-/// `GcArrayList` is a generic struct that provides a dynamic array.
-/// It uses the C allocator.
+/// A growable list allocated from its owning interpreter.
 pub fn GcArrayList(comptime T: type) type {
     return struct {
         items: []T,
@@ -168,8 +240,6 @@ pub fn GcArrayList(comptime T: type) type {
             }
         }
 
-        /// Resets the list to empty without releasing the backing allocation. Mirrors the
-        /// `std.ArrayList` method of the same name.
         pub fn clearRetainingCapacity(self: *Self) void {
             self.items = self.items.ptr[0..0];
         }

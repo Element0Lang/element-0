@@ -104,7 +104,7 @@ pub fn is_vector(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
 
 /// `list_to_vector` converts a list to a vector.
 /// Syntax: (list->vector list)
-pub fn list_to_vector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_to_vector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const list = args.items[0];
@@ -112,10 +112,14 @@ pub fn list_to_vector(interp: *interpreter.Interpreter, env: *core.Environment, 
     // Count list length
     var length: usize = 0;
     var current = list;
+    var slow = list;
     while (current != .nil) {
         if (current != .pair) return interp.fail(ElzError.InvalidArgument, "list->vector: expected a pair, got {s}", .{core.typeName(current)});
+        try @import("lists.zig").tick(interp, fuel);
         length += 1;
         current = current.pair.cdr;
+        if (length % 2 == 0) slow = slow.pair.cdr;
+        if (current == .pair and current.pair == slow.pair) return interp.fail(ElzError.InvalidArgument, "list->vector: expected a proper list, got a circular list", .{});
     }
 
     const vec = try env.allocator.create(Vector);
@@ -124,6 +128,7 @@ pub fn list_to_vector(interp: *interpreter.Interpreter, env: *core.Environment, 
     current = list;
     var i: usize = 0;
     while (current != .nil) {
+        try @import("lists.zig").tick(interp, fuel);
         items[i] = current.pair.car;
         current = current.pair.cdr;
         i += 1;

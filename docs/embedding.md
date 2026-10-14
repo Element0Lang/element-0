@@ -13,7 +13,43 @@ defer interp.deinit();
 
 `Interpreter.init` takes a `SandboxFlags` value (see [Sandboxing](#sandboxing)), sets up the garbage collector, builds the global environment with every enabled primitive, and loads the standard library. Creating an interpreter is not free (the standard library is compiled on every `init`), so keep one per script context rather than one per evaluation.
 
-All memory that scripts allocate is managed by the Boehm-Demers-Weiser collector. On `wasm32` targets the collector is replaced by an arena that frees nothing until `deinit`, because WebAssembly does not let a program scan its own stack; see [Building for WebAssembly](getting-started.md#building-for-webassembly). The collector scans the stack and registers of the calling thread, so values held in Zig locals stay alive while they are in use. If you store an `Interpreter` or Element 0 values in memory the collector cannot see, such as a heap allocation from a different allocator, register that region with `elz.gc_add_roots`, or allocate it with `elz.gc_allocator` as the REPL does.
+Each interpreter owns a precise, non-moving garbage collector on native and WASI targets.
+`Interpreter.deinit` closes owned file ports and releases its heap.
+Collection also closes file ports that are no longer reachable. Borrowed standard
+streams stay open. Close file ports explicitly when you need prompt cleanup. The default heap limit is 64 MiB, including
+collector metadata. Set `heap_limit_bytes` in `SandboxFlags` to change it.
+Allocation can return `OutOfMemory` when the heap cannot satisfy a request.
+
+Collection runs between VM instructions. It pauses during compilation, macro
+expansion, and native calls, where temporary Zig values may still be in use.
+The rooted `force` primitive can also collect between promise-chain iterations.
+`Interpreter.collect` requests collection from the host and returns
+`CollectionUnsafe` during those phases. A large native operation can exhaust the
+heap before the next collection point.
+
+Zig locals are not discovered automatically. Protect values that must survive
+another evaluation or an explicit collection. Allocate Scheme objects with
+`interp.allocator`, and keep the root and protected local at stable addresses.
+Remove roots before calling `Interpreter.deinit`.
+
+```zig
+var value = try interp.evalString("(cons 1 2)", &fuel);
+var root: elz.Root = .{};
+interp.protect(&root, &value);
+defer root.deinit();
+
+_ = try interp.evalString("(+ 3 4)", &fuel);
+try interp.collect();
+std.debug.assert(value.pair.car.exact_integer == 1);
+```
+
+The root traces the local's current value, so assigning a new value updates what
+it protects. Strings, vectors, closures, and cyclic graphs remain reachable through
+it. Raw byte buffers allocated with `interp.allocator` also need a protected
+owning value or slice. Free calls do not trigger collection.
+
+`Root` and `Interpreter.protect` replace the former `gc_allocator` and
+`gc_add_roots` exports. There is no global managed allocator or native stack scan.
 
 ## Evaluating Code
 
@@ -29,6 +65,9 @@ const value = try interp.evalString("(+ 1 2)", &fuel);
 ```zig
 var forms = try elz.parser.readAll(source, interp.allocator);
 defer forms.deinit(interp.allocator);
+var forms_root: elz.Root = .{};
+interp.protect(&forms_root, &forms);
+defer forms_root.deinit();
 for (forms.items) |form| {
     var fuel: u64 = std.math.maxInt(u64);
     const result = interp.evalForm(&form, &fuel) catch |err| {
@@ -115,7 +154,7 @@ A disabled group's procedures are not bound at all, so a script that calls one g
 
 The time limit is checked every few hundred instructions and inside the list primitives, and starts with the outermost `evalString` or `evalForm` call, so nested evaluation (`eval`, `load`, macro expansion) cannot extend it. Combine it with the fuel counter for a deterministic bound.
 
-Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack. Expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call/cc`, `guard`, and the like) nest at most 600 levels deep.
+Fixed limits protect the host from hostile input and report an error instead of exhausting the native stack. Expressions nest at most 1000 levels in the compiler and 2048 levels in the reader, a JSON document nests at most 512 levels, the VM holds at most 65536 call frames, and primitive callbacks (`map`, `apply`, `call-with-values`, `guard`, and the like) nest at most 600 levels deep.
 
 Scripts run on the calling thread, and an `Interpreter` is not thread-safe. Use one interpreter per thread.
 
@@ -146,4 +185,4 @@ When the filesystem is enabled, scripts can `(load "file.elz")`, `(include "file
 
 ## The REPL as a Reference
 
-`src/main.zig` is a complete embedding. It allocates the interpreter with `gc_allocator`, registers its memory as a GC root, captures `argv` for `command-line`, and runs a read-eval-print loop with `evalForm` and per-form error reporting. The programs in `examples/zig/` are smaller and show the FFI patterns above.
+`src/main.zig` is a complete embedding. It keeps the interpreter on the Zig stack, protects its REPL state and parsed forms with explicit roots, captures `argv` for `command-line`, and runs a read-eval-print loop with `evalForm` and per-form error reporting. The programs in `examples/zig/` are smaller and show the FFI patterns above.

@@ -8,9 +8,14 @@ const is_windows = builtin.os.tag == .windows;
 
 /// Bestline is POSIX-only (it needs poll.h and termios), so the Windows build
 /// reads lines from stdin without editing, history, or completion.
-const bestline = if (is_windows) struct {} else @cImport({
-    @cInclude("bestline.h");
-});
+const bestline = if (is_windows) struct {} else struct {
+    const bestlineCompletions = opaque {};
+    extern "c" fn bestline(prompt: [*c]const u8) [*c]u8;
+    extern "c" fn bestlineWithHistory(prompt: [*c]const u8, path: [*c]const u8) [*c]u8;
+    extern "c" fn bestlineFree(line: ?*anyopaque) void;
+    extern "c" fn bestlineAddCompletion(completions: *bestlineCompletions, line: [*c]const u8) void;
+    extern "c" fn bestlineSetCompletionCallback(callback: *const fn ([*c]const u8, c_int, *bestlineCompletions) callconv(.c) void) void;
+};
 
 const filetime_unix_offset: i64 = 116444736000000000;
 
@@ -100,6 +105,9 @@ fn exec(interpreter: *elz.Interpreter, source: []const u8, source_name: []const 
         return err;
     };
     defer forms.deinit(interpreter.allocator);
+    var forms_root: elz.Root = .{};
+    interpreter.protect(&forms_root, &forms);
+    defer forms_root.deinit();
     if (forms.items.len == 0) return true;
 
     var out: Out = undefined;
@@ -184,7 +192,7 @@ const LineReader = struct {
             else
                 bestline.bestline(prompt.ptr);
             if (line == null) {
-                const errno: std.posix.E = @enumFromInt(std.c._errno().*);
+                const errno: std.posix.E = @fromBackingInt(@intCast(std.c._errno().*));
                 self.last_end = if (errno == .INTR) .interrupted else .eof;
                 return null;
             }
@@ -201,7 +209,7 @@ const LineReader = struct {
     }
 };
 
-const SigParam = if (is_windows) void else @typeInfo(@typeInfo(std.posix.Sigaction.handler_fn).pointer.child).@"fn".params[0].type.?;
+const SigParam = if (is_windows) void else @typeInfo(@typeInfo(std.posix.Sigaction.handler_fn).pointer.child).@"fn".param_types[0].?;
 
 fn onSigint(_: SigParam) callconv(.c) void {}
 
@@ -248,7 +256,7 @@ fn matchingNames(allocator: std.mem.Allocator, interp: *elz.Interpreter, prefix:
     return names.toOwnedSlice(allocator);
 }
 
-fn completionCallback(buf_ptr: [*c]const u8, pos_c: c_int, completions: [*c]bestline.bestlineCompletions) callconv(.c) void {
+fn completionCallback(buf_ptr: [*c]const u8, pos_c: c_int, completions: *bestline.bestlineCompletions) callconv(.c) void {
     const interp = completion_interp orelse return;
     const buf = std.mem.sliceTo(buf_ptr, 0);
     const pos: usize = @min(@as(usize, @intCast(@max(pos_c, 0))), buf.len);
@@ -334,9 +342,9 @@ const Repl = struct {
         else
             "";
         return if (home.len > 0)
-            std.fmt.bufPrintZ(buffer, "{s}/{s}", .{ home, name }) catch null
+            std.mem.printSentinel(buffer, "{s}/{s}", .{ home, name }, 0) catch null
         else
-            std.fmt.bufPrintZ(buffer, "{s}", .{name}) catch null;
+            std.mem.printSentinel(buffer, "{s}", .{name}, 0) catch null;
     }
 
     /// Runs `~/.elzrc` when it exists. Errors are reported and do not stop
@@ -373,8 +381,15 @@ const Repl = struct {
         if (self.load_rc) try self.loadRcFile();
 
         while (true) {
+            if (self.reader.interactive) {
+                if (self.interp.runtime.stdout_port) |port| {
+                    if (port.kind == .file and port.kind.file.persistent and port.line_open) {
+                        try port.writeString("\n");
+                    }
+                }
+            }
             const prompt: [:0]const u8 = if (self.pending.items.len == 0)
-                std.fmt.bufPrintZ(&self.prompt_buffer, "[{d}]> ", .{self.input_number}) catch "> "
+                std.mem.printSentinel(&self.prompt_buffer, "[{d}]> ", .{self.input_number}, 0) catch "> "
             else
                 "... ";
             const line = (try self.reader.readLine(io, prompt)) orelse {
@@ -433,6 +448,9 @@ const Repl = struct {
             },
         };
         defer forms.deinit(interp.allocator);
+        var forms_root: elz.Root = .{};
+        interp.protect(&forms_root, &forms);
+        defer forms_root.deinit();
 
         self.input_number += 1;
         try self.evalForms(forms.items, stdout, true);
@@ -447,6 +465,9 @@ const Repl = struct {
             return;
         };
         defer forms.deinit(interp.allocator);
+        var forms_root: elz.Root = .{};
+        interp.protect(&forms_root, &forms);
+        defer forms_root.deinit();
         try self.evalForms(forms.items, stdout, print_values);
     }
 
@@ -464,6 +485,7 @@ const Repl = struct {
             if (print_values and result != .unspecified) {
                 try elz.write(result, stdout);
                 try stdout.writeAll("\n");
+                if (interp.runtime.stdout_port) |port| port.line_open = false;
                 self.rememberValue(result);
             }
         }
@@ -547,6 +569,9 @@ const Repl = struct {
 fn runRepl(interpreter: *elz.Interpreter, quiet: bool, load_rc: bool) !void {
     var repl = Repl.init(interpreter, quiet, load_rc);
     defer repl.deinit();
+    var repl_root: elz.Root = .{};
+    interpreter.protect(&repl_root, &repl);
+    defer repl_root.deinit();
     try repl.run();
 }
 
@@ -642,7 +667,7 @@ fn rootExec(ctx: chilli.CommandContext) !void {
 var program_name: []const u8 = "elz";
 
 fn setCommandLine(interpreter: *elz.Interpreter, filename: []const u8, args: []const []const u8) !void {
-    const allocator = elz.gc_allocator;
+    const allocator = interpreter.allocator;
     var argv: elz.Value = .nil;
     var i = args.len;
     while (i > 0) {
@@ -661,16 +686,19 @@ fn setCommandLine(interpreter: *elz.Interpreter, filename: []const u8, args: []c
 /// This function initializes the interpreter and the command-line interface.
 /// It can either start a REPL or execute a source file, based on the command-line arguments.
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
-    const interpreter_ptr = try elz.gc_allocator.create(elz.Interpreter);
-    interpreter_ptr.* = try elz.Interpreter.init(.{});
-    elz.gc_add_roots(@intFromPtr(interpreter_ptr), @intFromPtr(interpreter_ptr) + @sizeOf(elz.Interpreter));
+    var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
+    const interpreter_ptr = &interpreter;
+    var program_root: elz.Root = .{};
+    interpreter.protect(&program_root, &program_name);
+    defer program_root.deinit();
 
     interpreter_ptr.last_error.collect_backtrace = true;
 
     {
-        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, elz.gc_allocator);
+        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, interpreter.allocator);
         defer arg_it.deinit();
-        if (arg_it.next()) |argv0| program_name = try elz.gc_allocator.dupe(u8, argv0);
+        if (arg_it.next()) |argv0| program_name = try interpreter.allocator.dupe(u8, argv0);
     }
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;

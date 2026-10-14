@@ -52,6 +52,7 @@ fn increment_list_elements(allocator: std.mem.Allocator, args: []const elz.Value
 
 pub fn main() !void {
     var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
     try elz.define_foreign_func(interpreter.root_env, "increment-list", increment_list_elements);
     const source = "(increment-list (quote (10 20 30)))";
     std.debug.print("Evaluating Element 0 code: {s}\n", .{source});

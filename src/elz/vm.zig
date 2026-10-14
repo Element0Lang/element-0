@@ -7,6 +7,7 @@
 /// a ValueList from the stack and calling the native function directly.
 const std = @import("std");
 const core = @import("core.zig");
+const gc = @import("gc.zig");
 const chunk = @import("chunk.zig");
 const Value = core.Value;
 const ElzError = core.ElzError;
@@ -46,13 +47,10 @@ pub const VM = struct {
     /// Active reset prompts, innermost last. Per-VM, so a shift cannot see a
     /// prompt across a native (nested VM) boundary.
     prompts: std.ArrayListUnmanaged(Prompt) = .empty,
+    /// Identity of the run in progress on this machine (see `runGuarded`).
+    run_id: u64 = 0,
 
-    pub const Prompt = struct {
-        /// Stack height where the reset expression's value belongs.
-        stack_base: usize,
-        /// Frame count at the prompt; the delimited extent lives above it.
-        boundary_frames: usize,
-    };
+    pub const Prompt = core.Prompt;
 
     pub fn init(interp: *@import("interpreter.zig").Interpreter) !VM {
         const alloc = interp.allocator;
@@ -259,8 +257,16 @@ pub const VM = struct {
                 try self.callVmClosure(cl, argc, tail);
             },
             .procedure => |prim| {
+                if (self.interp.runtime.callcc_fn) |callcc| {
+                    if (prim == callcc) return self.captureFull(argc, tail);
+                }
                 var args = try self.buildArgList(argc); // pops args + callee
                 defer args.deinit();
+                var args_root: gc.Root = .{};
+                self.interp.protect(&args_root, &args);
+                defer args_root.deinit();
+                self.interp.gc_state.paused += 1;
+                defer self.interp.gc_state.paused -= 1;
                 // A primitive that calls back into Elz (map, apply, ...) runs
                 // the callee under the same fuel budget as this VM.
                 var unlimited: u64 = std.math.maxInt(u64);
@@ -272,6 +278,8 @@ pub const VM = struct {
             .foreign_procedure => |ff| {
                 var args = try self.buildArgList(argc);
                 defer args.deinit();
+                self.interp.gc_state.paused += 1;
+                defer self.interp.gc_state.paused -= 1;
                 const ffi_mod = @import("ffi.zig");
                 const prev = ffi_mod.active_interp;
                 ffi_mod.active_interp = self.interp;
@@ -284,6 +292,19 @@ pub const VM = struct {
                 if (argc != 1) return ElzError.WrongArgumentCount;
                 const v = self.pop();
                 _ = self.pop(); // the continuation value itself
+                if (cont.full) |full| {
+                    if (full.run_id == self.run_id) return self.reinstateFull(cont, v);
+                    // Aimed at another run. An active ancestor run reinstates
+                    // it when the error reaches it (`runGuarded`); a run that
+                    // has already returned cannot be resumed, because the
+                    // native frames between were never captured.
+                    if (!self.interp.isActiveRun(full.run_id)) {
+                        return self.interp.failWith(ElzError.InvalidArgument, "continuation invoked outside its VM run (continuations do not cross native frames)");
+                    }
+                    self.interp.runtime.cps.pending_cont = cont;
+                    self.interp.runtime.cps.pending_value = v;
+                    return ElzError.EscapeContinuationInvoked;
+                }
                 const base = self.stack_top;
                 try self.ensureStack(base + cont.stack.len + 1);
                 try self.ensureFrames(self.frame_count + cont.frames.len);
@@ -331,6 +352,108 @@ pub const VM = struct {
             else => {
                 return self.interp.failWith(ElzError.NotAFunction, "attempt to call a non-procedure");
             },
+        }
+    }
+
+    /// `(call/cc proc)` reached through the VM: captures the whole state of
+    /// this run as a full continuation and calls `proc` with it. The frames
+    /// stay live, so open upvalues are recorded but not closed; reinstating
+    /// re-opens them onto the restored copy.
+    fn captureFull(self: *VM, argc: u8, tail: bool) ElzError!void {
+        if (argc != 1) return ElzError.WrongArgumentCount;
+        const proc = self.pop();
+        _ = self.pop(); // call/cc itself
+        switch (proc) {
+            .vm_closure, .procedure, .foreign_procedure, .continuation, .escape => {},
+            else => return self.interp.fail(ElzError.InvalidArgument, "call/cc: expected a procedure, got {s}", .{core.typeName(proc)}),
+        }
+        const alloc = self.interp.allocator;
+        var captured: std.ArrayListUnmanaged(core.Continuation.CapturedUpvalue) = .empty;
+        var cur = self.open_upvalues;
+        while (cur) |u| : (cur = u.next) {
+            switch (u.state) {
+                .open => |ptr| {
+                    const offset = (@intFromPtr(ptr) - @intFromPtr(self.stack.ptr)) / @sizeOf(Value);
+                    captured.append(alloc, .{ .upvalue = u, .offset = offset }) catch return ElzError.OutOfMemory;
+                },
+                .closed => {},
+            }
+        }
+        const cont = alloc.create(core.Continuation) catch return ElzError.OutOfMemory;
+        cont.* = .{
+            .stack = alloc.dupe(Value, self.stack[0..self.stack_top]) catch return ElzError.OutOfMemory,
+            .frames = alloc.dupe(CallFrame, self.frames[0..self.frame_count]) catch return ElzError.OutOfMemory,
+            .upvals = captured.toOwnedSlice(alloc) catch return ElzError.OutOfMemory,
+            .full = .{
+                .prompts = alloc.dupe(Prompt, self.prompts.items) catch return ElzError.OutOfMemory,
+                .winders = self.interp.runtime.cps.winders,
+                .run_id = self.run_id,
+            },
+        };
+        try self.push(proc);
+        try self.push(Value{ .continuation = cont });
+        try self.callValue(proc, 1, tail);
+    }
+
+    /// Replaces this run's state with a full continuation and delivers `v` as
+    /// the value of the `call/cc` expression that captured it. Dynamic-wind
+    /// frames are left and re-entered first.
+    fn reinstateFull(self: *VM, cont: *core.Continuation, v: Value) ElzError!void {
+        const full = cont.full.?;
+        try rewind(self.interp, full.winders);
+        // Every closure keeps its current values; the restored copy below is
+        // then re-linked to the ones that were open at capture.
+        self.closeUpvaluesAbove(0);
+        try self.ensureStack(cont.stack.len + 1);
+        try self.ensureFrames(cont.frames.len);
+        @memcpy(self.stack[0..cont.stack.len], cont.stack);
+        self.stack_top = cont.stack.len;
+        if (self.stack_top > self.high_water) self.high_water = self.stack_top;
+        @memcpy(self.frames[0..cont.frames.len], cont.frames);
+        self.frame_count = cont.frames.len;
+        self.prompts.clearRetainingCapacity();
+        try self.prompts.appendSlice(self.interp.allocator, full.prompts);
+        for (cont.upvals) |cu| {
+            self.stack[cu.offset] = cu.upvalue.get();
+            self.reopenUpvalue(cu.upvalue, cu.offset);
+        }
+        try self.push(v);
+    }
+
+    /// Runs the machine until the run's outermost frame returns. A full
+    /// continuation aimed at this run is reinstated and the run continues; any
+    /// other failure first pops the dynamic-wind frames pushed during the run
+    /// and calls their `after` thunks, then propagates.
+    pub fn runGuarded(self: *VM) ElzError!Value {
+        const interp = self.interp;
+        var machine_root: gc.Root = .{};
+        interp.protect(&machine_root, self);
+        defer machine_root.deinit();
+        interp.runtime.run_counter += 1;
+        self.run_id = interp.runtime.run_counter;
+        interp.runtime.active_runs.append(interp.allocator, self.run_id) catch return ElzError.OutOfMemory;
+        defer _ = interp.runtime.active_runs.pop();
+        const entry_winders = interp.runtime.cps.winders;
+        var winders_root: gc.Root = .{};
+        interp.protect(&winders_root, &entry_winders);
+        defer winders_root.deinit();
+        while (true) {
+            const result = self.run() catch |err| {
+                if (err == ElzError.EscapeContinuationInvoked) {
+                    if (interp.runtime.cps.pending_cont) |cont| {
+                        if (cont.full.?.run_id == self.run_id) {
+                            interp.runtime.cps.pending_cont = null;
+                            const v = interp.runtime.cps.pending_value;
+                            interp.runtime.cps.pending_value = .unspecified;
+                            try self.reinstateFull(cont, v);
+                            continue;
+                        }
+                    }
+                }
+                unwindWinders(interp, entry_winders);
+                return err;
+            };
+            return result;
         }
     }
 
@@ -432,6 +555,7 @@ pub const VM = struct {
 
     pub fn run(self: *VM) ElzError!Value {
         while (true) {
+            self.interp.gc_state.checkpoint(self.interp);
             if (self.frame_count == 0) return self.pop();
             const frame = &self.frames[self.frame_count - 1];
             const proto = frame.closure.proto;
@@ -471,11 +595,11 @@ pub const VM = struct {
                     self.stack[frame.stack_base + instr.a] = self.peek(0);
                 },
                 .load_upval => {
-                    const uv = frame.closure.upvals[instr.a];
+                    const uv = frame.closure.upvals[instr.a].?;
                     try self.push(uv.get());
                 },
                 .store_upval => {
-                    const uv = frame.closure.upvals[instr.a];
+                    const uv = frame.closure.upvals[instr.a].?;
                     uv.set(self.peek(0));
                 },
                 .load_global => {
@@ -647,7 +771,8 @@ pub const VM = struct {
                     const sub_proto = proto.sub_protos.items[instr.bx];
                     const upval_count = sub_proto.upval_descs.items.len;
                     const cl = try self.interp.allocator.create(VmClosure);
-                    const upvals = try self.interp.allocator.alloc(*Upvalue, upval_count);
+                    const upvals = try self.interp.allocator.alloc(?*Upvalue, upval_count);
+                    @memset(upvals, null);
                     cl.* = .{ .proto = sub_proto, .upvals = upvals };
                     try self.push(Value{ .vm_closure = cl });
                 },
@@ -661,7 +786,7 @@ pub const VM = struct {
                 .capture_upval => {
                     // Follows make_closure: a=parent_upval_index, b=upvalue_fill_index.
                     const cl = self.peek(0).vm_closure;
-                    const parent_uv = frame.closure.upvals[instr.a];
+                    const parent_uv = frame.closure.upvals[instr.a].?;
                     cl.upvals[instr.b] = parent_uv;
                 },
                 .close_upval => {
@@ -695,26 +820,19 @@ pub const VM = struct {
                     try self.push(Value{ .vector = vec });
                 },
                 .list_to_vector => {
-                    const list = self.pop();
-                    var count: usize = 0;
-                    var cur = list;
-                    while (cur == .pair) : (cur = cur.pair.cdr) count += 1;
-                    if (cur != .nil) return ElzError.InvalidArgument;
-                    const vec = try self.interp.allocator.create(core.Vector);
-                    const items = try self.interp.allocator.alloc(Value, count);
-                    cur = list;
-                    var i: usize = 0;
-                    while (cur == .pair) : (cur = cur.pair.cdr) {
-                        items[i] = cur.pair.car;
-                        i += 1;
-                    }
-                    vec.* = .{ .items = items };
-                    try self.push(Value{ .vector = vec });
+                    var args = core.ValueList.init(self.interp.allocator);
+                    args.items = self.stack[self.stack_top - 1 .. self.stack_top];
+                    var unlimited: u64 = std.math.maxInt(u64);
+                    const result = try @import("primitives/vectors.zig").list_to_vector(self.interp, self.interp.root_env, args, self.fuel orelse &unlimited);
+                    _ = self.pop();
+                    try self.push(result);
                 },
                 .append_lists => {
-                    const second = self.pop();
-                    const first = self.pop();
-                    const result = try appendLists(self.interp.allocator, first, second);
+                    var args = core.ValueList.init(self.interp.allocator);
+                    args.items = self.stack[self.stack_top - 2 .. self.stack_top];
+                    var unlimited: u64 = std.math.maxInt(u64);
+                    const result = try @import("primitives/lists.zig").append(self.interp, self.interp.root_env, args, self.fuel orelse &unlimited);
+                    self.stack_top -= 2;
                     try self.push(result);
                 },
                 .values_pack => {
@@ -764,7 +882,12 @@ pub const VM = struct {
         // Start with an empty working stack. The body code is responsible for
         // initialising its own locals (letrec emits load_false, let pushes init values).
         self.stack_top = 0;
-        const result = self.run() catch |err| {
+        const result = self.runGuarded() catch |err| {
+            // A continuation jump on its way to an outer run is not a failure.
+            if (err == ElzError.EscapeContinuationInvoked) {
+                self.closeUpvaluesAbove(0);
+                return err;
+            }
             // Record the source location of the failing instruction. Keep the
             // innermost location when nested VM runs propagate the error.
             if (self.frame_count > 0 and self.interp.last_error.line == null) {
@@ -809,6 +932,7 @@ const VM_POOL_LIMIT = 8;
 
 fn acquireVm(interp: *@import("interpreter.zig").Interpreter) ElzError!*VM {
     if (interp.runtime.vm_pool.pop()) |machine| {
+        machine.interp = interp;
         machine.reset();
         return machine;
     }
@@ -841,21 +965,6 @@ fn isTruthy(v: Value) bool {
     };
 }
 
-fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) !Value {
-    if (list1 != .pair) return list2;
-    var head: ?*core.Pair = null;
-    var tail: ?*core.Pair = null;
-    var cur = list1;
-    while (cur == .pair) : (cur = cur.pair.cdr) {
-        const new_pair = try allocator.create(core.Pair);
-        new_pair.* = .{ .car = cur.pair.car, .cdr = .nil };
-        if (tail) |t| t.cdr = Value{ .pair = new_pair } else head = new_pair;
-        tail = new_pair;
-    }
-    tail.?.cdr = list2;
-    return Value{ .pair = head.? };
-}
-
 /// Entry point that can be used to run a vm_closure with a given argument list.
 pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosure, args: core.ValueList) core.ElzError!Value {
     const vm_inst = try acquireVm(interp);
@@ -879,6 +988,15 @@ pub fn runFromEval(interp: *@import("interpreter.zig").Interpreter, cl: *VmClosu
 /// VM's frame eventually exits, `closeUpvaluesAbove` will overwrite the open state
 /// with a closed copy — leaving the pointer dangling but the cell valid.
 pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, args: core.ValueList, fuel: ?*u64) ElzError!Value {
+    var args_root: gc.Root = .{};
+    interp.protect(&args_root, &args);
+    defer args_root.deinit();
+    var proc_root: gc.Root = .{};
+    interp.protect(&proc_root, &proc);
+    defer proc_root.deinit();
+    // shortcut: collection pauses across native calls until their locals are rooted.
+    interp.gc_state.paused += 1;
+    defer interp.gc_state.paused -= 1;
     // Native callees need no VM frame, and this path has no argument limit.
     switch (proc) {
         .procedure => |prim| {
@@ -936,10 +1054,72 @@ pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, ar
         const argc: u8 = @intCast(args.items.len);
         try machine.callValue(machine.peek(argc), argc, false);
     }
-    const result = machine.run();
+    const result = machine.runGuarded();
     // Close all open upvalues before the stack is reused.
     machine.closeUpvaluesAbove(0);
     return result;
+}
+
+/// Pops dynamic-wind frames until `target` is innermost, running each `after`
+/// thunk. Errors from those thunks are dropped, as the run is already failing.
+fn unwindWinders(interp: *@import("interpreter.zig").Interpreter, target: ?*core.Winder) void {
+    while (interp.runtime.cps.winders != target) {
+        const w = interp.runtime.cps.winders orelse break;
+        interp.runtime.cps.winders = w.next;
+        var no_args = core.ValueList.init(interp.allocator);
+        defer no_args.deinit();
+        _ = callProc(interp, w.after, no_args, null) catch {};
+    }
+}
+
+fn winderDepth(w: ?*core.Winder) usize {
+    var n: usize = 0;
+    var cur = w;
+    while (cur) |x| : (cur = x.next) n += 1;
+    return n;
+}
+
+/// The innermost dynamic-wind frame shared by both chains, or null.
+fn commonWinder(a: ?*core.Winder, b: ?*core.Winder) ?*core.Winder {
+    var x = a;
+    var y = b;
+    var dx = winderDepth(x);
+    var dy = winderDepth(y);
+    while (dx > dy) : (dx -= 1) x = x.?.next;
+    while (dy > dx) : (dy -= 1) y = y.?.next;
+    while (x != y) {
+        x = x.?.next;
+        y = y.?.next;
+    }
+    return x;
+}
+
+/// Moves the dynamic-wind state from the current chain to `target`: the
+/// `after` thunks of frames being left run innermost first, then the `before`
+/// thunks of frames being entered run outermost first, each in the dynamic
+/// environment just outside its own frame.
+fn rewind(interp: *@import("interpreter.zig").Interpreter, target: ?*core.Winder) ElzError!void {
+    const common = commonWinder(interp.runtime.cps.winders, target);
+    var no_args = core.ValueList.init(interp.allocator);
+    defer no_args.deinit();
+    while (interp.runtime.cps.winders != common) {
+        const w = interp.runtime.cps.winders.?;
+        interp.runtime.cps.winders = w.next;
+        _ = try callProc(interp, w.after, no_args, null);
+    }
+    var entering: std.ArrayListUnmanaged(*core.Winder) = .empty;
+    defer entering.deinit(interp.allocator);
+    var cur = target;
+    while (cur != common) : (cur = cur.?.next) {
+        entering.append(interp.allocator, cur.?) catch return ElzError.OutOfMemory;
+    }
+    var i = entering.items.len;
+    while (i > 0) {
+        i -= 1;
+        const w = entering.items[i];
+        _ = try callProc(interp, w.before, no_args, null);
+        interp.runtime.cps.winders = w;
+    }
 }
 
 // ---------------------------------------------------------------------------

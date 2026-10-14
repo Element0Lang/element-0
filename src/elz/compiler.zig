@@ -2082,6 +2082,8 @@ pub const Compiler = struct {
         env: *core.Environment,
         fuel: *u64,
     ) ElzError!*FuncProto {
+        interp.gc_state.paused += 1;
+        defer interp.gc_state.paused -= 1;
         var c = try Compiler.init(allocator, interp, "<top>", null);
         defer c.deinit();
 

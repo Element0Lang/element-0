@@ -74,7 +74,7 @@ pub fn time_to_components(interp: *interpreter.Interpreter, env: *core.Environme
     const month_day = year_day.calculateMonthDay();
 
     const year = year_day.year;
-    const month = @as(u8, @intFromEnum(month_day.month)); // 1-12
+    const month = @as(u8, @backingInt(month_day.month)); // 1-12
     const day = month_day.day_index + 1; // 1-31
     const hour = day_seconds.getHoursIntoDay();
     const minute = day_seconds.getMinutesIntoHour();

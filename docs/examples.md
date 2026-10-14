@@ -60,6 +60,7 @@ fn zig_pow(base: f64, exp: f64) f64 {
 
 pub fn main() !void {
     var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
     try elz.define_foreign_func(interpreter.root_env, "zig-pow", zig_pow);
     var fuel: u64 = 1000;
     const result = try interpreter.evalString("(zig-pow 2 8)", &fuel);
@@ -79,7 +80,6 @@ A generator built from delimited continuations:
 
 ```scheme
 (define (make-generator lst)
-  (define return #f)
   (define (next)
     (reset
       (for-each (lambda (x) (shift k (set! next (lambda () (k #f))) x)) lst)

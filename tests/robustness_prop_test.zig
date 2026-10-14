@@ -22,7 +22,7 @@ test "property: reading arbitrary text never crashes" {
                 forms.deinit(arena.allocator());
             }
         }.property,
-        .{ .num_runs = 500 },
+        .{ .num_runs = 500, .seed = 1301 },
     );
 }
 
@@ -33,13 +33,13 @@ test "property: evaluating arbitrary text never crashes" {
         gen.string(.{ .min_len = 0, .max_len = 30, .charset = .custom, .custom_chars = reader_chars }),
         struct {
             fn property(text: []const u8) !void {
-                var interp = elz.Interpreter.init(.{ .enable_filesystem = false, .enable_process = false }) catch return;
+                var interp = try elz.Interpreter.init(.{ .enable_filesystem = false, .enable_process = false });
                 defer interp.deinit();
                 var fuel: u64 = 20_000;
                 _ = interp.evalString(text, &fuel) catch return;
             }
         }.property,
-        .{ .num_runs = 200 },
+        .{ .num_runs = 200, .seed = 1302 },
     );
 }
 
@@ -50,7 +50,7 @@ test "property: json-deserialize of arbitrary text never crashes" {
         gen.string(.{ .min_len = 0, .max_len = 40, .charset = .custom, .custom_chars = "[]{}:,\"\\utrflsn0123456789.eE+- " }),
         struct {
             fn property(text: []const u8) !void {
-                var interp = elz.Interpreter.init(.{}) catch return;
+                var interp = try elz.Interpreter.init(.{});
                 defer interp.deinit();
                 // Pass the text through a string port so quoting inside it does not matter.
                 var buf: [256]u8 = undefined;
@@ -72,7 +72,7 @@ test "property: json-deserialize of arbitrary text never crashes" {
                 _ = interp.evalString(buf[0..pos], &fuel) catch return;
             }
         }.property,
-        .{ .num_runs = 500 },
+        .{ .num_runs = 500, .seed = 1303 },
     );
 }
 
@@ -83,7 +83,7 @@ test "property: JSON string round-trip" {
         gen.string(.{ .min_len = 0, .max_len = 30, .charset = .printable }),
         struct {
             fn property(text: []const u8) !void {
-                var interp = elz.Interpreter.init(.{}) catch return;
+                var interp = try elz.Interpreter.init(.{});
                 defer interp.deinit();
                 // Build (json-deserialize (json-serialize "<text>")) with Scheme escaping.
                 var buf: [256]u8 = undefined;
@@ -102,11 +102,11 @@ test "property: JSON string round-trip" {
                 @memcpy(buf[pos .. pos + 3], "\"))");
                 pos += 3;
                 var fuel: u64 = 20_000;
-                const result = interp.evalString(buf[0..pos], &fuel) catch return error.TestUnexpectedResult;
+                const result = try interp.evalString(buf[0..pos], &fuel);
                 if (result != .string) return error.TestUnexpectedResult;
                 if (!std.mem.eql(u8, result.string.bytes, text)) return error.TestUnexpectedResult;
             }
         }.property,
-        .{ .num_runs = 300 },
+        .{ .num_runs = 300, .seed = 1304 },
     );
 }

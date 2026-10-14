@@ -12,11 +12,8 @@ pub const core = @import("elz/core.zig");
 pub const Value = core.Value;
 pub const Environment = core.Environment;
 pub const ElzError = @import("elz/errors.zig").ElzError;
-// GC utilities for embedders that allocate the Interpreter on the managed heap
-// (like the REPL does); most embedders do not need these.
-const _gc = @import("elz/gc.zig");
-pub const gc_allocator: @import("std").mem.Allocator = _gc.allocator;
-pub const gc_add_roots = _gc.add_roots;
+/// Protects typed Zig locals through `Interpreter.protect` until `deinit`.
+pub const Root = @import("elz/gc.zig").Root;
 
 // Helper functions for interacting with Elz values.
 pub const write = @import("elz/writer.zig").write;
@@ -38,6 +35,7 @@ pub const special_form_names = @import("elz/compiler.zig").special_form_names;
 // transitively imports `core`, `interpreter`, `compiler`, `vm`, and the primitives, so the
 // full suite of inline unit tests runs together.
 test {
+    _ = @import("elz/managed_heap.zig");
     _ = @import("elz/core.zig");
     _ = @import("elz/parser.zig");
     _ = @import("elz/writer.zig");

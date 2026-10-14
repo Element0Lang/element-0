@@ -8,7 +8,7 @@ const predicates = @import("predicates.zig");
 
 /// Charges one unit of work while a primitive walks a list, so a circular
 /// list or a very long one stays inside the caller's fuel and time budget.
-fn tick(interp: *interpreter.Interpreter, fuel: *u64) ElzError!void {
+pub fn tick(interp: *interpreter.Interpreter, fuel: *u64) ElzError!void {
     try interp.checkTimeBudget();
     if (fuel.* == 0) return ElzError.ExecutionBudgetExceeded;
     fuel.* -= 1;
@@ -134,6 +134,8 @@ pub fn append(interp: *interpreter.Interpreter, env: *core.Environment, args: co
     var result_tail: ?*core.Pair = null;
     for (args.items[0 .. args.items.len - 1]) |list_val| {
         var current_node = list_val;
+        var slow = list_val;
+        var steps: usize = 0;
         while (current_node != .nil) {
             try tick(interp, fuel);
             const p_node = switch (current_node) {
@@ -152,6 +154,9 @@ pub fn append(interp: *interpreter.Interpreter, env: *core.Environment, args: co
                 result_tail = new_pair;
             }
             current_node = p_node.cdr;
+            steps += 1;
+            if (steps % 2 == 0) slow = slow.pair.cdr;
+            if (current_node == .pair and current_node.pair == slow.pair) return interp.fail(ElzError.InvalidArgument, "append: expected a proper list, got a circular list", .{});
         }
     }
     const last_list = args.items[args.items.len - 1];
@@ -338,12 +343,13 @@ pub fn set_car(interp: *interpreter.Interpreter, _: *core.Environment, args: cor
 
 /// `list_set_bang` stores a value in element k of a list, in place.
 /// Syntax: (list-set! list k obj)
-pub fn list_set_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
+pub fn list_set_bang(interp: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, fuel: *u64) ElzError!Value {
     if (args.items.len != 3) return ElzError.WrongArgumentCount;
     if (args.items[1] != .exact_integer or args.items[1].exact_integer < 0) return ElzError.InvalidArgument;
     var cur = args.items[0];
     var k = args.items[1].exact_integer;
     while (k > 0) : (k -= 1) {
+        try tick(interp, fuel);
         if (cur != .pair) return interp.fail(ElzError.InvalidArgument, "list-set!: expected a pair, got {s}", .{core.typeName(cur)});
         cur = cur.pair.cdr;
     }

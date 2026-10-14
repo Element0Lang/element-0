@@ -1,12 +1,13 @@
 # ################################################################################
 # # Configuration and Variables
 # ################################################################################
-ZIG    ?= $(shell echo ~/.local/share/zig/0.16.0/zig || which zig)
+ZIG    ?= $(shell echo ~/.local/share/zig/0.17.0/zig || which zig)
 BUILD_TYPE    ?= Debug
 BUILD_OPTS      = -Doptimize=$(BUILD_TYPE)
 JOBS          ?= $(shell nproc || echo 2)
 SRC_DIR       := src
 EXAMPLES_DIR  := examples
+TOOLS_DIR 	  := tools
 BUILD_DIR     := zig-out
 CACHE_DIR     := .zig-cache
 BINARY_NAME   := example
@@ -31,7 +32,7 @@ SHELL         := /usr/bin/env bash
 # Targets
 ################################################################################
 
-.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs install-deps setup-hooks test-hooks
+.PHONY: all help build rebuild run run-elz bench test test-elz test-conformance test-prop test-integ test-all release clean lint format docs serve-docs shell install-deps setup-hooks test-hooks
 .DEFAULT_GOAL := help
 
 help: ## Show the help messages for all targets
@@ -139,7 +140,7 @@ clean: ## Remove docs, build artifacts, and cache directories
 
 lint: ## Check code style and formatting of Zig files
 	@echo "Running code style checks..."
-	@$(ZIG) fmt --check $(SRC_DIR) $(EXAMPLES_DIR)
+	@$(ZIG) fmt --check $(SRC_DIR) $(EXAMPLES_DIR) $(TOOLS_DIR)
 
 format: ## Format Zig files
 	@echo "Formatting Zig files..."
@@ -157,6 +158,10 @@ serve-docs: ## Serve the documentation site locally with live reload
 	@$(ZIG) build docs
 	@uv sync --extra docs
 	@uv run mkdocs serve
+
+shell: ## Enter the Nix development shell (defined in flake.nix)
+	@command -v nix >/dev/null 2>&1 || { echo "nix is not installed; see https://nixos.org/download"; exit 1; }
+	@nix develop
 
 install-deps: ## Install system dependencies (for Debian-based systems)
 	@echo "Installing system dependencies..."

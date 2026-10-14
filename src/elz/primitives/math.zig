@@ -171,7 +171,7 @@ fn numMul(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
 }
 
 fn numDiv(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
-    if (a == .bigint or b == .bigint) {
+    if (isExactKind(a) and isExactKind(b) and (a == .bigint or b == .bigint)) {
         if (!bigint.isInteger(a) or !bigint.isInteger(b)) return ElzError.Overflow;
         // An exact quotient stays an integer; anything else would need a
         // rational with big components, which this build does not have.
@@ -179,6 +179,7 @@ fn numDiv(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
         if (d.r == .exact_integer and d.r.exact_integer == 0) return d.q;
         return ElzError.Overflow;
     }
+    if (a == .exact_integer and a.exact_integer == std.math.minInt(i64) and b == .exact_integer and b.exact_integer == -1) return bigint.negate(alloc, a);
     if (isExactKind(a) and isExactKind(b)) {
         const ap = ratParts(a);
         const bp = ratParts(b);
@@ -201,7 +202,7 @@ fn numDiv(a: Value, b: Value, alloc: std.mem.Allocator) ElzError!Value {
     }
     // R7RS: dividing by an exact zero is an error, but an inexact zero
     // divisor yields an infinity or NaN.
-    if (isExactKind(b) and ratParts(b).n == 0) return ElzError.DivisionByZero;
+    if (isExactKind(b) and toF64(b) == 0) return ElzError.DivisionByZero;
     return Value{ .number = toF64(a) / toF64(b) };
 }
 
@@ -1335,6 +1336,7 @@ test "math primitives" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
     var interp_stub: interpreter.Interpreter = .{
+        .gc_state = undefined,
         .allocator = allocator,
         .io = std.Io.Threaded.global_single_threaded.io(),
         .root_env = undefined,

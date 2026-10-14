@@ -16,13 +16,13 @@ test "property: JSON number roundtrip" {
         struct {
             fn property(n: i32) !void {
                 var buf: [64]u8 = undefined;
-                const expr = std.fmt.bufPrint(&buf, "(json-deserialize (json-serialize {d}))", .{n}) catch return;
+                const expr = try std.fmt.bufPrint(&buf, "(json-deserialize (json-serialize {d}))", .{n});
 
-                var interp = elz.Interpreter.init(.{}) catch return;
+                var interp = try elz.Interpreter.init(.{});
                 defer interp.deinit();
 
                 var fuel: u64 = 10000;
-                const result = interp.evalString(expr, &fuel) catch return;
+                const result = try interp.evalString(expr, &fuel);
 
                 switch (result) {
                     .exact_integer => |i| {
@@ -36,7 +36,7 @@ test "property: JSON number roundtrip" {
                 }
             }
         }.property,
-        .{ .num_runs = 100 },
+        .{ .num_runs = 100, .seed = 1101 },
     );
 }
 
@@ -54,16 +54,16 @@ test "property: JSON boolean roundtrip" {
             fn property(b: bool) !void {
                 const expr = if (b) "(json-deserialize (json-serialize #t))" else "(json-deserialize (json-serialize #f))";
 
-                var interp = elz.Interpreter.init(.{}) catch return;
+                var interp = try elz.Interpreter.init(.{});
                 defer interp.deinit();
 
                 var fuel: u64 = 10000;
-                const result = interp.evalString(expr, &fuel) catch return;
+                const result = try interp.evalString(expr, &fuel);
 
                 if (result != .boolean) return error.TestUnexpectedResult;
                 if (result.boolean != b) return error.TestUnexpectedResult;
             }
         }.property,
-        .{ .num_runs = 50 },
+        .{ .num_runs = 50, .seed = 1102 },
     );
 }

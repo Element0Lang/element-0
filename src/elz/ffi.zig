@@ -56,19 +56,7 @@ pub fn Caster(comptime T: type) type {
                     break :blk ElzError.InvalidArgument;
                 },
                 .int => |int_info| switch (v) {
-                    .exact_integer => |i| blk: {
-                        const min_val: i128 = if (int_info.signedness == .signed)
-                            -(@as(i128, 1) << @intCast(int_info.bits - 1))
-                        else
-                            0;
-                        const max_val: i128 = if (int_info.signedness == .signed)
-                            (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1
-                        else
-                            (@as(i128, 1) << @intCast(int_info.bits)) - 1;
-                        const wide: i128 = i;
-                        if (wide < min_val or wide > max_val) break :blk ElzError.InvalidArgument;
-                        break :blk @intCast(i);
-                    },
+                    .exact_integer => |i| std.math.cast(T, i) orelse ElzError.InvalidArgument,
                     .number => |n| {
                         if (std.math.isNan(n) or std.math.isInf(n)) {
                             return ElzError.InvalidArgument;
@@ -76,14 +64,9 @@ pub fn Caster(comptime T: type) type {
                         if (@floor(n) != n) {
                             return ElzError.InvalidArgument;
                         }
-                        const min_val: f64 = if (int_info.signedness == .signed)
-                            -@as(f64, @floatFromInt(@as(i128, 1) << int_info.bits - 1))
-                        else
-                            0;
-                        const max_val: f64 = @floatFromInt((@as(u128, 1) << int_info.bits) - 1);
-                        if (n < min_val or n > max_val) {
-                            return ElzError.InvalidArgument;
-                        }
+                        const upper: f64 = @exp2(@as(f64, @floatFromInt(int_info.bits - @intFromBool(int_info.signedness == .signed))));
+                        const lower: f64 = if (int_info.signedness == .signed) -upper else 0;
+                        if (n < lower or n >= upper) return ElzError.InvalidArgument;
                         return @intFromFloat(n);
                     },
                     else => ElzError.InvalidArgument,
@@ -122,11 +105,11 @@ pub fn Caster(comptime T: type) type {
                         else => return ElzError.InvalidArgument,
                     };
                     var result: T = undefined;
-                    inline for (struct_info.fields) |field| {
-                        if (hm.get(field.name)) |field_val| {
-                            @field(result, field.name) = try Caster(field.type).cast(field_val);
-                        } else if (comptime field.defaultValue()) |dv| {
-                            @field(result, field.name) = dv;
+                    inline for (struct_info.field_names, struct_info.field_types, struct_info.field_attrs) |name, field_type, attrs| {
+                        if (hm.get(name)) |field_val| {
+                            @field(result, name) = try Caster(field_type).cast(field_val);
+                        } else if (comptime attrs.defaultValue(field_type)) |dv| {
+                            @field(result, name) = dv;
                         } else {
                             return ElzError.InvalidArgument;
                         }
@@ -161,14 +144,14 @@ pub fn Caster(comptime T: type) type {
 pub fn makeForeignFunc(comptime F: anytype) *const fn (env: *core.Environment, args: core.ValueList) anyerror!core.Value {
     const FInfo = @typeInfo(@TypeOf(F)).@"fn";
 
-    if (FInfo.params.len == 2 and
-        FInfo.params[0].type.? == std.mem.Allocator and
-        FInfo.params[1].type.? == []const core.Value)
+    if (FInfo.param_types.len == 2 and
+        FInfo.param_types[0].? == std.mem.Allocator and
+        FInfo.param_types[1].? == []const core.Value)
     {
         return ffi_wrap_variadic(F, FInfo);
     }
 
-    return switch (FInfo.params.len) {
+    return switch (FInfo.param_types.len) {
         0 => ffi_wrap_0(F, FInfo),
         1 => ffi_wrap_1(F, FInfo),
         2 => ffi_wrap_2(F, FInfo),
@@ -206,7 +189,7 @@ fn ffi_wrap_0(comptime F: anytype, comptime FInfo: std.builtin.Type.Fn) *const f
 /// - `FInfo`: The function type information.
 /// - `return`: A pointer to the wrapped function.
 fn ffi_wrap_1(comptime F: anytype, comptime FInfo: std.builtin.Type.Fn) *const fn (env: *core.Environment, args: core.ValueList) anyerror!core.Value {
-    const P1 = FInfo.params[0].type.?;
+    const P1 = FInfo.param_types[0].?;
     const call = struct {
         fn call(env: *core.Environment, args: core.ValueList) anyerror!core.Value {
             if (args.items.len != 1) return ElzError.WrongArgumentCount;
@@ -231,8 +214,8 @@ fn ffi_wrap_1(comptime F: anytype, comptime FInfo: std.builtin.Type.Fn) *const f
 /// - `FInfo`: The function type information.
 /// - `return`: A pointer to the wrapped function.
 fn ffi_wrap_2(comptime F: anytype, comptime FInfo: std.builtin.Type.Fn) *const fn (env: *core.Environment, args: core.ValueList) anyerror!core.Value {
-    const P1 = FInfo.params[0].type.?;
-    const P2 = FInfo.params[1].type.?;
+    const P1 = FInfo.param_types[0].?;
+    const P2 = FInfo.param_types[1].?;
     const call = struct {
         fn call(env: *core.Environment, args: core.ValueList) anyerror!core.Value {
             if (args.items.len != 2) return ElzError.WrongArgumentCount;
@@ -304,9 +287,9 @@ fn valueFromNative(allocator: std.mem.Allocator, value: anytype) core.Value {
         .@"struct" => |struct_info| {
             const hm_ptr = allocator.create(core.HashMap) catch return core.Value.nil;
             hm_ptr.* = core.HashMap.init(allocator);
-            inline for (struct_info.fields) |field| {
-                const field_val = valueFromNative(allocator, @field(value, field.name));
-                hm_ptr.put(field.name, field_val) catch {
+            inline for (struct_info.field_names) |name| {
+                const field_val = valueFromNative(allocator, @field(value, name));
+                hm_ptr.put(name, field_val) catch {
                     hm_ptr.deinit();
                     allocator.destroy(hm_ptr);
                     return core.Value.nil;
@@ -647,4 +630,16 @@ test "makeForeignFunc struct param" {
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.number, 0.001);
+}
+
+test "Caster integer bounds reject values before conversion" {
+    const testing = std.testing;
+    try testing.expectError(ElzError.InvalidArgument, Caster(i8).cast(.{ .number = 128.0 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(i8).cast(.{ .number = -129.0 }));
+    try testing.expectEqual(@as(i8, 127), try Caster(i8).cast(.{ .number = 127.0 }));
+    try testing.expectEqual(@as(i8, -128), try Caster(i8).cast(.{ .number = -128.0 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(i64).cast(.{ .number = 0x1p63 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(u64).cast(.{ .number = 0x1p64 }));
+    try testing.expectEqual(@as(i128, 42), try Caster(i128).cast(.{ .exact_integer = 42 }));
+    try testing.expectEqual(@as(u128, 42), try Caster(u128).cast(.{ .exact_integer = 42 }));
 }
