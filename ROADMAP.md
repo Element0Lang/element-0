@@ -202,9 +202,9 @@ the capture point.
 * [x] R7RS conformance suite: Chibi Scheme's r7rs-tests.scm is vendored under
   `tests/vendor/` and runs via `make test-conformance`. Current score: all 977
   checks pass. The suite reports but does not gate the build.
-* [ ] Documentation: a language reference covering the lexical syntax, special forms,
-  standard procedures, extensions, and deviations (removed pending a rewrite). The
-  embedding API is covered by the generated API documentation.
+* [x] Documentation: a language reference covering the lexical syntax, special forms,
+  standard procedures, extensions, and deviations. The embedding API is covered
+  by the embedding guide and the generated API documentation.
 * [ ] Performance: a benchmark suite tracked over time (see `benches/`).
 * [x] WebAssembly: the library and examples build for `wasm32-wasi`, with an
   interpreter-owned precise collector and heap teardown.

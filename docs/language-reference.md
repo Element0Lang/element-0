@@ -47,7 +47,7 @@ The core forms follow R7RS-small.
 * Definitions: `define`, `define-values`, `define-syntax`,
   `define-record-type`, `define-library`, and the Elz-specific
   `define-macro`.
-* Binding: `let`, `let*`, `letrec`, named `let`, `let-values`,
+* Binding: `let`, `let*`, `letrec`, `letrec*`, named `let`, `let-values`,
   `let*-values`, `let-syntax`, `letrec-syntax`, and `parameterize`.
 * Conditionals: `if`, `cond` (including `=>` clauses), `case` (including
   `=>` clauses), `when`, `unless`, `and`, `or`, and `cond-expand`.
@@ -143,7 +143,7 @@ deviations section.
   `substring`, `string-append`, `string-copy`, `string-copy!`,
   `string-fill!`, `string->list`, `list->string`, `string-map`,
   `string-for-each`, `string-upcase`, `string-downcase`, `string-foldcase`,
-  `string-split`, and conversions to and from vectors and UTF-8
+  and conversions to and from vectors and UTF-8
   bytevectors. Strings are UTF-8 and indexes count characters. Procedures
   with `start` and `end` arguments accept them as the report specifies.
 * Vectors: construction, access, mutation, `vector-copy`, `vector-copy!`,
@@ -208,11 +208,12 @@ returned, resumes the computation at that point with the value supplied, and
 generators, backtracking, and the R7RS `dynamic-wind` example need.
 
 ```scheme
-(define k #f)
-(define n 0)
-(call/cc (lambda (c) (set! k c)))
-(set! n (+ n 1))
-(if (< n 3) (k 'again) n)                  ; => 3
+(begin
+  (define k #f)
+  (define n 0)
+  (call/cc (lambda (c) (set! k c)))
+  (set! n (+ n 1))
+  (if (< n 3) (k 'again) n))               ; => 3
 ```
 
 One rule follows from the implementation. A continuation is a copy of the
@@ -299,6 +300,7 @@ These features are not part of R7RS-small.
   and shorthand classes such as `\d` are not supported. `regex-replace`
   takes the pattern, the replacement, then the input string.
 * JSON: `json-serialize` and `json-deserialize`.
+* Strings: `string-split`.
 * Formatting: `format` with the `~a`, `~s`, `~%`, and `~~` directives, and
   `value->string`.
 * Files and OS: `file-exists?`, `delete-file`, `rename-file`,

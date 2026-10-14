@@ -36,6 +36,7 @@ fn sum_of_squares(
 
 pub fn main() !void {
     var interpreter = try elz.Interpreter.init(.{});
+    defer interpreter.deinit();
 
     try elz.define_foreign_func(interpreter.root_env, "sum-of-squares", sum_of_squares);
 

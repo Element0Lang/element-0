@@ -9,7 +9,7 @@ Procedures written in Element 0 itself are defined in `src/stdlib/std.elz`; the 
 `define` `define-values` `define-syntax` `define-record-type` `define-library` `define-macro` (*Elz*)
 `lambda` `case-lambda` `let` `let*` `letrec` `letrec*` `let-values` `let*-values` `let-syntax` `letrec-syntax` `parameterize`
 `if` `cond` `case` `when` `unless` `and` `or` `cond-expand` `begin` `do`
-`quote` `quasiquote` `unquote` `unquote-splicing` `set!` `delay` `delay-force` `make-promise`
+`quote` `quasiquote` `unquote` `unquote-splicing` `set!` `delay` `delay-force`
 `guard` `try` (*Elz*) `reset` (*Elz*) `shift` (*Elz*) `include` `include-ci` `import` `syntax-error` `syntax-rules`
 
 ## Equivalence and Types (`enable_predicates`)
@@ -73,7 +73,7 @@ Strings are UTF-8 and every index counts characters. Procedures that take `start
 ## Control
 
 `procedure?` `apply` `values` `call-with-values` `dynamic-wind` `force` `make-promise` `eval` `environment` `interaction-environment` `null-environment` `scheme-report-environment`
-`call-with-current-continuation` `call/cc` `call-with-escape-continuation` `call/ec` (all escape-only)
+`call-with-current-continuation` `call/cc` `call-with-escape-continuation` `call/ec` (`call/ec` is escape-only)
 `make-parameter`
 
 ## Exceptions
