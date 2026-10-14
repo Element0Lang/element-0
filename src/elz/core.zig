@@ -205,7 +205,7 @@ pub const Upvalue = struct {
 /// A VM-compiled closure: a `FuncProto` (bytecode + constants) paired with captured upvalue cells.
 pub const VmClosure = struct {
     proto: *@import("chunk.zig").FuncProto,
-    upvals: []*Upvalue,
+    upvals: []?*Upvalue,
 };
 
 /// One call frame on the VM's call stack.

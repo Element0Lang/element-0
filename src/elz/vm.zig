@@ -595,11 +595,11 @@ pub const VM = struct {
                     self.stack[frame.stack_base + instr.a] = self.peek(0);
                 },
                 .load_upval => {
-                    const uv = frame.closure.upvals[instr.a];
+                    const uv = frame.closure.upvals[instr.a].?;
                     try self.push(uv.get());
                 },
                 .store_upval => {
-                    const uv = frame.closure.upvals[instr.a];
+                    const uv = frame.closure.upvals[instr.a].?;
                     uv.set(self.peek(0));
                 },
                 .load_global => {
@@ -771,7 +771,8 @@ pub const VM = struct {
                     const sub_proto = proto.sub_protos.items[instr.bx];
                     const upval_count = sub_proto.upval_descs.items.len;
                     const cl = try self.interp.allocator.create(VmClosure);
-                    const upvals = try self.interp.allocator.alloc(*Upvalue, upval_count);
+                    const upvals = try self.interp.allocator.alloc(?*Upvalue, upval_count);
+                    @memset(upvals, null);
                     cl.* = .{ .proto = sub_proto, .upvals = upvals };
                     try self.push(Value{ .vm_closure = cl });
                 },
@@ -785,7 +786,7 @@ pub const VM = struct {
                 .capture_upval => {
                     // Follows make_closure: a=parent_upval_index, b=upvalue_fill_index.
                     const cl = self.peek(0).vm_closure;
-                    const parent_uv = frame.closure.upvals[instr.a];
+                    const parent_uv = frame.closure.upvals[instr.a].?;
                     cl.upvals[instr.b] = parent_uv;
                 },
                 .close_upval => {
