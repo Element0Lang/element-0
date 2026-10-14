@@ -129,3 +129,35 @@ test "empty native buffers retain their capacity across collection" {
     try interp.collect();
     try testing.expectEqual(@as(i64, 42), items.items[0].exact_integer);
 }
+
+test "collection closes unreachable file ports and retains rooted ports" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+    var port = try eval(&interp, "(open-input-file \"AGENTS.md\")");
+    var root: elz.Root = .{};
+    interp.protect(&root, &port);
+    defer root.deinit();
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/proc/self/fd/{d}", .{port.port.kind.file.file.handle});
+    try interp.collect();
+    _ = try std.Io.Dir.cwd().statFile(interp.io, path, .{});
+    port = .nil;
+    try interp.collect();
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(interp.io, path, .{}));
+    try testing.expectEqual(@as(usize, 0), interp.gc_state.file_ports.items.len);
+}
+
+test "interpreter teardown closes file ports" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    var interp = try elz.Interpreter.init(.{});
+    var alive = true;
+    defer if (alive) interp.deinit();
+    const port = try eval(&interp, "(open-input-file \"AGENTS.md\")");
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/proc/self/fd/{d}", .{port.port.kind.file.file.handle});
+    const io = interp.io;
+    interp.deinit();
+    alive = false;
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, path, .{}));
+}

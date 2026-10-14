@@ -512,6 +512,7 @@ pub const Port = struct {
 
     pub fn openInput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
         const file = try std.Io.Dir.cwd().openFile(io, name, .{});
+        errdefer file.close(io);
         return .{
             .kind = .{ .file = .{ .file = file, .io = io } },
             .is_input = true,
@@ -522,6 +523,7 @@ pub const Port = struct {
 
     pub fn openOutput(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !Port {
         const file = try std.Io.Dir.cwd().createFile(io, name, .{});
+        errdefer file.close(io);
         return .{
             .kind = .{ .file = .{ .file = file, .io = io } },
             .is_input = false,

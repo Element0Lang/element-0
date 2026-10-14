@@ -27,6 +27,8 @@ pub const State = struct {
     heap: Heap,
     memory: []u8,
     roots: ?*Root = null,
+    // Weak references keep file handles available for cleanup without retaining ports.
+    file_ports: std.ArrayList(*core.Port) = .empty,
     paused: usize = 0,
     next_collection: usize = 1024 * 1024,
     collections: usize = 0,
@@ -44,6 +46,8 @@ pub const State = struct {
 
     pub fn deinit(self: *State) void {
         std.debug.assert(self.roots == null);
+        for (self.file_ports.items) |port| port.close();
+        self.file_ports.deinit(std.heap.page_allocator);
         std.heap.page_allocator.free(self.memory);
         std.heap.page_allocator.destroy(self);
     }
@@ -64,6 +68,15 @@ pub const State = struct {
     pub fn collect(self: *State, interp: *Interpreter) void {
         std.debug.assert(self.paused == 0);
         self.heap.collect_with_roots(interp, trace_interpreter);
+        // Sweep leaves payload bytes intact until the next allocation.
+        var port_index: usize = 0;
+        while (port_index < self.file_ports.items.len) {
+            const port = self.file_ports.items[port_index];
+            if (self.heap.is_reclaimed(port)) {
+                port.close();
+                _ = self.file_ports.swapRemove(port_index);
+            } else port_index += 1;
+        }
         var locations = interp.compiler.source_locations.iterator();
         while (locations.next()) |entry| {
             if (self.heap.is_reclaimed(@ptrFromInt(entry.key_ptr.*))) {

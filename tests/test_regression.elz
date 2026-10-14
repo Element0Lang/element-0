@@ -685,4 +685,22 @@
     (try (car 1) (catch e #f))
     (equal? "cdr: expected a pair, got a string" (%error-message (lambda () (cdr "x"))))))
 
+(test-case "big integer division accepts an inexact divisor"
+  (= (/ 9223372036854775808 2.0) 4611686018427387904.0))
+(test-case "inexact division accepts a big integer divisor"
+  (= (/ 9223372036854775808.0 9223372036854775808) 1.0))
+(test-case "big integer division accepts a complex divisor"
+  (= (/ 9223372036854775808 (make-rectangular 0 1))
+     (make-rectangular 0 -9223372036854775808.0)))
+(test-case "division at the i64 minimum promotes to a big integer"
+  (= (/ -9223372036854775808 -1) 9223372036854775808))
+(test-case "list->vector rejects circular lists"
+  (let ((p (list 1)))
+    (set-cdr! p p)
+    (try (begin (list->vector p) #f) (catch e #t))))
+(test-case "a vector splice rejects a circular list"
+  (let ((p (list 1)))
+    (set-cdr! p p)
+    (try (begin `#(,@p) #f) (catch e #t))))
+
 (report-summary)

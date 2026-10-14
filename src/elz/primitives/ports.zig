@@ -15,6 +15,8 @@ pub fn open_input_file(interp: *interpreter.Interpreter, env: *core.Environment,
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.openInput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotFound;
+    errdefer port.close();
+    try interp.gc_state.file_ports.append(std.heap.page_allocator, port);
 
     return Value{ .port = port };
 }
@@ -29,6 +31,8 @@ pub fn open_output_file(interp: *interpreter.Interpreter, env: *core.Environment
 
     const port = env.allocator.create(core.Port) catch return ElzError.OutOfMemory;
     port.* = core.Port.openOutput(env.allocator, interp.io, filename_val.string.bytes) catch return ElzError.FileNotWritable;
+    errdefer port.close();
+    try interp.gc_state.file_ports.append(std.heap.page_allocator, port);
 
     return Value{ .port = port };
 }

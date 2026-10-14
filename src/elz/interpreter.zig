@@ -550,7 +550,7 @@ pub const Interpreter = struct {
     }
 
     /// Releases resources held by this `Interpreter`.
-    /// Most memory is GC-managed; this cleans up the module cache.
+    /// Closes owned file ports and releases the managed heap.
     pub fn deinit(self: *Interpreter) void {
         self.compiler.module_cache.deinit(self.allocator);
         for (self.runtime.vm_pool.items) |machine| {

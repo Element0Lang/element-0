@@ -83,3 +83,28 @@ test "filesystem and process access stay available by default" {
     const result = try interp.evalString("(file-exists? \"build.zig\")", &fuel);
     try testing.expect(result == .boolean and result.boolean);
 }
+
+test "native list traversal consumes fuel" {
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+    var fuel: u64 = 100_000;
+    _ = try interp.evalString("(define xs (make-list 2000 1)) (define cycle (list 1)) (set-cdr! cycle cycle)", &fuel);
+    for ([_][]const u8{ "(list->vector xs)", "`#(,@xs)", "(list-set! cycle 9223372036854775807 2)" }) |source| {
+        fuel = 1000;
+        try testing.expectError(elz.ElzError.ExecutionBudgetExceeded, interp.evalString(source, &fuel));
+        interp.last_error.clear();
+    }
+}
+
+test "native list traversal checks the time limit" {
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+    var fuel: u64 = 100_000;
+    _ = try interp.evalString("(define xs (make-list 2000 1)) (define cycle (list 1)) (set-cdr! cycle cycle)", &fuel);
+    interp.flags.time_limit_ms = 0;
+    for ([_][]const u8{ "(list->vector xs)", "`#(,@xs)", "(list-set! cycle 9223372036854775807 2)" }) |source| {
+        fuel = std.math.maxInt(u64);
+        try testing.expectError(elz.ElzError.TimeLimitExceeded, interp.evalString(source, &fuel));
+        interp.last_error.clear();
+    }
+}

@@ -56,19 +56,7 @@ pub fn Caster(comptime T: type) type {
                     break :blk ElzError.InvalidArgument;
                 },
                 .int => |int_info| switch (v) {
-                    .exact_integer => |i| blk: {
-                        const min_val: i128 = if (int_info.signedness == .signed)
-                            -(@as(i128, 1) << @intCast(int_info.bits - 1))
-                        else
-                            0;
-                        const max_val: i128 = if (int_info.signedness == .signed)
-                            (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1
-                        else
-                            (@as(i128, 1) << @intCast(int_info.bits)) - 1;
-                        const wide: i128 = i;
-                        if (wide < min_val or wide > max_val) break :blk ElzError.InvalidArgument;
-                        break :blk @intCast(i);
-                    },
+                    .exact_integer => |i| std.math.cast(T, i) orelse ElzError.InvalidArgument,
                     .number => |n| {
                         if (std.math.isNan(n) or std.math.isInf(n)) {
                             return ElzError.InvalidArgument;
@@ -76,14 +64,9 @@ pub fn Caster(comptime T: type) type {
                         if (@floor(n) != n) {
                             return ElzError.InvalidArgument;
                         }
-                        const min_val: f64 = if (int_info.signedness == .signed)
-                            -@as(f64, @floatFromInt(@as(i128, 1) << int_info.bits - 1))
-                        else
-                            0;
-                        const max_val: f64 = @floatFromInt((@as(u128, 1) << int_info.bits) - 1);
-                        if (n < min_val or n > max_val) {
-                            return ElzError.InvalidArgument;
-                        }
+                        const upper: f64 = @exp2(@as(f64, @floatFromInt(int_info.bits - @intFromBool(int_info.signedness == .signed))));
+                        const lower: f64 = if (int_info.signedness == .signed) -upper else 0;
+                        if (n < lower or n >= upper) return ElzError.InvalidArgument;
                         return @intFromFloat(n);
                     },
                     else => ElzError.InvalidArgument,
@@ -647,4 +630,16 @@ test "makeForeignFunc struct param" {
     const result = try wrapped(env, args);
     try std.testing.expect(result == .number);
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.number, 0.001);
+}
+
+test "Caster integer bounds reject values before conversion" {
+    const testing = std.testing;
+    try testing.expectError(ElzError.InvalidArgument, Caster(i8).cast(.{ .number = 128.0 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(i8).cast(.{ .number = -129.0 }));
+    try testing.expectEqual(@as(i8, 127), try Caster(i8).cast(.{ .number = 127.0 }));
+    try testing.expectEqual(@as(i8, -128), try Caster(i8).cast(.{ .number = -128.0 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(i64).cast(.{ .number = 0x1p63 }));
+    try testing.expectError(ElzError.InvalidArgument, Caster(u64).cast(.{ .number = 0x1p64 }));
+    try testing.expectEqual(@as(i128, 42), try Caster(i128).cast(.{ .exact_integer = 42 }));
+    try testing.expectEqual(@as(u128, 42), try Caster(u128).cast(.{ .exact_integer = 42 }));
 }

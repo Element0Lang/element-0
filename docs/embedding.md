@@ -14,7 +14,9 @@ defer interp.deinit();
 `Interpreter.init` takes a `SandboxFlags` value (see [Sandboxing](#sandboxing)), sets up the garbage collector, builds the global environment with every enabled primitive, and loads the standard library. Creating an interpreter is not free (the standard library is compiled on every `init`), so keep one per script context rather than one per evaluation.
 
 Each interpreter owns a precise, non-moving garbage collector on native and WASI targets.
-`Interpreter.deinit` releases its heap. The default heap limit is 64 MiB, including
+`Interpreter.deinit` closes owned file ports and releases its heap.
+Collection also closes file ports that are no longer reachable. Borrowed standard
+streams stay open. Close file ports explicitly when you need prompt cleanup. The default heap limit is 64 MiB, including
 collector metadata. Set `heap_limit_bytes` in `SandboxFlags` to change it.
 Allocation can return `OutOfMemory` when the heap cannot satisfy a request.
 

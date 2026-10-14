@@ -819,26 +819,19 @@ pub const VM = struct {
                     try self.push(Value{ .vector = vec });
                 },
                 .list_to_vector => {
-                    const list = self.pop();
-                    var count: usize = 0;
-                    var cur = list;
-                    while (cur == .pair) : (cur = cur.pair.cdr) count += 1;
-                    if (cur != .nil) return ElzError.InvalidArgument;
-                    const vec = try self.interp.allocator.create(core.Vector);
-                    const items = try self.interp.allocator.alloc(Value, count);
-                    cur = list;
-                    var i: usize = 0;
-                    while (cur == .pair) : (cur = cur.pair.cdr) {
-                        items[i] = cur.pair.car;
-                        i += 1;
-                    }
-                    vec.* = .{ .items = items };
-                    try self.push(Value{ .vector = vec });
+                    var args = core.ValueList.init(self.interp.allocator);
+                    args.items = self.stack[self.stack_top - 1 .. self.stack_top];
+                    var unlimited: u64 = std.math.maxInt(u64);
+                    const result = try @import("primitives/vectors.zig").list_to_vector(self.interp, self.interp.root_env, args, self.fuel orelse &unlimited);
+                    _ = self.pop();
+                    try self.push(result);
                 },
                 .append_lists => {
-                    const second = self.pop();
-                    const first = self.pop();
-                    const result = try appendLists(self.interp.allocator, first, second);
+                    var args = core.ValueList.init(self.interp.allocator);
+                    args.items = self.stack[self.stack_top - 2 .. self.stack_top];
+                    var unlimited: u64 = std.math.maxInt(u64);
+                    const result = try @import("primitives/lists.zig").append(self.interp, self.interp.root_env, args, self.fuel orelse &unlimited);
+                    self.stack_top -= 2;
                     try self.push(result);
                 },
                 .values_pack => {
@@ -969,21 +962,6 @@ fn isTruthy(v: Value) bool {
         .boolean => |b| b,
         else => true,
     };
-}
-
-fn appendLists(allocator: std.mem.Allocator, list1: Value, list2: Value) !Value {
-    if (list1 != .pair) return list2;
-    var head: ?*core.Pair = null;
-    var tail: ?*core.Pair = null;
-    var cur = list1;
-    while (cur == .pair) : (cur = cur.pair.cdr) {
-        const new_pair = try allocator.create(core.Pair);
-        new_pair.* = .{ .car = cur.pair.car, .cdr = .nil };
-        if (tail) |t| t.cdr = Value{ .pair = new_pair } else head = new_pair;
-        tail = new_pair;
-    }
-    tail.?.cdr = list2;
-    return Value{ .pair = head.? };
 }
 
 /// Entry point that can be used to run a vm_closure with a given argument list.
