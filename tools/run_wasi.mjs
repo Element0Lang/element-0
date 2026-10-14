@@ -16,5 +16,13 @@ const wasi = new WASI({
   returnOnExit: true,
 });
 const module = await WebAssembly.compile(await readFile(file));
-const instance = await WebAssembly.instantiate(module, wasi.getImportObject());
+const importObject = wasi.getImportObject();
+if (importObject.wasi_snapshot_preview1) {
+  for (const [key, fn] of Object.entries(importObject.wasi_snapshot_preview1)) {
+    if (typeof fn === 'function') {
+      importObject.wasi_snapshot_preview1[key] = (...wasiArgs) => fn(...wasiArgs);
+    }
+  }
+}
+const instance = await WebAssembly.instantiate(module, importObject);
 process.exit(wasi.start(instance));
