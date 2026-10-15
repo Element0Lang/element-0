@@ -220,13 +220,11 @@ pub fn build(b: *std.Build) void {
 
     // --- Run Benchmarks ---
     // Note: run `zig build benches -Doptimize=ReleaseFast` for meaningful numbers.
-    // The whole build (including the GC C library) must share one optimize level;
-    // a mixed Debug/ReleaseFast link fails with undefined UBSan symbols.
     const bench_iters = b.option(
         u32,
         "bench-iters",
-        "Number of iterations per benchmark (default: 10)",
-    ) orelse 10;
+        "Number of iterations per benchmark (default 3)",
+    ) orelse 3;
 
     const bench_step = b.step("benches", "Run the Element 0 benchmarks");
     {
@@ -238,6 +236,7 @@ pub fn build(b: *std.Build) void {
         };
         defer benches_dir.close(io);
 
+        var previous_bench: ?*std.Build.Step = null;
         var bench_iter = benches_dir.iterate();
         while (bench_iter.next(io) catch @panic("Failed to iterate benches")) |entry| {
             if (!std.mem.endsWith(u8, entry.name, ".elz")) continue;
@@ -247,6 +246,8 @@ pub fn build(b: *std.Build) void {
             run_bench_cmd.addArg(b.fmt("{d}", .{bench_iters}));
             run_bench_cmd.addArg("--file");
             run_bench_cmd.addArg(b.fmt("{s}/{s}", .{ benches_path, entry.name }));
+            if (previous_bench) |step| run_bench_cmd.step.dependOn(step);
+            previous_bench = &run_bench_cmd.step;
             bench_step.dependOn(&run_bench_cmd.step);
         }
     }

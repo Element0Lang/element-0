@@ -109,7 +109,18 @@ In form: (display (undefined-name 1))
 
 When the failure happens inside a procedure, a `Backtrace:` section lists the calls that led to it.
 
-`--bench N` runs the file N times and prints timing statistics, and `--verbose` prints what the program is doing.
+`--bench N` runs the file N times and prints timing statistics. Each iteration has a
+10-second execution limit. Use `--bench-timeout-ms` to change that limit. A failed
+iteration reports the error and exits with a nonzero status without printing timings.
+`--verbose` prints what the program is doing.
+
+`make bench` builds in ReleaseFast mode and runs the 12 benchmark programs sequentially,
+three times each. The workloads are sized for a short local run. `BENCH_ITERS` changes
+the iteration count, and `BENCH` selects one program. Earley now parses eight tokens,
+Nboyer uses size zero, and Tak and Nqueens repeat their work 50 times. Timings for
+these workloads cannot be compared directly with the previous larger workloads.
+`zig build benches` also defaults to three iterations; pass `-Doptimize=ReleaseFast`
+for timing measurements.
 
 ## Building for WebAssembly
 

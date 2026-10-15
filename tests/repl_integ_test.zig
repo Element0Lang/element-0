@@ -343,3 +343,47 @@ test "--quiet is accepted and a piped session prints no banner" {
     defer r.deinit();
     try testing.expectEqualStrings("1\n", r.stdout);
 }
+
+test "--bench reports timings for successful iterations" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tmp.dir.writeFile(io, .{ .sub_path = "bench.elz", .data = "(+ 1 2)" });
+    const r = try runRepl(&.{ "--bench", "2", "bench.elz" }, "", .{ .path = try tmpPath(&tmp, &path_buf) });
+    defer r.deinit();
+    try testing.expectEqual(@as(u8, 0), r.status);
+    try expectContains(r.stderr, "bench:  best ");
+    try expectContains(r.stderr, "median ");
+}
+
+test "--bench reports evaluation errors instead of timings" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tmp.dir.writeFile(io, .{ .sub_path = "bad.elz", .data = "(/ 1 0)" });
+    const r = try runRepl(&.{ "--bench", "2", "bad.elz" }, "", .{ .path = try tmpPath(&tmp, &path_buf) });
+    defer r.deinit();
+    try testing.expect(r.status != 0);
+    try expectContains(r.stdout, "Benchmark bad.elz failed on iteration 1.");
+    try expectContains(r.stdout, "division by zero");
+    try expectNotContains(r.stderr, "median ");
+}
+
+test "--bench stops an iteration at its time limit" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tmp.dir.writeFile(io, .{ .sub_path = "loop.elz", .data = "(let loop () (loop))" });
+    const r = try runRepl(&.{ "--bench", "1", "--bench-timeout-ms", "1", "loop.elz" }, "", .{ .path = try tmpPath(&tmp, &path_buf) });
+    defer r.deinit();
+    try testing.expect(r.status != 0);
+    try expectContains(r.stdout, "TimeLimitExceeded");
+    try expectNotContains(r.stderr, "median ");
+}
+
+test "--bench rejects a nonpositive timeout" {
+    const r = try runRepl(&.{ "--bench", "1", "--bench-timeout-ms", "0" }, "", .inherit);
+    defer r.deinit();
+    try testing.expect(r.status != 0);
+    try expectContains(r.stderr, "timeout must be positive");
+}
