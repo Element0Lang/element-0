@@ -22,7 +22,7 @@ BENCH_FILES   := $(wildcard benches/bench-*.elz)
 EXAMPLE       ?= all
 ELZ_EXAMPLE   ?= all
 BENCH         ?= all
-BENCH_ITERS   ?= 10
+BENCH_ITERS   ?= 3
 BENCH_BUILD_TYPE ?= ReleaseFast
 
 SHELL         := /usr/bin/env bash

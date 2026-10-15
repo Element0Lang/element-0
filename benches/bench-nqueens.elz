@@ -25,7 +25,7 @@
 
   (try-it (one-to n) '() '()))
 
-(let loop ((n 500) (v 0))
+(let loop ((n 50) (v 0))
   (if (zero? n)
       v
       (loop (- n 1) (nqueens 8))))

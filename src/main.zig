@@ -579,16 +579,23 @@ fn runRepl(interpreter: *elz.Interpreter, quiet: bool, load_rc: bool) !void {
 // Command line
 // ---------------------------------------------------------------------------
 
-fn runBench(source: []const u8, filename: []const u8, iters: usize, gpa: std.mem.Allocator) !void {
+fn runBench(source: []const u8, filename: []const u8, iters: usize, timeout_ms: u64, gpa: std.mem.Allocator) !void {
     const times = try gpa.alloc(i64, iters);
     defer gpa.free(times);
 
-    for (times) |*t| {
-        var interp = try elz.Interpreter.init(.{});
+    for (times, 0..) |*t, iteration| {
+        var interp = try elz.Interpreter.init(.{ .time_limit_ms = timeout_ms });
         defer interp.deinit();
         const start = currentTimeMs();
         var fuel: u64 = std.math.maxInt(u64);
-        _ = interp.evalString(source, &fuel) catch {};
+        _ = interp.evalString(source, &fuel) catch |err| {
+            var out: Out = undefined;
+            const stdout = out.init(interp.io);
+            defer out.flush();
+            try stdout.print("Benchmark {s} failed on iteration {d}.\n", .{ filename, iteration + 1 });
+            try reportError(&interp, err, stdout);
+            return err;
+        };
         t.* = currentTimeMs() - start;
     }
 
@@ -610,6 +617,11 @@ fn rootExec(ctx: chilli.CommandContext) !void {
     const quiet = if (ctx.command.getFlagValue("quiet")) |v| v.Bool else false;
     const no_rc = if (ctx.command.getFlagValue("no-rc")) |v| v.Bool else false;
     const bench_iters: i64 = if (ctx.command.getFlagValue("bench")) |v| v.Int else 0;
+    const bench_timeout_ms: i64 = if (ctx.command.getFlagValue("bench-timeout-ms")) |v| v.Int else 10_000;
+    if (bench_iters < 0 or (bench_iters > 0 and bench_timeout_ms <= 0)) {
+        std.debug.print("Benchmark iterations must be nonnegative and the timeout must be positive.\n", .{});
+        return error.InvalidArgument;
+    }
     const eval_source: []const u8 = if (ctx.command.getFlagValue("eval")) |v| v.String else "";
 
     // The file may come from the positional argument or from --file.
@@ -642,7 +654,7 @@ fn rootExec(ctx: chilli.CommandContext) !void {
         if (bench_iters > 0) {
             var gpa: std.heap.DebugAllocator(.{}) = .init;
             defer _ = gpa.deinit();
-            try runBench(source, filename, @intCast(bench_iters), gpa.allocator());
+            try runBench(source, filename, @intCast(bench_iters), @intCast(bench_timeout_ms), gpa.allocator());
             return;
         }
 
@@ -780,6 +792,13 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         .description = "Run the file N times and print timing statistics (best/median/p95/worst)",
         .type = .Int,
         .default_value = .{ .Int = 0 },
+    });
+
+    try root_cmd.addFlag(.{
+        .name = "bench-timeout-ms",
+        .description = "Maximum time per benchmark iteration in milliseconds (default 10000)",
+        .type = .Int,
+        .default_value = .{ .Int = 10_000 },
     });
 
     try root_cmd.run(init.args, interpreter_ptr);
