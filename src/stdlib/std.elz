@@ -2,7 +2,7 @@
 ;; Element 0 Standard Library
 ;;
 
-(define *elz-stdlib-version* "0.1.0-alpha.8")
+(define *elz-stdlib-version* "0.1.0-alpha.9")
 
 ;;; ---------------------------------
 ;;; Logical and Boolean Functions
@@ -631,9 +631,11 @@
 ;;;
 ;;; Returns a list of k elements, each set to fill (or an unspecified value).
 (define (make-list k . fill)
-  (let ((f (if (null? fill) (if #f #f) (car fill))))
-    (let loop ((n k) (acc '()))
-      (if (<= n 0) acc (loop (- n 1) (cons f acc))))))
+  (if (not (and (exact-integer? k) (>= k 0)))
+      (error "make-list: expected a non-negative exact integer" k)
+      (let ((f (if (null? fill) (if #f #f) (car fill))))
+        (let loop ((n k) (acc '()))
+          (if (<= n 0) acc (loop (- n 1) (cons f acc)))))))
 
 ;;; (list-copy lst)
 ;;;
@@ -651,12 +653,13 @@
 ;;;
 ;;; Returns #t if all arguments are the same symbol, #f otherwise.
 (define (symbol=? a . rest)
-  (and (symbol? a)
-       (let loop ((items rest))
-         (cond
-           ((null? items) #t)
-           ((eq? a (car items)) (loop (cdr items)))
-           (else #f)))))
+  (if (not (symbol? a))
+      (error "symbol=?: not a symbol" a)
+      (let loop ((items rest) (all-eq #t))
+        (cond
+          ((null? items) all-eq)
+          ((not (symbol? (car items))) (error "symbol=?: not a symbol" (car items)))
+          (else (loop (cdr items) (and all-eq (eq? a (car items)))))))))
 
 ;;; (string-map proc str1 str2 ...)
 ;;;
@@ -803,13 +806,15 @@
 ;;; satisfied. Requirements support and, or, not, and feature identifiers.
 (define-macro (cond-expand . clauses)
   (let loop ((cs clauses))
-    (if (null? cs)
-        '(syntax-error "cond-expand: no matching clause")
-        (let ((req (car (car cs)))
-              (body (cdr (car cs))))
-          (if (or (eq? req 'else) (%feature-satisfied? req))
-              (cons 'begin body)
-              (loop (cdr cs)))))))
+    (cond
+      ((null? cs) '(syntax-error "cond-expand: no matching clause"))
+      ((not (pair? (car cs))) '(syntax-error "cond-expand: malformed clause"))
+      (else
+       (let ((req (car (car cs)))
+             (body (cdr (car cs))))
+         (if (or (eq? req 'else) (%feature-satisfied? req))
+             (cons 'begin body)
+             (loop (cdr cs))))))))
 
 ;;; (let-values ((formals expr) ...) body ...)
 ;;;
@@ -877,23 +882,25 @@
 ;;; Returns a procedure that dispatches on argument count to the first
 ;;; matching clause.
 (define-macro (case-lambda . clauses)
-  (let ((args-sym (gensym)))
-    `(lambda ,args-sym
-       (cond
-         ,@(map (lambda (clause)
-                  (let ((formals (car clause))
-                        (body (cdr clause)))
-                    (cond
-                      ((symbol? formals)
-                       `(#t (apply (lambda ,formals ,@body) ,args-sym)))
-                      ((list? formals)
-                       `((= (length ,args-sym) ,(length formals))
-                         (apply (lambda ,formals ,@body) ,args-sym)))
-                      (else
-                       `((>= (length ,args-sym) ,(%formals-min-count formals))
-                         (apply (lambda ,formals ,@body) ,args-sym))))))
-                clauses)
-         (#t (error "case-lambda: no matching clause"))))))
+  (if (not (every? (lambda (c) (and (pair? c) (pair? (cdr c)))) clauses))
+      '(syntax-error "case-lambda: malformed clause")
+      (let ((args-sym (gensym)))
+        `(lambda ,args-sym
+           (cond
+             ,@(map (lambda (clause)
+                      (let ((formals (car clause))
+                            (body (cdr clause)))
+                        (cond
+                          ((symbol? formals)
+                           `(#t (apply (lambda ,formals ,@body) ,args-sym)))
+                          ((list? formals)
+                           `((= (length ,args-sym) ,(length formals))
+                             (apply (lambda ,formals ,@body) ,args-sym)))
+                          (else
+                           `((>= (length ,args-sym) ,(%formals-min-count formals))
+                             (apply (lambda ,formals ,@body) ,args-sym))))))
+                    clauses)
+             (#t (error "case-lambda: no matching clause")))))))
 
 ;;; (define-record-type name (ctor field ...) pred (field accessor [modifier]) ...)
 ;;;
@@ -902,29 +909,35 @@
 ;;; membership, and each field spec defines an accessor and an optional
 ;;; modifier.
 (define-macro (define-record-type type-name ctor-spec pred . field-specs)
-  (let ((field-names (map car field-specs))
-        (ctor-name (car ctor-spec))
-        (ctor-args (cdr ctor-spec)))
-    `(begin
-       (define ,type-name (%make-record-type ',type-name ',field-names))
-       (define (,ctor-name ,@ctor-args)
-         (%make-record ,type-name
-                       (list ,@(map (lambda (f) (if (memq f ctor-args) f '(if #f #f)))
-                                    field-names))))
-       (define (,pred x) (%record-of-type? x ,type-name))
-       ,@(let loop ((specs field-specs) (i 0))
-           (if (null? specs)
-               '()
-               (let* ((spec (car specs))
-                      (accessor (cadr spec))
-                      (rest (cddr spec))
-                      (acc-def `(define (,accessor r) (%record-ref ,type-name r ,i)))
-                      (more (loop (cdr specs) (+ i 1))))
-                 (if (null? rest)
-                     (cons acc-def more)
-                     (cons acc-def
-                           (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
-                                 more)))))))))
+  (if (not (and (symbol? type-name)
+                (pair? ctor-spec)
+                (symbol? (car ctor-spec))
+                (symbol? pred)
+                (every? (lambda (s) (and (pair? s) (pair? (cdr s)))) field-specs)))
+      '(syntax-error "define-record-type: malformed definition")
+      (let ((field-names (map car field-specs))
+            (ctor-name (car ctor-spec))
+            (ctor-args (cdr ctor-spec)))
+        `(begin
+           (define ,type-name (%make-record-type ',type-name ',field-names))
+           (define (,ctor-name ,@ctor-args)
+             (%make-record ,type-name
+                           (list ,@(map (lambda (f) (if (memq f ctor-args) f '(if #f #f)))
+                                        field-names))))
+           (define (,pred x) (%record-of-type? x ,type-name))
+           ,@(let loop ((specs field-specs) (i 0))
+               (if (null? specs)
+                   '()
+                   (let* ((spec (car specs))
+                          (accessor (cadr spec))
+                          (rest (cddr spec))
+                          (acc-def `(define (,accessor r) (%record-ref ,type-name r ,i)))
+                          (more (loop (cdr specs) (+ i 1))))
+                     (if (null? rest)
+                         (cons acc-def more)
+                         (cons acc-def
+                               (cons `(define (,(car rest) r v) (%record-set! ,type-name r ,i v))
+                                     more))))))))))
 
 ;;; (dynamic-wind before thunk after)
 ;;;
@@ -996,14 +1009,16 @@
 ;;; Evaluates body; if it raises, binds the raised object to var and
 ;;; dispatches on the cond-style clauses. Reraises when no clause matches.
 (define-macro (guard spec . body)
-  (let ((var (car spec))
-        (clauses (cdr spec)))
-    `(try (begin ,@body)
-          (catch ,var
-            (cond ,@clauses
-                  ,@(if (%guard-clauses-have-else? clauses)
-                        '()
-                        `((else (raise ,var)))))))))
+  (if (not (and (pair? spec) (symbol? (car spec)) (pair? body) (every? pair? (cdr spec))))
+      '(syntax-error "guard: malformed form")
+      (let ((var (car spec))
+            (clauses (cdr spec)))
+        `(try (begin ,@body)
+              (catch ,var
+                (cond ,@clauses
+                      ,@(if (%guard-clauses-have-else? clauses)
+                            '()
+                            `((else (raise ,var))))))))))
 
 ;;; ---------------------------------
 ;;; Parameters, Process Context, Time, and Lazy Completions
@@ -1028,16 +1043,20 @@
 ;;; Rebinds each parameter to its converted value for the dynamic extent of
 ;;; body, restoring the previous values on exit.
 (define-macro (parameterize bindings . body)
-  (let ((psyms (map (lambda (b) (gensym)) bindings))
-        (olds (map (lambda (b) (gensym)) bindings))
-        (news (map (lambda (b) (gensym)) bindings)))
-    `(let ,(map (lambda (ps b) `(,ps ,(car b))) psyms bindings)
-       (let ,(map (lambda (o ps) `(,o (,ps))) olds psyms)
-         (let ,(map (lambda (n ps b) `(,n (,ps '%param-convert ,(cadr b)))) news psyms bindings)
-           (dynamic-wind
-             (lambda () ,@(map (lambda (ps n) `(,ps '%param-set! ,n)) psyms news))
-             (lambda () ,@body)
-             (lambda () ,@(map (lambda (ps o) `(,ps '%param-set! ,o)) psyms olds))))))))
+  (if (not (and (list? bindings)
+                (pair? body)
+                (every? (lambda (b) (and (pair? b) (pair? (cdr b)) (null? (cddr b)))) bindings)))
+      '(syntax-error "parameterize: malformed bindings")
+      (let ((psyms (map (lambda (b) (gensym)) bindings))
+            (olds (map (lambda (b) (gensym)) bindings))
+            (news (map (lambda (b) (gensym)) bindings)))
+        `(let ,(map (lambda (ps b) `(,ps ,(car b))) psyms bindings)
+           (let ,(map (lambda (o ps) `(,o (,ps))) olds psyms)
+             (let ,(map (lambda (n ps b) `(,n (,ps '%param-convert ,(cadr b)))) news psyms bindings)
+               (dynamic-wind
+                 (lambda () ,@(map (lambda (ps n) `(,ps '%param-set! ,n)) psyms news))
+                 (lambda () ,@body)
+                 (lambda () ,@(map (lambda (ps o) `(,ps '%param-set! ,o)) psyms olds)))))))))
 
 ;;; (get-environment-variable name)
 ;;;

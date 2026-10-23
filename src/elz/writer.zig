@@ -47,15 +47,21 @@ fn symbolNeedsBars(name: []const u8) bool {
     if (name[0] == '#') return true;
     for (name) |c| {
         switch (c) {
-            ' ', '\t', '\n', '\r', '(', ')', '"', ';', '\'', '`', ',', '|' => return true,
-            else => if (c < 0x20) return true,
+            ' ', '\t', '\n', '\r', '(', ')', '"', ';', '\'', '`', ',', '|', '\\' => return true,
+            else => if (c < 0x20 or c == 0x7f) return true,
         }
     }
     const first = name[0];
     const digit_start = std.ascii.isDigit(first) or
         ((first == '+' or first == '-' or first == '.') and name.len > 1 and (std.ascii.isDigit(name[1]) or name[1] == '.'));
     if (digit_start) return true;
-    if (std.mem.eql(u8, name, ".")) return true;
+    if (std.mem.eql(u8, name, ".") or
+        std.ascii.eqlIgnoreCase(name, "+i") or
+        std.ascii.eqlIgnoreCase(name, "-i") or
+        std.ascii.eqlIgnoreCase(name, "+inf.0") or
+        std.ascii.eqlIgnoreCase(name, "-inf.0") or
+        std.ascii.eqlIgnoreCase(name, "+nan.0") or
+        std.ascii.eqlIgnoreCase(name, "-nan.0")) return true;
     return false;
 }
 
@@ -96,9 +102,18 @@ fn writeWithDepth(value: Value, writer: anytype, depth: usize, mode: Mode) !void
                 switch (c) {
                     '|' => try writer.writeAll("\\|"),
                     '\\' => try writer.writeAll("\\\\"),
-                    '\n' => try writer.writeAll("\\n"),
+                    '\x07' => try writer.writeAll("\\a"),
+                    '\x08' => try writer.writeAll("\\b"),
                     '\t' => try writer.writeAll("\\t"),
-                    else => try writer.writeByte(c),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\r' => try writer.writeAll("\\r"),
+                    else => {
+                        if (c < 0x20 or c == 0x7f) {
+                            try writer.print("\\x{x};", .{c});
+                        } else {
+                            try writer.writeByte(c);
+                        }
+                    },
                 }
             }
             try writer.writeByte('|');
@@ -639,7 +654,12 @@ const LabelWriter = struct {
                 }
                 try writer.writeAll("(");
                 var cur = value.pair;
+                var list_depth: usize = 0;
                 while (true) {
+                    if (list_depth > MAX_PRINT_DEPTH) {
+                        try writer.writeAll("...");
+                        break;
+                    }
                     try self.writeValue(cur.car, writer, depth + 1, mode);
                     switch (cur.cdr) {
                         .pair => |next| {
@@ -651,6 +671,7 @@ const LabelWriter = struct {
                             }
                             try writer.writeAll(" ");
                             cur = next;
+                            list_depth += 1;
                         },
                         .nil => break,
                         else => {

@@ -703,4 +703,70 @@
     (set-cdr! p p)
     (try (begin `#(,@p) #f) (catch e #t))))
 
+(test-case "rational normalization at the i64 minimum does not overflow"
+  (and (= (read (open-input-string "-9223372036854775808/2")) -4611686018427387904)
+       (= (/ -9223372036854775808 -2) 4611686018427387904)))
+(test-case "exact rational and float equality does not round the denominator product"
+  (and (not (= 1/3 (/ 1.0 3.0)))
+       (> 1/3 (/ 1.0 3.0))))
+(test-case "letrec and do survive lexical shadowing of set!, begin, and if"
+  (and (= 10 (let ((set! 1) (begin 2)) (letrec ((x 10)) x)))
+       (= 3 (let ((if 1) (begin 2) (set! 3)) (do ((i 0 (+ i 1))) ((= i 3) i))))))
+(test-case "special forms reject extra operands"
+  (and (eq? 'caught (try (eval '(quote a b)) (catch e 'caught)))
+       (eq? 'caught (try (eval '(if #t 1 2 3)) (catch e 'caught)))
+       (eq? 'caught (try (eval '(set! x 1 2)) (catch e 'caught)))
+       (eq? 'caught (try (eval '(cond (else 1) (#t 2))) (catch e 'caught)))
+       (eq? 'caught (try (eval '(case 1 (else 1) ((1) 2))) (catch e 'caught)))
+       (eq? 'caught (try (eval '(cond (#t => (lambda (x) x) 99))) (catch e 'caught)))))
+(test-case "hygiene renames unquoted identifiers inside a quasiquoted vector template"
+  (begin
+    (define %qq-vec-helper 42)
+    (define-syntax %qq-vec (syntax-rules () ((_ x) `#(,%qq-vec-helper ,x))))
+    (equal? #(42 7) (let ((%qq-vec-helper 0)) (%qq-vec 7)))))
+(test-case "make-list rejects non-integer or negative lengths"
+  (and (eq? 'caught (try (make-list -1) (catch e 'caught)))
+       (eq? 'caught (try (make-list 1.5) (catch e 'caught)))
+       (eq? 'caught (try (make-list "3") (catch e 'caught)))))
+(test-case "symbol=? validates every argument is a symbol"
+  (and (eq? 'caught (try (symbol=? "a" "a") (catch e 'caught)))
+       (eq? 'caught (try (symbol=? 'a 'b "c") (catch e 'caught)))))
+(test-case "vertical bar is a token delimiter"
+  (equal? '(foo bar) (read (open-input-string "(foo|bar|)"))))
+(test-case "trailing datum comment or directive at end of input is accepted"
+  (and (eof-object? (read (open-input-string "#; 1")))
+       (eof-object? (read (open-input-string "#!fold-case")))))
+(test-case "write escapes special numeric and backslash symbols with bars"
+  (let ((roundtrip (lambda (name)
+                     (let ((sym (string->symbol name))
+                           (out (open-output-string)))
+                       (write sym out)
+                       (eq? sym (read (open-input-string (get-output-string out))))))))
+    (and (roundtrip "+i")
+         (roundtrip "-inf.0")
+         (roundtrip "+nan.0")
+         (roundtrip "a\\b"))))
+(test-case "integer->char rejects surrogate code points"
+  (eq? 'caught (try (integer->char #xD800) (catch e 'caught))))
+(test-case "string->number supports big integers in non-decimal radices"
+  (= (expt 2 70) (string->number "400000000000000000" 16)))
+(test-case "gensym accepts a prefix longer than 64 bytes"
+  (symbol? (gensym (make-string 100 #\a))))
+(test-case "complex accessors and rationalize accept big integers"
+  (and (= 0 (imag-part (expt 2 70)))
+       (= (expt 2 70) (real-part (expt 2 70)))
+       (= 0 (angle (expt 2 70)))
+       (= (expt 2 70) (rationalize (expt 2 70) 0))))
+(test-case "time->components accepts an exact integer timestamp"
+  (equal? '(1970.0 1.0 1.0 0.0 0.0 0.0) (time->components 0)))
+(test-case "json-serialize handles shared list structure and escapes symbol characters"
+  (and (equal? "[[1,2],[1,2]]" (let ((x (list 1 2))) (json-serialize (list x x))))
+       (equal? "\"a\\\"b\"" (json-serialize (string->symbol "a\"b")))))
+(test-case "json-deserialize rejects trailing garbage"
+  (and (eq? 'caught (try (json-deserialize "123 abc") (catch e 'caught)))
+       (eq? 'caught (try (json-deserialize "-1-2") (catch e 'caught)))))
+(test-case "regex-search and regex-replace support zero-length matches"
+  (and (equal? "" (regex-search "a*" "bbb"))
+       (equal? "-b-b-" (regex-replace "a*" "-" "bb"))))
+
 (report-summary)

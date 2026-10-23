@@ -70,8 +70,8 @@ fn inputPortArg(interp: *interpreter.Interpreter, args: core.ValueList) ElzError
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const port_val = args.items[0];
     if (port_val != .port) return ElzError.InvalidArgument;
-    // Reading from a closed port is an error (R7RS 6.13.1), not end of file.
-    if (!port_val.port.is_open) return ElzError.InvalidArgument;
+    // Reading from a closed or output port is an error (R7RS 6.13.1), not end of file.
+    if (!port_val.port.is_open or !port_val.port.is_input) return ElzError.InvalidArgument;
     return port_val.port;
 }
 
@@ -113,7 +113,7 @@ pub fn peek_char(interp: *interpreter.Interpreter, _: *core.Environment, args: c
 pub fn read_string_k(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0) return ElzError.InvalidArgument;
-    const k: usize = @intCast(args.items[0].exact_integer);
+    const k = std.math.cast(usize, args.items[0].exact_integer) orelse return ElzError.InvalidArgument;
     var port_args = args;
     port_args.items = args.items[1..];
     const port = try inputPortArg(interp, port_args);
@@ -152,6 +152,7 @@ pub fn write_char(interp: *interpreter.Interpreter, _: *core.Environment, args: 
     else
         Value{ .port = interp.currentOutputPort() catch return ElzError.OutOfMemory };
     if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "write-char: expected a port, got {s}", .{core.typeName(port_val)});
+    if (!port_val.port.is_open or port_val.port.is_input) return ElzError.InvalidArgument;
 
     const cp = char_val.character;
     if (cp > 0x10FFFF) return ElzError.InvalidArgument;
@@ -174,6 +175,7 @@ pub fn write_to_port(interp: *interpreter.Interpreter, _: *core.Environment, arg
 
     if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "write-port: expected a string, got {s}", .{core.typeName(str_val)});
     if (port_val != .port) return interp.fail(ElzError.InvalidArgument, "write-port: expected a port, got {s}", .{core.typeName(port_val)});
+    if (!port_val.port.is_open or port_val.port.is_input) return ElzError.InvalidArgument;
 
     port_val.port.writeString(str_val.string.bytes) catch return ElzError.IOError;
     return Value.unspecified;
@@ -209,7 +211,7 @@ fn is_whitespace_byte(c: u8) bool {
 
 /// Returns true for characters that terminate an atom token.
 fn is_atom_delimiter(c: u8) bool {
-    return is_whitespace_byte(c) or c == '(' or c == ')' or c == ';' or c == '"' or c == '\'';
+    return is_whitespace_byte(c) or c == '(' or c == ')' or c == ';' or c == '"' or c == '\'' or c == '`' or c == ',' or c == '|';
 }
 
 /// Reads characters from the port until a single complete S-expression has been
@@ -222,6 +224,7 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
     var depth: i32 = 0;
     var seen_content = false;
     var in_string = false;
+    var in_bars = false;
 
     while (true) {
         const c_opt = port.readChar() catch null;
@@ -241,7 +244,24 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
                 if (esc_opt) |esc| try buf.append(allocator, esc);
                 continue;
             }
-            if (c == '"') in_string = false;
+            if (c == '"') {
+                in_string = false;
+                if (depth == 0) break;
+            }
+            continue;
+        }
+
+        if (in_bars) {
+            try buf.append(allocator, c);
+            if (c == '\\') {
+                const esc_opt = port.readChar() catch null;
+                if (esc_opt) |esc| try buf.append(allocator, esc);
+                continue;
+            }
+            if (c == '|') {
+                in_bars = false;
+                if (depth == 0) break;
+            }
             continue;
         }
 
@@ -253,6 +273,32 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
                     if (cc == null or cc.? == '\n') break;
                 }
                 continue;
+            }
+            if (c == '#') {
+                const nx = port.peekChar() catch null;
+                if (nx != null and nx.? == '|') {
+                    _ = port.readChar() catch null;
+                    var nesting: usize = 1;
+                    var prev: u8 = 0;
+                    while (nesting > 0) {
+                        const cc = (port.readChar() catch null) orelse break;
+                        if (prev == '|' and cc == '#') {
+                            nesting -= 1;
+                            prev = 0;
+                        } else if (prev == '#' and cc == '|') {
+                            nesting += 1;
+                            prev = 0;
+                        } else prev = cc;
+                    }
+                    continue;
+                }
+                if (nx != null and nx.? == ';') {
+                    _ = port.readChar() catch null;
+                    if (try slurp_one_datum(port, allocator)) |commented| {
+                        allocator.free(commented);
+                    }
+                    continue;
+                }
             }
         }
 
@@ -277,6 +323,11 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
                 _ = port.readChar() catch null;
                 try buf.append(allocator, '\\');
                 if (port.readChar() catch null) |lit| try buf.append(allocator, lit);
+                while (port.peekChar() catch null) |pk| {
+                    if (is_atom_delimiter(pk)) break;
+                    _ = port.readChar() catch null;
+                    try buf.append(allocator, pk);
+                }
                 if (depth == 0) break;
                 continue;
             }
@@ -305,6 +356,10 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
             in_string = true;
             continue;
         }
+        if (c == '|') {
+            in_bars = true;
+            continue;
+        }
         if (c == '(') {
             depth += 1;
             continue;
@@ -314,11 +369,21 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
             if (depth <= 0) break;
             continue;
         }
-        if (c == '\'') continue;
+        if (c == '\'' or c == '`') continue;
+        if (c == ',') {
+            if ((port.peekChar() catch null) == @as(?u8, '@')) {
+                _ = port.readChar() catch null;
+                try buf.append(allocator, '@');
+            }
+            continue;
+        }
 
         if (depth == 0) {
             const peek_opt = port.peekChar() catch null;
             if (peek_opt == null) break;
+            if (peek_opt.? == '(' and (std.mem.eql(u8, buf.items, "#") or std.mem.eql(u8, buf.items, "#u8"))) {
+                continue;
+            }
             if (is_atom_delimiter(peek_opt.?)) break;
         }
     }
@@ -335,6 +400,7 @@ pub fn read(interp: *interpreter.Interpreter, env: *core.Environment, args: core
         if (args.items.len == 1) {
             const arg = args.items[0];
             if (arg != .port) return interp.fail(ElzError.InvalidArgument, "read: expected a port, got {s}", .{core.typeName(arg)});
+            if (!arg.port.is_open or !arg.port.is_input) return ElzError.InvalidArgument;
             break :blk arg.port;
         }
         break :blk interp.currentInputPort() catch return ElzError.OutOfMemory;
@@ -393,6 +459,7 @@ pub fn set_current_output_port_bang(interp: *interpreter.Interpreter, _: *core.E
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     if (v != .port) return interp.fail(ElzError.InvalidArgument, "set-current-output-port!: expected a port, got {s}", .{core.typeName(v)});
+    if (v.port.is_input) return ElzError.InvalidArgument;
     interp.runtime.stdout_port = v.port;
     return Value.unspecified;
 }
@@ -434,6 +501,7 @@ pub fn set_current_input_port_bang(interp: *interpreter.Interpreter, _: *core.En
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const v = args.items[0];
     if (v != .port) return interp.fail(ElzError.InvalidArgument, "set-current-input-port!: expected a port, got {s}", .{core.typeName(v)});
+    if (!v.port.is_input) return ElzError.InvalidArgument;
     interp.runtime.stdin_port = v.port;
     return Value.unspecified;
 }
@@ -540,7 +608,9 @@ fn outputPortArg(interp: *interpreter.Interpreter, args: core.ValueList, index: 
         return interp.currentOutputPort() catch return ElzError.OutOfMemory;
     }
     if (args.items[index] != .port) return ElzError.InvalidArgument;
-    return args.items[index].port;
+    const p = args.items[index].port;
+    if (!p.is_open or p.is_input) return ElzError.InvalidArgument;
+    return p;
 }
 
 /// Syntax: (eof-object)
@@ -629,7 +699,7 @@ pub fn write_u8(interp: *interpreter.Interpreter, _: *core.Environment, args: co
 pub fn read_bytevector(interp: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0) return ElzError.InvalidArgument;
-    const k: usize = @intCast(args.items[0].exact_integer);
+    const k = std.math.cast(usize, args.items[0].exact_integer) orelse return ElzError.InvalidArgument;
     var port_args = args;
     port_args.items = args.items[1..];
     const port = try inputPortArg(interp, port_args);
@@ -656,17 +726,18 @@ pub fn read_bytevector_bang(interp: *interpreter.Interpreter, _: *core.Environme
     const items = args.items[0].bytevector.items;
     const port = if (args.items.len >= 2) blk: {
         if (args.items[1] != .port) return interp.fail(ElzError.InvalidArgument, "read-bytevector!: expected a port, got {s}", .{core.typeName(args.items[1])});
+        if (!args.items[1].port.is_open or !args.items[1].port.is_input) return ElzError.InvalidArgument;
         break :blk args.items[1].port;
     } else interp.currentInputPort() catch return ElzError.OutOfMemory;
     var start: usize = 0;
     var end: usize = items.len;
     if (args.items.len >= 3) {
         if (args.items[2] != .exact_integer or args.items[2].exact_integer < 0) return ElzError.InvalidArgument;
-        start = @intCast(args.items[2].exact_integer);
+        start = std.math.cast(usize, args.items[2].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.items.len == 4) {
         if (args.items[3] != .exact_integer or args.items[3].exact_integer < 0) return ElzError.InvalidArgument;
-        end = @intCast(args.items[3].exact_integer);
+        end = std.math.cast(usize, args.items[3].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (start > end or end > items.len) return ElzError.InvalidArgument;
 
@@ -692,11 +763,11 @@ pub fn write_bytevector(interp: *interpreter.Interpreter, _: *core.Environment, 
     var end: usize = items.len;
     if (args.items.len >= 3) {
         if (args.items[2] != .exact_integer or args.items[2].exact_integer < 0) return ElzError.InvalidArgument;
-        start = @intCast(args.items[2].exact_integer);
+        start = std.math.cast(usize, args.items[2].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.items.len == 4) {
         if (args.items[3] != .exact_integer or args.items[3].exact_integer < 0) return ElzError.InvalidArgument;
-        end = @intCast(args.items[3].exact_integer);
+        end = std.math.cast(usize, args.items[3].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (start > end or end > items.len) return ElzError.InvalidArgument;
     port.writeString(items[start..end]) catch return ElzError.IOError;

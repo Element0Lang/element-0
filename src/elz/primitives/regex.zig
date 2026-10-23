@@ -325,9 +325,7 @@ pub fn regex_search(interp: *interpreter.Interpreter, env: *core.Environment, ar
     for (0..input.len + 1) |pos| {
         const result = matchAt(regex, input, pos, env.allocator) catch return ElzError.OutOfMemory;
         if (result) |m| {
-            if (m.end > m.start) {
-                return (try core.makeString(env.allocator, env.allocator.dupe(u8, input[m.start..m.end]) catch return ElzError.OutOfMemory));
-            }
+            return (try core.makeString(env.allocator, env.allocator.dupe(u8, input[m.start..m.end]) catch return ElzError.OutOfMemory));
         }
     }
     return Value{ .boolean = false };
@@ -357,10 +355,8 @@ pub fn regex_replace(interp: *interpreter.Interpreter, env: *core.Environment, a
         while (search_pos <= input.len) {
             const m = matchAt(regex, input, search_pos, env.allocator) catch return ElzError.OutOfMemory;
             if (m) |match_result| {
-                if (match_result.end > match_result.start) {
-                    found = match_result;
-                    break;
-                }
+                found = match_result;
+                break;
             }
             search_pos += 1;
         }
@@ -368,7 +364,14 @@ pub fn regex_replace(interp: *interpreter.Interpreter, env: *core.Environment, a
         if (found) |match_result| {
             result.appendSlice(env.allocator, input[pos..match_result.start]) catch return ElzError.OutOfMemory;
             result.appendSlice(env.allocator, replacement) catch return ElzError.OutOfMemory;
-            pos = match_result.end;
+            if (match_result.end == match_result.start) {
+                if (match_result.end < input.len) {
+                    result.append(env.allocator, input[match_result.end]) catch return ElzError.OutOfMemory;
+                }
+                pos = match_result.end + 1;
+            } else {
+                pos = match_result.end;
+            }
         } else {
             result.appendSlice(env.allocator, input[pos..]) catch return ElzError.OutOfMemory;
             break;

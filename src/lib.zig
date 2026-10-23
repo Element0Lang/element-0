@@ -35,19 +35,34 @@ pub const special_form_names = @import("elz/compiler.zig").special_form_names;
 // transitively imports `core`, `interpreter`, `compiler`, `vm`, and the primitives, so the
 // full suite of inline unit tests runs together.
 test {
-    _ = @import("elz/managed_heap.zig");
+    _ = @import("elz/api_helpers.zig");
+    _ = @import("elz/bigint.zig");
+    _ = @import("elz/chunk.zig");
+    _ = @import("elz/compiler.zig");
     _ = @import("elz/core.zig");
+    _ = @import("elz/env_setup.zig");
+    _ = @import("elz/ffi.zig");
+    _ = @import("elz/interpreter.zig");
+    _ = @import("elz/managed_heap.zig");
     _ = @import("elz/parser.zig");
+    _ = @import("elz/unicode.zig");
+    _ = @import("elz/vm.zig");
     _ = @import("elz/writer.zig");
+    _ = @import("elz/primitives/bytevectors.zig");
     _ = @import("elz/primitives/control.zig");
+    _ = @import("elz/primitives/datetime.zig");
     _ = @import("elz/primitives/format.zig");
     _ = @import("elz/primitives/hashmaps.zig");
     _ = @import("elz/primitives/io.zig");
+    _ = @import("elz/primitives/json.zig");
     _ = @import("elz/primitives/lists.zig");
     _ = @import("elz/primitives/math.zig");
     _ = @import("elz/primitives/modules.zig");
+    _ = @import("elz/primitives/os.zig");
     _ = @import("elz/primitives/ports.zig");
     _ = @import("elz/primitives/predicates.zig");
+    _ = @import("elz/primitives/process.zig");
+    _ = @import("elz/primitives/records.zig");
     _ = @import("elz/primitives/regex.zig");
     _ = @import("elz/primitives/strings.zig");
     _ = @import("elz/primitives/vectors.zig");

@@ -16,6 +16,7 @@ const Value = core.Value;
 /// A new slice containing the values from the list, or an error if the input is not a proper list.
 pub fn listToSlice(allocator: std.mem.Allocator, list_head: Value) ![]Value {
     var items = std.ArrayListUnmanaged(Value).empty;
+    errdefer items.deinit(allocator);
 
     var current_node = list_head;
     while (current_node != .nil) {
@@ -60,7 +61,9 @@ test "sliceToList empty slice" {
 }
 
 test "sliceToList single element" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const result = try sliceToList(allocator, &[_]Value{Value{ .number = 42 }});
     try std.testing.expect(result == .pair);
     try std.testing.expectEqual(@as(f64, 42), result.pair.car.number);
@@ -68,7 +71,9 @@ test "sliceToList single element" {
 }
 
 test "sliceToList multiple elements" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const result = try sliceToList(allocator, &[_]Value{
         Value{ .number = 1 },
         Value{ .number = 2 },
@@ -93,15 +98,17 @@ test "listToSlice empty list" {
 }
 
 test "listToSlice proper list" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Build list (1 2 3)
     const list = try sliceToList(allocator, &[_]Value{
         Value{ .number = 1 },
         Value{ .number = 2 },
         Value{ .number = 3 },
     });
-    const slice = try listToSlice(allocator, list);
-    defer allocator.free(slice);
+    const slice = try listToSlice(std.testing.allocator, list);
+    defer std.testing.allocator.free(slice);
 
     try std.testing.expectEqual(@as(usize, 3), slice.len);
     try std.testing.expectEqual(@as(f64, 1), slice[0].number);
@@ -113,6 +120,7 @@ test "listToSlice improper list returns error" {
     const allocator = std.testing.allocator;
     // Create an improper list (1 . 2)
     const pair = try allocator.create(core.Pair);
+    defer allocator.destroy(pair);
     pair.* = .{
         .car = Value{ .number = 1 },
         .cdr = Value{ .number = 2 }, // Not .nil or .pair - improper

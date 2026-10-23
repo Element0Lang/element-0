@@ -434,6 +434,11 @@ fn collect_introduced_identifiers(
             try collect_introduced_identifiers(allocator, p.car, pattern_var_names, ellipsis, out);
             try collect_introduced_identifiers(allocator, p.cdr, pattern_var_names, ellipsis, out);
         },
+        .vector => |v| {
+            for (v.items) |item| {
+                try collect_introduced_identifiers(allocator, item, pattern_var_names, ellipsis, out);
+            }
+        },
         else => {},
     }
 }
@@ -515,6 +520,12 @@ fn collect_template_bound(
     ellipsis: []const u8,
     out: *std.ArrayListUnmanaged([]const u8),
 ) ElzError!void {
+    if (template == .vector) {
+        for (template.vector.items) |item| {
+            try collect_template_bound(allocator, item, pattern_var_names, ellipsis, out);
+        }
+        return;
+    }
     if (template != .pair) return;
     const p = template.pair;
     if (p.car == .symbol and p.cdr == .pair) {
@@ -616,9 +627,18 @@ fn rename_template_depth(
             };
             return Value{ .pair = new_pair };
         },
-        // A vector template is data; pattern variables inside it are still
-        // substituted later, since substitution does not go through the map.
-        .vector => return template.deep_clone(allocator),
+        // A vector template is data unless inside a quasiquote, where unquoted
+        // expressions still need hygiene renaming.
+        .vector => |v| {
+            if (qq_depth == 0) return template.deep_clone(allocator);
+            const items = try allocator.alloc(Value, v.items.len);
+            for (v.items, 0..) |item, idx| {
+                items[idx] = try rename_template_depth(allocator, item, rename_map, qq_depth);
+            }
+            const new_vec = try allocator.create(core.Vector);
+            new_vec.* = .{ .items = items };
+            return Value{ .vector = new_vec };
+        },
         else => return template.deep_clone(allocator),
     }
 }

@@ -21,6 +21,27 @@ fn containerPtr(value: Value) ?usize {
     };
 }
 
+fn writeJsonString(s: []const u8, w: *std.Io.Writer) !void {
+    try w.writeByte('"');
+    for (s) |c| {
+        switch (c) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\t' => try w.writeAll("\\t"),
+            '\r' => try w.writeAll("\\r"),
+            else => {
+                if (c < 0x20) {
+                    try w.print("\\u{x:0>4}", .{c});
+                } else {
+                    try w.writeByte(c);
+                }
+            },
+        }
+    }
+    try w.writeByte('"');
+}
+
 /// Serializes a Value to JSON format and writes to the writer.
 fn serializeValue(value: Value, w: *std.Io.Writer) !void {
     var path: PathSet = .empty;
@@ -54,32 +75,17 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
         },
         .rational => |r| try w.print("{d}", .{@as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator))}),
         .complex => return error.OutOfMemory,
-        .string => |ms| {
-            const s = ms.bytes;
-            try w.writeByte('"');
-            for (s) |c| {
-                switch (c) {
-                    '"' => try w.writeAll("\\\""),
-                    '\\' => try w.writeAll("\\\\"),
-                    '\n' => try w.writeAll("\\n"),
-                    '\t' => try w.writeAll("\\t"),
-                    '\r' => try w.writeAll("\\r"),
-                    else => {
-                        if (c < 0x20) {
-                            try w.print("\\u{x:0>4}", .{c});
-                        } else {
-                            try w.writeByte(c);
-                        }
-                    },
-                }
-            }
-            try w.writeByte('"');
-        },
+        .string => |ms| try writeJsonString(ms.bytes, w),
         .boolean => |b| try w.writeAll(if (b) "true" else "false"),
         .nil => try w.writeAll("null"),
         .pair => {
             // Serialize proper list as JSON array
             try w.writeByte('[');
+            var cdr_ptrs: std.ArrayListUnmanaged(usize) = .empty;
+            defer {
+                for (cdr_ptrs.items) |p| _ = path.remove(p);
+                cdr_ptrs.deinit(std.heap.page_allocator);
+            }
             var current: Value = value;
             var first = true;
             while (current == .pair) {
@@ -88,8 +94,12 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
                 try serializeInner(current.pair.car, w, path);
                 current = current.pair.cdr;
                 // A cdr cycle never reaches the end of the list.
-                if (current == .pair and path.contains(@intFromPtr(current.pair))) return error.OutOfMemory;
-                if (current == .pair) try path.put(std.heap.page_allocator, @intFromPtr(current.pair), {});
+                if (current == .pair) {
+                    const cptr = @intFromPtr(current.pair);
+                    if (path.contains(cptr)) return error.OutOfMemory;
+                    try path.put(std.heap.page_allocator, cptr, {});
+                    try cdr_ptrs.append(std.heap.page_allocator, cptr);
+                }
             }
             // If improper list, serialize the cdr too
             if (current != .nil) {
@@ -114,47 +124,30 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
                 if (!first) try w.writeByte(',');
                 first = false;
                 // Key is always a string in Element 0 hash maps
-                try w.writeByte('"');
-                for (entry.key_ptr.*) |c| {
-                    switch (c) {
-                        '"' => try w.writeAll("\\\""),
-                        '\\' => try w.writeAll("\\\\"),
-                        else => try w.writeByte(c),
-                    }
-                }
-                try w.writeByte('"');
+                try writeJsonString(entry.key_ptr.*, w);
                 try w.writeByte(':');
                 try serializeInner(entry.value_ptr.*, w, path);
             }
             try w.writeByte('}');
         },
         .character => |c| {
-            // Serialize as single-character string
-            try w.writeByte('"');
             if (c > 0x10FFFF) {
-                try w.writeByte('?');
+                try writeJsonString("?", w);
             } else {
                 const codepoint: u21 = @intCast(c);
                 if (std.unicode.utf8ValidCodepoint(codepoint)) {
                     var char_buf: [4]u8 = undefined;
                     const len = std.unicode.utf8Encode(codepoint, &char_buf) catch {
-                        try w.writeByte('?');
-                        try w.writeByte('"');
+                        try writeJsonString("?", w);
                         return;
                     };
-                    try w.writeAll(char_buf[0..@as(usize, @intCast(len))]);
+                    try writeJsonString(char_buf[0..@as(usize, @intCast(len))], w);
                 } else {
-                    try w.writeByte('?');
+                    try writeJsonString("?", w);
                 }
             }
-            try w.writeByte('"');
         },
-        .symbol => |s| {
-            // Serialize symbols as strings
-            try w.writeByte('"');
-            try w.writeAll(s);
-            try w.writeByte('"');
-        },
+        .symbol => |s| try writeJsonString(s, w),
         // Non-serializable types
         .vm_closure, .macro, .procedure, .foreign_procedure, .opaque_pointer, .cell, .module, .port, .promise, .multi_values, .syntax_rules, .bytevector, .continuation, .escape, .record_type, .record, .unspecified, .eof => {
             return error.OutOfMemory; // Signal unsupported type
@@ -343,7 +336,7 @@ fn parseJsonValueDepth(json: []const u8, start: usize, allocator: std.mem.Alloca
             var end = i;
             if (json[end] == '-') end += 1;
             while (end < json.len and ((json[end] >= '0' and json[end] <= '9') or json[end] == '.' or json[end] == 'e' or json[end] == 'E' or json[end] == '+' or json[end] == '-')) {
-                if ((json[end] == '-' or json[end] == '+') and end > i + 1 and json[end - 1] != 'e' and json[end - 1] != 'E') break;
+                if ((json[end] == '-' or json[end] == '+') and json[end - 1] != 'e' and json[end - 1] != 'E') break;
                 end += 1;
             }
             const token = json[i..end];
@@ -389,7 +382,9 @@ pub fn json_deserialize(interp: *interpreter.Interpreter, env: *core.Environment
     const str_val = args.items[0];
     if (str_val != .string) return interp.fail(ElzError.InvalidArgument, "json-deserialize: expected a string, got {s}", .{core.typeName(str_val)});
 
-    const result = parseJsonValue(str_val.string.bytes, 0, env.allocator) catch return ElzError.InvalidArgument;
+    const bytes = str_val.string.bytes;
+    const result = parseJsonValue(bytes, 0, env.allocator) catch return ElzError.InvalidArgument;
+    if (skipWhitespace(bytes, result.pos) != bytes.len) return ElzError.InvalidArgument;
     return result.value;
 }
 

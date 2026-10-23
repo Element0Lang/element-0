@@ -160,8 +160,9 @@ pub const FuncProto = struct {
     }
 
     /// Patch a previously emitted jump instruction's offset.
-    pub fn patchJump(self: *FuncProto, jump_idx: usize) void {
-        const target: i16 = @intCast(self.instructions.items.len - jump_idx - 1);
+    pub fn patchJump(self: *FuncProto, jump_idx: usize) errors.ElzError!void {
+        const delta = self.instructions.items.len - jump_idx - 1;
+        const target = std.math.cast(i16, delta) orelse return errors.ElzError.TooManyLocals;
         self.instructions.items[jump_idx].offset = target;
     }
 
@@ -186,7 +187,7 @@ test "chunk basic emit and patch" {
 
     const idx = try proto.emit(Instruction.init_offset(.jump, 0));
     _ = try proto.emit(Instruction.init_op(.load_nil));
-    proto.patchJump(idx);
+    try proto.patchJump(idx);
 
     try testing.expectEqual(@as(i16, 1), proto.instructions.items[0].offset);
     try testing.expectEqual(OpCode.load_nil, proto.instructions.items[1].op);

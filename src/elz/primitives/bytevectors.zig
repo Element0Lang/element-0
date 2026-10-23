@@ -22,11 +22,11 @@ fn rangeArgs(args: []const Value, len: usize) ElzError!struct { start: usize, en
     var end: usize = len;
     if (args.len >= 1) {
         if (args[0] != .exact_integer or args[0].exact_integer < 0) return ElzError.InvalidArgument;
-        start = @intCast(args[0].exact_integer);
+        start = std.math.cast(usize, args[0].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.len >= 2) {
         if (args[1] != .exact_integer or args[1].exact_integer < 0) return ElzError.InvalidArgument;
-        end = @intCast(args[1].exact_integer);
+        end = std.math.cast(usize, args[1].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.len > 2) return ElzError.WrongArgumentCount;
     if (start > end or end > len) return ElzError.InvalidArgument;
@@ -44,7 +44,7 @@ pub fn bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: cor
 pub fn make_bytevector(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len < 1 or args.items.len > 2) return ElzError.WrongArgumentCount;
     if (args.items[0] != .exact_integer or args.items[0].exact_integer < 0) return ElzError.InvalidArgument;
-    const len: usize = @intCast(args.items[0].exact_integer);
+    const len = std.math.cast(usize, args.items[0].exact_integer) orelse return ElzError.InvalidArgument;
     const fill: u8 = if (args.items.len == 2) try byteArg(args.items[1]) else 0;
     const items = env.allocator.alloc(u8, len) catch return ElzError.OutOfMemory;
     @memset(items, fill);
@@ -101,11 +101,11 @@ pub fn bytevector_copy_bang(_: *interpreter.Interpreter, _: *core.Environment, a
     if (args.items[0] != .bytevector or args.items[1] != .exact_integer or args.items[2] != .bytevector) return ElzError.InvalidArgument;
     const to = args.items[0].bytevector.items;
     if (args.items[1].exact_integer < 0) return ElzError.InvalidArgument;
-    const at: usize = @intCast(args.items[1].exact_integer);
+    const at = std.math.cast(usize, args.items[1].exact_integer) orelse return ElzError.InvalidArgument;
     const from = args.items[2].bytevector.items;
     const r = try rangeArgs(args.items[3..], from.len);
     const count = r.end - r.start;
-    if (at + count > to.len) return ElzError.InvalidArgument;
+    if (at > to.len or count > to.len - at) return ElzError.InvalidArgument;
     // memmove semantics: correct for overlapping ranges within one bytevector.
     if (at <= r.start) {
         std.mem.copyForwards(u8, to[at .. at + count], from[r.start..r.end]);

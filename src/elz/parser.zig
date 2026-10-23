@@ -123,7 +123,7 @@ fn tokenize(source: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnma
                     while (j < source.len) {
                         const c = source[j];
                         if (std.ascii.isWhitespace(c)) break;
-                        if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"') break;
+                        if (c == '(' or c == ')' or c == '\'' or c == '`' or c == ',' or c == ';' or c == '"' or c == '|') break;
                         j += 1;
                     }
                     try tokens.append(allocator, source[i..j]);
@@ -194,6 +194,24 @@ const Parser = struct {
         }) catch {};
     }
 
+    fn skipTrivia(self: *Parser) ElzError!void {
+        while (self.position < self.tokens.items.len) {
+            const tok = self.tokens.items[self.position];
+            if (std.mem.eql(u8, tok, "#!fold-case")) {
+                self.fold_case = true;
+                self.position += 1;
+            } else if (std.mem.eql(u8, tok, "#!no-fold-case")) {
+                self.fold_case = false;
+                self.position += 1;
+            } else if (std.mem.eql(u8, tok, "#;")) {
+                self.position += 1;
+                _ = try self.parse_form();
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Parses a single form from the token stream.
     ///
     /// - `self`: A pointer to the parser.
@@ -202,22 +220,10 @@ const Parser = struct {
         if (self.depth >= MAX_PARSE_DEPTH) return ElzError.UnexpectedEndOfInput;
         self.depth += 1;
         defer self.depth -= 1;
+        try self.skipTrivia();
         if (self.position >= self.tokens.items.len) return ElzError.UnexpectedEndOfInput;
         const token = self.tokens.items[self.position];
         self.position += 1;
-        if (std.mem.eql(u8, token, "#;")) {
-            // Datum comment: discard the next form, return the one after it.
-            _ = try self.parse_form();
-            return self.parse_form();
-        }
-        if (std.mem.eql(u8, token, "#!fold-case")) {
-            self.fold_case = true;
-            return self.parse_form();
-        }
-        if (std.mem.eql(u8, token, "#!no-fold-case")) {
-            self.fold_case = false;
-            return self.parse_form();
-        }
         // Datum labels: `#n=<datum>` defines label n, `#n#` refers to it.
         if (token.len >= 3 and token[0] == '#' and std.ascii.isDigit(token[1])) {
             const last = token[token.len - 1];
@@ -264,13 +270,9 @@ const Parser = struct {
             var bytes = std.ArrayListUnmanaged(u8).empty;
             defer bytes.deinit(self.allocator);
             while (true) {
+                try self.skipTrivia();
                 if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
                 const next = self.tokens.items[self.position];
-                if (std.mem.eql(u8, next, "#;")) {
-                    self.position += 1;
-                    _ = try self.parse_form();
-                    continue;
-                }
                 if (std.mem.eql(u8, next, ")")) {
                     self.position += 1;
                     break;
@@ -289,13 +291,9 @@ const Parser = struct {
             var items = std.ArrayListUnmanaged(Value).empty;
             defer items.deinit(self.allocator);
             while (true) {
+                try self.skipTrivia();
                 if (self.position >= self.tokens.items.len) return ElzError.UnmatchedOpenParen;
                 const next = self.tokens.items[self.position];
-                if (std.mem.eql(u8, next, "#;")) {
-                    self.position += 1;
-                    _ = try self.parse_form();
-                    continue;
-                }
                 if (std.mem.eql(u8, next, ")")) {
                     self.position += 1;
                     break;
@@ -311,15 +309,11 @@ const Parser = struct {
             var values = std.ArrayListUnmanaged(Value).empty;
             defer values.deinit(self.allocator);
             while (true) {
+                try self.skipTrivia();
                 if (self.position >= self.tokens.items.len) {
                     return ElzError.UnmatchedOpenParen;
                 }
                 const next_token = self.tokens.items[self.position];
-                if (std.mem.eql(u8, next_token, "#;")) {
-                    self.position += 1;
-                    _ = try self.parse_form();
-                    continue;
-                }
                 if (std.mem.eql(u8, next_token, ")")) {
                     self.position += 1;
                     var result: Value = Value.nil;
@@ -337,11 +331,8 @@ const Parser = struct {
                     self.position += 1;
                     if (values.items.len == 0) return ElzError.InvalidDottedPair;
                     const cdr = try self.parse_form();
-                    // Datum comments may follow the tail: `(a . b #;c)`.
-                    while (self.position < self.tokens.items.len and std.mem.eql(u8, self.tokens.items[self.position], "#;")) {
-                        self.position += 1;
-                        _ = try self.parse_form();
-                    }
+                    // Datum comments and directives may follow the tail: `(a . b #;c)`.
+                    try self.skipTrivia();
                     if (self.position >= self.tokens.items.len or !std.mem.eql(u8, self.tokens.items[self.position], ")")) {
                         return ElzError.InvalidDottedPair;
                     }
@@ -514,7 +505,10 @@ fn parse_atom(token: []const u8, allocator: std.mem.Allocator) ElzError!Value {
         while (i < token.len - 1) {
             if (token[i] == '\\' and i + 1 < token.len - 1) {
                 switch (token[i + 1]) {
+                    'a' => try name.append(allocator, 7),
+                    'b' => try name.append(allocator, 8),
                     'n' => try name.append(allocator, '\n'),
+                    'r' => try name.append(allocator, '\r'),
                     't' => try name.append(allocator, '\t'),
                     'x', 'X' => {
                         const semi = std.mem.indexOfScalarPos(u8, token, i + 2, ';') orelse return ElzError.InvalidArgument;
@@ -810,6 +804,8 @@ pub fn readOne(source: []const u8, allocator: std.mem.Allocator) ElzError!?struc
         .source = source,
     };
     defer p.labels.deinit(allocator);
+    try p.skipTrivia();
+    if (p.position >= p.tokens.items.len) return null;
     const v = try p.parse_form();
     const consumed = if (p.position < p.tokens.items.len) blk: {
         const next_tok = p.tokens.items[p.position];
@@ -840,18 +836,21 @@ pub fn readAllTracked(source: []const u8, allocator: std.mem.Allocator, file: []
     defer tokens.deinit(allocator);
     if (tokens.items.len == 0) return .empty;
 
+    const owned_file = if (file.len > 0 and locations != null) try allocator.dupe(u8, file) else file;
     var parser = Parser{
         .tokens = tokens,
         .position = 0,
         .allocator = allocator,
         .source = source,
-        .file = file,
+        .file = owned_file,
         .locations = locations,
     };
     defer parser.labels.deinit(allocator);
 
     var forms = std.ArrayListUnmanaged(Value).empty;
-    while (parser.position < parser.tokens.items.len) {
+    while (true) {
+        try parser.skipTrivia();
+        if (parser.position >= parser.tokens.items.len) break;
         try forms.append(allocator, try parser.parse_form());
     }
     return forms;
