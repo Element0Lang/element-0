@@ -198,7 +198,7 @@
                    nonneg
                    (cons (car numbers) neg)))))))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test 3 (force (delay (+ 1 2)))))) (catch %conf-e (%conf-block-failed %conf-e)))
-(try (eval (quote (test '(3 3)  
+(try (eval (quote (test '(3 3)
     (let ((p (delay (+ 1 2))))
       (list (force p) (force p)))))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (define integers
@@ -213,7 +213,7 @@
 (try (eval (quote (test 2 (head (tail (tail integers)))))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (define (stream-filter p? s)
   (delay-force
-   (if (null? (force s)) 
+   (if (null? (force s))
        (delay '())
        (let ((h (car (force s)))
              (t (cdr (force s))))
@@ -268,7 +268,7 @@
 (try (eval (quote (test '(list 3 4) (quasiquote (list (unquote (+ 1 2)) 4)) ))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test `(list ,(+ 1 2) 4) (quasiquote (list (unquote (+ 1 2)) 4))))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (define any-arity
-  (case-lambda 
+  (case-lambda
     (() 'zero)
     ((x) x)
     ((x y) (cons x y))
@@ -280,7 +280,7 @@
 (try (eval (quote (test '(1 2 3) (any-arity 1 2 3)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test '(many 1 2 3 4) (any-arity 1 2 3 4)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (define rest-arity
-  (case-lambda 
+  (case-lambda
     (() '(zero))
     ((x) (list 'one x))
     ((x y) (list 'two x y))
@@ -922,7 +922,7 @@
 (try (eval (quote (test #f (symbol=? 'a 'A)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test #t (symbol=? 'a 'a 'a)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test #f (symbol=? 'a 'a 'A)))) (catch %conf-e (%conf-block-failed %conf-e)))
-(try (eval (quote (test "flying-fish"     
+(try (eval (quote (test "flying-fish"
 (symbol->string 'flying-fish)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test "Martin" (symbol->string 'Martin)))) (catch %conf-e (%conf-block-failed %conf-e)))
 (try (eval (quote (test "Malvina" (symbol->string (string->symbol "Malvina"))))) (catch %conf-e (%conf-block-failed %conf-e)))
