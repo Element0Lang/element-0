@@ -276,7 +276,7 @@
 
 (test 3 (force (delay (+ 1 2))))
 
-(test '(3 3)  
+(test '(3 3)
     (let ((p (delay (+ 1 2))))
       (list (force p) (force p))))
 
@@ -294,7 +294,7 @@
 
 (define (stream-filter p? s)
   (delay-force
-   (if (null? (force s)) 
+   (if (null? (force s))
        (delay '())
        (let ((h (car (force s)))
              (t (cdr (force s))))
@@ -355,7 +355,7 @@
 (test `(list ,(+ 1 2) 4) (quasiquote (list (unquote (+ 1 2)) 4)))
 
 (define any-arity
-  (case-lambda 
+  (case-lambda
     (() 'zero)
     ((x) x)
     ((x y) (cons x y))
@@ -369,7 +369,7 @@
 (test '(many 1 2 3 4) (any-arity 1 2 3 4))
 
 (define rest-arity
-  (case-lambda 
+  (case-lambda
     (() '(zero))
     ((x) (list 'one x))
     ((x y) (list 'two x y))
@@ -1190,7 +1190,7 @@
 (test #t (symbol=? 'a 'a 'a))
 (test #f (symbol=? 'a 'a 'A))
 
-(test "flying-fish"     
+(test "flying-fish"
 (symbol->string 'flying-fish))
 (test "Martin" (symbol->string 'Martin))
 (test "Malvina" (symbol->string (string->symbol "Malvina")))
@@ -2392,7 +2392,7 @@
 (test-numeric-syntax "0.5+3/4i" (make-rectangular 0.5 (/ 3 4))
   "0.5+0.75i" ".5+.75i" "0.5+3/4i" ".5+3/4i" "500.0e-3+750.0e-3i")
 ;; Complex NaN, Inf (rectangular notation)
-;;(test-numeric-syntax "+nan.0+nan.0i" (make-rectangular the-nan the-nan) "+NaN.0+NaN.0i") 
+;;(test-numeric-syntax "+nan.0+nan.0i" (make-rectangular the-nan the-nan) "+NaN.0+NaN.0i")
 (test-numeric-syntax "+inf.0+inf.0i" (make-rectangular +inf.0 +inf.0) "+Inf.0+Inf.0i")
 (test-numeric-syntax "-inf.0+inf.0i" (make-rectangular -inf.0 +inf.0) "-Inf.0+Inf.0i")
 (test-numeric-syntax "-inf.0-inf.0i" (make-rectangular -inf.0 -inf.0) "-Inf.0-Inf.0i")
