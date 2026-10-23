@@ -311,11 +311,12 @@ pub fn force(interp: *interpreter.Interpreter, env: *core.Environment, args: cor
         // The thunk may have forced this promise re-entrantly.
         if (pr.forced) break;
         if (pr.is_delay_force and result == .promise) {
-            const inner = result.promise;
+            var inner = result.promise;
+            while (inner.forward) |f| inner = f;
             if (inner.forced) {
                 pr.result = inner.result;
                 pr.forced = true;
-            } else {
+            } else if (inner != pr) {
                 pr.expr = inner.expr;
                 pr.is_delay_force = inner.is_delay_force;
                 // Let the inner promise share the outcome.
@@ -421,9 +422,11 @@ pub fn prim_try(interp: *interpreter.Interpreter, env: *core.Environment, args: 
     if (body_result) |val| {
         return val;
     } else |err| {
-        // An escape continuation jumping past this `try` is not an error the
-        // handler should see: let it reach its own call/ec frame.
-        if (err == ElzError.EscapeContinuationInvoked) return err;
+        // An escape continuation or resource limit is not an error the handler
+        // should catch.
+        if (err == ElzError.EscapeContinuationInvoked or
+            err == ElzError.TimeLimitExceeded or
+            err == ElzError.ExecutionBudgetExceeded) return err;
         // A raised value takes precedence; otherwise wrap the runtime error in
         // an error object so `error-object?`, `file-error?`, and
         // `read-error?` classify it.

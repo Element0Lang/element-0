@@ -544,7 +544,7 @@ pub const Interpreter = struct {
                 // No eval window yet (e.g. the stdlib load during init): nothing to limit.
                 const start = self.budget.start_ms orelse return;
                 const elapsed = currentTimeMs() - start;
-                if (elapsed >= @as(i64, @intCast(limit))) return core.ElzError.TimeLimitExceeded;
+                if (elapsed >= 0 and @as(u64, @intCast(elapsed)) >= limit) return core.ElzError.TimeLimitExceeded;
             }
         }
     }

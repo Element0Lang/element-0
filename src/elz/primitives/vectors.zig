@@ -148,11 +148,11 @@ fn rangeArgs(args: []const Value, from: usize, len: usize) ElzError!struct { sta
     var end: usize = len;
     if (args.len > from) {
         if (args[from] != .exact_integer or args[from].exact_integer < 0) return ElzError.InvalidArgument;
-        start = @intCast(args[from].exact_integer);
+        start = std.math.cast(usize, args[from].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.len > from + 1) {
         if (args[from + 1] != .exact_integer or args[from + 1].exact_integer < 0) return ElzError.InvalidArgument;
-        end = @intCast(args[from + 1].exact_integer);
+        end = std.math.cast(usize, args[from + 1].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (start > end or end > len) return ElzError.InvalidArgument;
     return .{ .start = start, .end = end };

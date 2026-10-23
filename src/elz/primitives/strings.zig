@@ -58,11 +58,11 @@ fn sliceByChars(str: []const u8, args: []const Value, from: usize) ElzError![]co
     var end_opt: ?usize = null;
     if (args.len > from) {
         if (args[from] != .exact_integer or args[from].exact_integer < 0) return ElzError.InvalidArgument;
-        start = @intCast(args[from].exact_integer);
+        start = std.math.cast(usize, args[from].exact_integer) orelse return ElzError.InvalidArgument;
     }
     if (args.len > from + 1) {
         if (args[from + 1] != .exact_integer or args[from + 1].exact_integer < 0) return ElzError.InvalidArgument;
-        end_opt = @intCast(args[from + 1].exact_integer);
+        end_opt = std.math.cast(usize, args[from + 1].exact_integer) orelse return ElzError.InvalidArgument;
         if (end_opt.? < start) return ElzError.InvalidArgument;
     }
 
@@ -348,7 +348,7 @@ pub fn char_to_integer(interp: *interpreter.Interpreter, _: *core.Environment, a
 pub fn integer_to_char(_: *interpreter.Interpreter, _: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
     const idx = try toIndex(args.items[0]);
-    if (idx > 0x10FFFF) return ElzError.InvalidArgument;
+    if (idx > 0x10FFFF or (idx >= 0xD800 and idx <= 0xDFFF)) return ElzError.InvalidArgument;
     return Value{ .character = @intCast(idx) };
 }
 
@@ -493,8 +493,8 @@ pub fn string_to_number(interp: *interpreter.Interpreter, env: *core.Environment
                 if (d <= 0) return Value{ .boolean = false };
                 return normalizeRationalValue(n, d, env.allocator);
             }
-            if (parser.parseIntegerStrict(str, radix)) |n| return Value{ .exact_integer = n };
-            return Value{ .boolean = false };
+            const v = parser.parseInteger(str, radix, env.allocator) catch return Value{ .boolean = false };
+            return v orelse Value{ .boolean = false };
         }
     }
 
@@ -553,6 +553,7 @@ pub fn string_from_chars(interp: *interpreter.Interpreter, env: *core.Environmen
     defer bytes.deinit(env.allocator);
     for (args.items) |arg| {
         if (arg != .character) return interp.fail(ElzError.InvalidArgument, "string: expected a character, got {s}", .{core.typeName(arg)});
+        if (arg.character > 0x10FFFF) return ElzError.InvalidArgument;
         const cp: u21 = @intCast(arg.character);
         if (!std.unicode.utf8ValidCodepoint(cp)) return ElzError.InvalidArgument;
         var buf: [4]u8 = undefined;
@@ -718,6 +719,7 @@ pub fn list_to_string(interp: *interpreter.Interpreter, env: *core.Environment, 
     while (node == .pair) {
         const c = node.pair.car;
         if (c != .character) return interp.fail(ElzError.InvalidArgument, "list->string: expected a character, got {s}", .{core.typeName(c)});
+        if (c.character > 0x10FFFF) return ElzError.InvalidArgument;
         const cp: u21 = @intCast(c.character);
         var buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(cp, &buf) catch return ElzError.InvalidArgument;
@@ -807,10 +809,8 @@ pub fn gensym(interp: *interpreter.Interpreter, env: *core.Environment, args: co
     } else "g";
 
     interp.runtime.gensym_counter += 1;
-    var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, interp.runtime.gensym_counter }) catch return ElzError.OutOfMemory;
-
-    return Value{ .symbol = try env.allocator.dupe(u8, formatted) };
+    const formatted = std.fmt.allocPrint(env.allocator, "{s}{d}", .{ prefix, interp.runtime.gensym_counter }) catch return ElzError.OutOfMemory;
+    return Value{ .symbol = formatted };
 }
 
 test "string primitives" {

@@ -58,9 +58,7 @@ pub fn time_to_components(interp: *interpreter.Interpreter, env: *core.Environme
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const ts_val = args.items[0];
-    if (ts_val != .number) return interp.fail(ElzError.InvalidArgument, "time->components: expected a number, got {s}", .{core.typeName(ts_val)});
-
-    const secs_f = ts_val.number;
+    const secs_f = ts_val.asFloat() orelse return interp.fail(ElzError.InvalidArgument, "time->components: expected a number, got {s}", .{core.typeName(ts_val)});
     // Reject values that do not fit the epoch representation before casting;
     // `@intFromFloat` on an out-of-range value is illegal behavior.
     if (!std.math.isFinite(secs_f) or secs_f < 0 or secs_f >= 1e17) return ElzError.InvalidArgument;
@@ -110,9 +108,7 @@ pub fn sleep_ms(interp: *interpreter.Interpreter, _: *core.Environment, args: co
     if (args.items.len != 1) return ElzError.WrongArgumentCount;
 
     const ms_val = args.items[0];
-    if (ms_val != .number) return interp.fail(ElzError.InvalidArgument, "sleep-ms: expected a number, got {s}", .{core.typeName(ms_val)});
-
-    const ms = ms_val.number;
+    const ms = ms_val.asFloat() orelse return interp.fail(ElzError.InvalidArgument, "sleep-ms: expected a number, got {s}", .{core.typeName(ms_val)});
     if (!std.math.isFinite(ms) or ms < 0 or @floor(ms) != ms) return ElzError.InvalidArgument;
     // Cap at about 292 years so the nanosecond count fits in u64.
     if (ms > 9.2e12) return ElzError.InvalidArgument;

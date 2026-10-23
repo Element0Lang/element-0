@@ -45,9 +45,12 @@ pub const Op = enum { add, sub, mul };
 
 /// Exact integer arithmetic on any mix of `exact_integer` and `bigint`.
 pub fn arith(alloc: std.mem.Allocator, op: Op, a: Value, b: Value) ElzError!Value {
-    const x = try fromValue(alloc, a);
-    const y = try fromValue(alloc, b);
+    var x = try fromValue(alloc, a);
+    defer x.deinit();
+    var y = try fromValue(alloc, b);
+    defer y.deinit();
     var r = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer r.deinit();
     switch (op) {
         .add => r.add(&x, &y) catch return ElzError.OutOfMemory,
         .sub => r.sub(&x, &y) catch return ElzError.OutOfMemory,
@@ -61,11 +64,15 @@ pub const DivResult = struct { q: Value, r: Value };
 
 /// Integer division; `b` must not be zero. Returns quotient and remainder.
 pub fn divide(alloc: std.mem.Allocator, mode: DivMode, a: Value, b: Value) ElzError!DivResult {
-    const x = try fromValue(alloc, a);
-    const y = try fromValue(alloc, b);
+    var x = try fromValue(alloc, a);
+    defer x.deinit();
+    var y = try fromValue(alloc, b);
+    defer y.deinit();
     if (y.eqlZero()) return ElzError.DivisionByZero;
     var q = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer q.deinit();
     var r = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer r.deinit();
     switch (mode) {
         .trunc => q.divTrunc(&r, &x, &y) catch return ElzError.OutOfMemory,
         .floor => q.divFloor(&r, &x, &y) catch return ElzError.OutOfMemory,
@@ -75,45 +82,56 @@ pub fn divide(alloc: std.mem.Allocator, mode: DivMode, a: Value, b: Value) ElzEr
 
 pub fn negate(alloc: std.mem.Allocator, a: Value) ElzError!Value {
     var x = try fromValue(alloc, a);
+    defer x.deinit();
     x.negate();
     return toValue(alloc, &x);
 }
 
 pub fn abs(alloc: std.mem.Allocator, a: Value) ElzError!Value {
     var x = try fromValue(alloc, a);
+    defer x.deinit();
     x.abs();
     return toValue(alloc, &x);
 }
 
 pub fn gcd(alloc: std.mem.Allocator, a: Value, b: Value) ElzError!Value {
     var x = try fromValue(alloc, a);
+    defer x.deinit();
     var y = try fromValue(alloc, b);
+    defer y.deinit();
     x.abs();
     y.abs();
     if (x.eqlZero()) return toValue(alloc, &y);
     if (y.eqlZero()) return toValue(alloc, &x);
     var r = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer r.deinit();
     r.gcd(&x, &y) catch return ElzError.OutOfMemory;
     return toValue(alloc, &r);
 }
 
 /// `base` to a non-negative integer power.
 pub fn pow(alloc: std.mem.Allocator, base: Value, exponent: u32) ElzError!Value {
-    const x = try fromValue(alloc, base);
+    var x = try fromValue(alloc, base);
+    defer x.deinit();
     var r = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer r.deinit();
     r.pow(&x, exponent) catch return ElzError.OutOfMemory;
     return toValue(alloc, &r);
 }
 
 /// Floor of the square root of a non-negative integer, and the remainder.
 pub fn sqrtRem(alloc: std.mem.Allocator, a: Value) ElzError!struct { s: Value, r: Value } {
-    const x = try fromValue(alloc, a);
+    var x = try fromValue(alloc, a);
+    defer x.deinit();
     if (!x.isPositive() and !x.eqlZero()) return ElzError.InvalidArgument;
     var s = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer s.deinit();
     s.sqrt(&x) catch return ElzError.OutOfMemory;
     var sq = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer sq.deinit();
     sq.mul(&s, &s) catch return ElzError.OutOfMemory;
     var rem = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer rem.deinit();
     rem.sub(&x, &sq) catch return ElzError.OutOfMemory;
     return .{ .s = try toValue(alloc, &s), .r = try toValue(alloc, &rem) };
 }
@@ -155,6 +173,19 @@ pub fn isOdd(b: *const core.BigInt) bool {
     return constOf(b).isOdd();
 }
 
+pub fn toI128(b: *const core.BigInt) ?i128 {
+    return constOf(b).toInt(i128) catch null;
+}
+
+pub fn fromI128(alloc: std.mem.Allocator, n: i128) ElzError!Value {
+    if (n >= std.math.minInt(i64) and n <= std.math.maxInt(i64)) {
+        return Value{ .exact_integer = @intCast(n) };
+    }
+    var m = Managed.initSet(alloc, n) catch return ElzError.OutOfMemory;
+    defer m.deinit();
+    return toValue(alloc, &m);
+}
+
 /// Converts a finite integral float to an exact integer value.
 pub fn fromIntegralFloat(alloc: std.mem.Allocator, f: f64) ElzError!Value {
     if (!std.math.isFinite(f) or @floor(f) != f) return ElzError.InvalidArgument;
@@ -164,22 +195,22 @@ pub fn fromIntegralFloat(alloc: std.mem.Allocator, f: f64) ElzError!Value {
     const mantissa: u64 = @intFromFloat(fr.significand * 9007199254740992.0); // 2^53
     const exponent: i32 = fr.exponent - 53;
     var m = Managed.initSet(alloc, mantissa) catch return ElzError.OutOfMemory;
+    defer m.deinit();
+    var shifted = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer shifted.deinit();
     if (exponent >= 0) {
-        var shifted = Managed.init(alloc) catch return ElzError.OutOfMemory;
         shifted.shiftLeft(&m, @intCast(exponent)) catch return ElzError.OutOfMemory;
-        m = shifted;
     } else {
-        var shifted = Managed.init(alloc) catch return ElzError.OutOfMemory;
         shifted.shiftRight(&m, @intCast(-exponent)) catch return ElzError.OutOfMemory;
-        m = shifted;
     }
-    if (f < 0) m.negate();
-    return toValue(alloc, &m);
+    if (f < 0) shifted.negate();
+    return toValue(alloc, &shifted);
 }
 
 /// Parses digits in `base` (with an optional sign) into an exact integer.
 pub fn parse(alloc: std.mem.Allocator, text: []const u8, base: u8) ElzError!Value {
     var m = Managed.init(alloc) catch return ElzError.OutOfMemory;
+    defer m.deinit();
     m.setString(base, text) catch return ElzError.InvalidArgument;
     return toValue(alloc, &m);
 }

@@ -36,26 +36,7 @@ fn absU64(x: i64) u64 {
 
 /// Normalizes a rational n/d to canonical form.
 pub fn normalizeRational(n: i64, d: i64, alloc: std.mem.Allocator) ElzError!Value {
-    if (d == 0) return ElzError.DivisionByZero;
-    // Determine sign and absolute values without overflow on i64.minInt
-    var num: i64 = n;
-    var den: i64 = d;
-    if (den < 0) {
-        // Negate. Skip overflow check: den != minInt because if it were, gcd math would also blow up; treat as Overflow.
-        if (den == std.math.minInt(i64) or num == std.math.minInt(i64)) return ElzError.Overflow;
-        num = -num;
-        den = -den;
-    }
-    const an = absU64(num);
-    const ad = absU64(den);
-    const g = gcdU64(an, ad);
-    const g_i: i64 = @intCast(g);
-    const rn = @divExact(num, g_i);
-    const rd = @divExact(den, g_i);
-    if (rd == 1) return Value{ .exact_integer = rn };
-    const rat = alloc.create(core.Rational) catch return ElzError.OutOfMemory;
-    rat.* = .{ .numerator = rn, .denominator = rd };
-    return Value{ .rational = rat };
+    return core.normalizeRational(n, d, alloc);
 }
 
 fn ratParts(v: Value) struct { n: i64, d: i64 } {
@@ -335,7 +316,12 @@ fn cmpBigFloat(big: Value, f: f64) ElzError!std.math.Order {
     if (approx < f) return .lt;
     if (approx > f) return .gt;
     // Equal as floats: the float is integral at this magnitude, so compare exactly.
-    const exact_f = bigint.fromIntegralFloat(std.heap.page_allocator, f) catch return .eq;
+    const alloc = std.heap.page_allocator;
+    const exact_f = bigint.fromIntegralFloat(alloc, f) catch return .eq;
+    defer if (exact_f == .bigint) {
+        alloc.free(exact_f.bigint.limbs);
+        alloc.destroy(exact_f.bigint);
+    };
     return bigint.order(big, exact_f);
 }
 
@@ -344,24 +330,37 @@ fn cmpExactFloat(exact: Value, f: f64) ElzError!std.math.Order {
     if (std.math.isNan(f)) return ElzError.InvalidArgument;
     if (std.math.isInf(f)) return if (f > 0) .lt else .gt;
     const p = ratParts(exact);
-    // The float is beyond any i64 magnitude: its sign decides.
-    if (f >= 9.3e18 or f <= -9.3e18) return if (f > 0) .lt else .gt;
-    // Compare p.n / p.d with f: scale f by the denominator first. The
-    // product stays representable when |f * d| < 2^53; beyond that the
-    // integer part alone decides, since |p.n| < 2^63 and d <= |p.n|.
-    const scaled = f * @as(f64, @floatFromInt(p.d));
-    if (@abs(scaled) < 9007199254740992.0) {
-        const whole: i64 = @intFromFloat(@floor(scaled));
-        const frac = scaled - @floor(scaled);
-        if (p.n < whole) return .lt;
-        if (p.n > whole) return .gt;
-        return if (frac > 0) .lt else .eq;
-    }
-    const whole: i128 = @intFromFloat(@floor(scaled));
-    const n: i128 = p.n;
-    if (n < whole) return .lt;
-    if (n > whole) return .gt;
-    return .eq;
+    if (f == 0) return std.math.order(p.n, 0);
+    if (p.n <= 0 and f > 0) return .lt;
+    if (p.n >= 0 and f < 0) return .gt;
+
+    // Both p.n and f have the same non-zero sign; compare magnitudes.
+    const fr = std.math.frexp(@abs(f));
+    const mantissa: u128 = @intFromFloat(fr.significand * 9007199254740992.0); // 2^53
+    const exp: i32 = fr.exponent - 53;
+    const lhs_mag: u128 = @abs(p.n);
+    const rhs_base: u128 = @as(u128, @intCast(p.d)) * mantissa;
+
+    const mag_order: std.math.Order = if (exp >= 0) blk: {
+        // Compare lhs_mag (<= 2^63) with rhs_base * 2^exp.
+        if (exp >= 64) break :blk .lt;
+        const shift: u7 = @intCast(exp);
+        if (shift > 0 and (rhs_base >> @intCast(64 - @as(u8, shift))) > 0) break :blk .lt;
+        break :blk std.math.order(lhs_mag, rhs_base << shift);
+    } else blk: {
+        // Compare lhs_mag * 2^(-exp) with rhs_base (< 2^116).
+        const neg_exp: u32 = @intCast(-exp);
+        if (neg_exp >= 116) break :blk .gt;
+        const shift: u7 = @intCast(neg_exp);
+        if (shift > 0 and (lhs_mag >> @intCast(116 - @as(u8, shift))) > 0) break :blk .gt;
+        break :blk std.math.order(lhs_mag << shift, rhs_base);
+    };
+
+    return if (p.n > 0) mag_order else switch (mag_order) {
+        .lt => .gt,
+        .gt => .lt,
+        .eq => .eq,
+    };
 }
 
 /// Chained n-ary comparison: true when every adjacent pair satisfies `ok`.
@@ -611,6 +610,7 @@ pub fn min(interp: *interpreter.Interpreter, _: *core.Environment, args: core.Va
 
 pub fn mod(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
     if (args.items.len != 2) return ElzError.WrongArgumentCount;
+    if (needsBigDiv(args)) return (try bigDiv(env.allocator, .floor, args)).r;
     const a = args.items[0];
     const b = args.items[1];
     if (a == .exact_integer and b == .exact_integer) {
@@ -620,7 +620,6 @@ pub fn mod(_: *interpreter.Interpreter, env: *core.Environment, args: core.Value
     const af = a.asFloat() orelse return ElzError.InvalidArgument;
     const bf = b.asFloat() orelse return ElzError.InvalidArgument;
     if (bf == 0) return ElzError.DivisionByZero;
-    _ = env;
     return Value{ .number = @mod(af, bf) };
 }
 
@@ -937,18 +936,44 @@ fn divResult(n: i64, inexact: bool) Value {
     return if (inexact) Value{ .number = @floatFromInt(n) } else Value{ .exact_integer = n };
 }
 
+fn isIntegralValue(v: Value) bool {
+    return switch (v) {
+        .exact_integer, .bigint => true,
+        .number => (integralToI64(v) catch null) != null,
+        else => false,
+    };
+}
+
+fn integralToExact(v: Value) ElzError!Value {
+    return switch (v) {
+        .exact_integer, .bigint => v,
+        .number => Value{ .exact_integer = try integralToI64(v) },
+        else => ElzError.InvalidArgument,
+    };
+}
+
 /// True when an integer division needs the big integer path: an operand is
 /// a big integer, or the one i64 case whose quotient does not fit.
 fn needsBigDiv(args: core.ValueList) bool {
     if (args.items.len != 2) return false;
     const a = args.items[0];
     const b = args.items[1];
-    if (a == .bigint or b == .bigint) return bigint.isInteger(a) and bigint.isInteger(b);
-    return a == .exact_integer and b == .exact_integer and a.exact_integer == std.math.minInt(i64) and b.exact_integer == -1;
+    if (!isIntegralValue(a) or !isIntegralValue(b)) return false;
+    if (a == .bigint or b == .bigint) return true;
+    const ai = integralToI64(a) catch return false;
+    const bi = integralToI64(b) catch return false;
+    return ai == std.math.minInt(i64) and bi == -1;
 }
 
 fn bigDiv(alloc: std.mem.Allocator, mode: bigint.DivMode, args: core.ValueList) ElzError!bigint.DivResult {
-    return bigint.divide(alloc, mode, args.items[0], args.items[1]);
+    const a = try integralToExact(args.items[0]);
+    const b = try integralToExact(args.items[1]);
+    var d = try bigint.divide(alloc, mode, a, b);
+    if (args.items[0] == .number or args.items[1] == .number) {
+        d.q = Value{ .number = toF64(d.q) };
+        d.r = Value{ .number = toF64(d.r) };
+    }
+    return d;
 }
 
 pub fn quotient(_: *interpreter.Interpreter, env: *core.Environment, args: core.ValueList, _: *u64) ElzError!Value {
@@ -975,7 +1000,7 @@ pub fn gcd_fn(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
     var inexact = false;
     for (args.items) |arg| {
         if (arg == .number) inexact = true;
-        const a: Value = if (arg == .bigint) arg else Value{ .exact_integer = try integralToI64(arg) };
+        const a = try integralToExact(arg);
         acc = try bigint.gcd(env.allocator, acc, a);
     }
     if (inexact) return Value{ .number = toF64(acc) };
@@ -988,7 +1013,7 @@ pub fn lcm_fn(_: *interpreter.Interpreter, env: *core.Environment, args: core.Va
     var inexact = false;
     for (args.items) |arg| {
         if (arg == .number) inexact = true;
-        const raw: Value = if (arg == .bigint) arg else Value{ .exact_integer = try integralToI64(arg) };
+        const raw = try integralToExact(arg);
         const a = try bigint.abs(env.allocator, raw);
         if (a == .exact_integer and a.exact_integer == 0) return divResult(0, inexact);
         const g = try bigint.gcd(env.allocator, acc, a);
@@ -1066,6 +1091,11 @@ fn dyadicFromFloat(x: f64) ElzError!Rat128 {
 fn ratFromValue(v: Value) ElzError!Rat128 {
     return switch (v) {
         .exact_integer => |i| .{ .n = i, .d = 1 },
+        .bigint => |b| blk: {
+            const n = bigint.toI128(b) orelse break :blk ElzError.Overflow;
+            if (n > RAT128_LIMIT or n < -RAT128_LIMIT) break :blk ElzError.Overflow;
+            break :blk .{ .n = n, .d = 1 };
+        },
         .rational => |r| .{ .n = r.numerator, .d = r.denominator },
         .number => |n| dyadicFromFloat(n),
         else => ElzError.InvalidArgument,
@@ -1075,6 +1105,9 @@ fn ratFromValue(v: Value) ElzError!Rat128 {
 fn ratToValue(r: Rat128, inexact: bool, alloc: std.mem.Allocator) ElzError!Value {
     if (inexact) {
         return Value{ .number = @as(f64, @floatFromInt(r.n)) / @as(f64, @floatFromInt(r.d)) };
+    }
+    if (r.d == 1) {
+        return bigint.fromI128(alloc, r.n);
     }
     if (r.n > std.math.maxInt(i64) or r.n < std.math.minInt(i64) or r.d > std.math.maxInt(i64)) {
         return ElzError.Overflow;
@@ -1089,6 +1122,8 @@ pub fn numerator_fn(_: *interpreter.Interpreter, _: *core.Environment, args: cor
         .exact_integer, .bigint => v,
         .rational => |r| Value{ .exact_integer = r.numerator },
         .number => |n| blk: {
+            if (std.math.isNan(n) or std.math.isInf(n)) break :blk ElzError.InvalidArgument;
+            if (@floor(n) == n) break :blk Value{ .number = n + 0.0 };
             const r = try dyadicFromFloat(n);
             break :blk Value{ .number = @floatFromInt(r.n) };
         },
@@ -1103,6 +1138,8 @@ pub fn denominator_fn(_: *interpreter.Interpreter, _: *core.Environment, args: c
         .exact_integer, .bigint => Value{ .exact_integer = 1 },
         .rational => |r| Value{ .exact_integer = r.denominator },
         .number => |n| blk: {
+            if (std.math.isNan(n) or std.math.isInf(n)) break :blk ElzError.InvalidArgument;
+            if (@floor(n) == n) break :blk Value{ .number = 1.0 };
             const r = try dyadicFromFloat(n);
             break :blk Value{ .number = @floatFromInt(r.d) };
         },
@@ -1267,7 +1304,7 @@ pub fn truncate_remainder(_: *interpreter.Interpreter, env: *core.Environment, a
 
 fn realToF64(v: Value) ElzError!f64 {
     return switch (v) {
-        .number, .exact_integer, .rational => toF64(v),
+        .number, .exact_integer, .bigint, .rational => toF64(v),
         else => ElzError.InvalidArgument,
     };
 }
@@ -1295,7 +1332,7 @@ pub fn real_part(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     const v = args.items[0];
     return switch (v) {
         .complex => |c| Value{ .number = c.real },
-        .number, .exact_integer, .rational => v,
+        .number, .exact_integer, .bigint, .rational => v,
         else => ElzError.InvalidArgument,
     };
 }
@@ -1305,7 +1342,7 @@ pub fn imag_part(_: *interpreter.Interpreter, _: *core.Environment, args: core.V
     const v = args.items[0];
     return switch (v) {
         .complex => |c| Value{ .number = c.imag },
-        .number, .exact_integer, .rational => Value{ .exact_integer = 0 },
+        .number, .exact_integer, .bigint, .rational => Value{ .exact_integer = 0 },
         else => ElzError.InvalidArgument,
     };
 }
@@ -1324,7 +1361,7 @@ pub fn angle(_: *interpreter.Interpreter, _: *core.Environment, args: core.Value
     const v = args.items[0];
     return switch (v) {
         .complex => |c| Value{ .number = std.math.atan2(c.imag, c.real) },
-        .number, .exact_integer, .rational => if (toF64(v) < 0)
+        .number, .exact_integer, .bigint, .rational => if (toF64(v) < 0)
             Value{ .number = std.math.pi }
         else
             Value{ .exact_integer = 0 },

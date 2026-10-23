@@ -323,27 +323,22 @@ pub const Rational = struct {
     }
 };
 
-fn gcd_abs(a: i64, b: i64) i64 {
-    var x: i64 = if (a < 0) -a else a;
-    var y: i64 = if (b < 0) -b else b;
-    while (y != 0) {
-        const t = y;
-        y = @rem(x, y);
-        x = t;
-    }
-    return x;
-}
-
 /// Normalizes a rational number (n/d) into canonical form and returns the
-/// appropriate Value: `.exact_integer` if denominator reduces to 1, else
-/// `.rational` (heap-allocated). Returns `ElzError.DivisionByZero` if d == 0.
+/// appropriate Value: `.exact_integer` (or `.bigint`) if denominator reduces
+/// to 1, else `.rational` (heap-allocated). Returns `ElzError.DivisionByZero`
+/// if d == 0.
 pub fn normalizeRational(n: i64, d: i64, allocator: std.mem.Allocator) ElzError!Value {
     if (d == 0) return ElzError.DivisionByZero;
-    const sign: i64 = if (d < 0) -1 else 1;
-    const g = gcd_abs(n, d);
-    const num = sign * @divTrunc(n, g);
-    const den = sign * @divTrunc(d, g);
-    if (den == 1) return Value{ .exact_integer = num };
+    const g: i128 = @intCast(std.math.gcd(@abs(n), @abs(d)));
+    const sign: i128 = if (d < 0) -1 else 1;
+    const num_128 = sign * @divExact(@as(i128, n), g);
+    const den_128 = sign * @divExact(@as(i128, d), g);
+    if (den_128 == 1) {
+        if (std.math.cast(i64, num_128)) |num| return Value{ .exact_integer = num };
+        return @import("bigint.zig").fromI128(allocator, num_128);
+    }
+    const num = std.math.cast(i64, num_128) orelse return ElzError.Overflow;
+    const den = std.math.cast(i64, den_128) orelse return ElzError.Overflow;
     const r = allocator.create(Rational) catch return ElzError.OutOfMemory;
     r.* = .{ .numerator = num, .denominator = den };
     return Value{ .rational = r };

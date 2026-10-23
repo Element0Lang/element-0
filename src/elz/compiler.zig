@@ -205,8 +205,8 @@ pub const Compiler = struct {
         return self.emit(Instruction.init_offset(op, 0));
     }
 
-    fn patchJump(self: *Compiler, idx: usize) void {
-        self.proto.patchJump(idx);
+    fn patchJump(self: *Compiler, idx: usize) ElzError!void {
+        return self.proto.patchJump(idx);
     }
 
     fn addConst(self: *Compiler, val: Value) !u16 {
@@ -438,6 +438,9 @@ pub const Compiler = struct {
     /// base name when that is not lexically bound at the definition scope.
     /// Null when the symbol is a lexically bound variable.
     fn keywordName(self: *Compiler, sym: []const u8) ElzError!?[]const u8 {
+        if (std.mem.eql(u8, sym, "%%set!%%") or std.mem.eql(u8, sym, "%%begin%%") or std.mem.eql(u8, sym, "%%if%%")) {
+            return sym[2 .. sym.len - 2];
+        }
         if ((try self.resolveVar(sym)) != .global) return null;
         if (self.aliasOf(sym)) |alias| {
             if (self.findScope(alias.def_scope_id)) |def| {
@@ -519,7 +522,10 @@ pub const Compiler = struct {
         if (minOperands(sym)) |min| try self.requireOperands(sym, args, min);
 
         if (std.mem.eql(u8, sym, "quote")) return self.compileQuote(args);
-        if (std.mem.eql(u8, sym, "quasiquote")) return self.compileQuasiquote(args.pair.car, env, fuel);
+        if (std.mem.eql(u8, sym, "quasiquote")) {
+            if (args.pair.cdr != .nil) return self.badForm("quasiquote");
+            return self.compileQuasiquote(args.pair.car, env, fuel);
+        }
         if (std.mem.eql(u8, sym, "if")) return self.compileIf(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "begin")) return self.compileBegin(args, env, tail, fuel);
         if (std.mem.eql(u8, sym, "define")) return self.compileDefine(args, env, fuel);
@@ -567,6 +573,7 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileQuote(self: *Compiler, args: Value) ElzError!void {
+        if (args.pair.cdr != .nil) return self.badForm("quote");
         const val = args.pair.car;
         const ci = try self.addConst(val);
         _ = try self.emitBx(.load_const, ci);
@@ -687,6 +694,7 @@ pub const Compiler = struct {
         const test_expr = args.pair.car;
         const then_expr = args.pair.cdr.pair.car;
         const has_else = args.pair.cdr.pair.cdr == .pair;
+        if (has_else and args.pair.cdr.pair.cdr.pair.cdr != .nil) return self.badForm("if");
         const else_expr: Value = if (has_else) args.pair.cdr.pair.cdr.pair.car else .unspecified;
 
         try self.compileExpr(test_expr, env, false, fuel);
@@ -695,9 +703,9 @@ pub const Compiler = struct {
         try self.compileExpr(then_expr, env, tail, fuel);
         const jmp = try self.emitJump(.jump);
 
-        self.patchJump(jif);
+        try self.patchJump(jif);
         try self.compileExpr(else_expr, env, tail, fuel);
-        self.patchJump(jmp);
+        try self.patchJump(jmp);
     }
 
     // -----------------------------------------------------------------------
@@ -731,6 +739,7 @@ pub const Compiler = struct {
 
         if (target == .symbol) {
             // (define name expr)
+            if (rest != .nil and rest.pair.cdr != .nil) return self.badForm("define");
             const name = target.symbol;
             const val_expr: Value = if (rest != .nil) rest.pair.car else .unspecified;
             try self.compileExpr(val_expr, env, false, fuel);
@@ -905,6 +914,7 @@ pub const Compiler = struct {
 
     fn compileDefineSyntax(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
         _ = fuel;
+        if (args.pair.cdr.pair.cdr != .nil) return self.badForm("define-syntax");
         const name = try self.requireSymbol("define-syntax", args.pair.car);
         const sr_expr = args.pair.cdr.pair.car;
 
@@ -919,6 +929,7 @@ pub const Compiler = struct {
     // -----------------------------------------------------------------------
 
     fn compileSet(self: *Compiler, args: Value, env: *core.Environment, fuel: *u64) ElzError!void {
+        if (args.pair.cdr.pair.cdr != .nil) return self.badForm("set!");
         const name = try self.requireSymbol("set!", args.pair.car);
         const val_expr = args.pair.cdr.pair.car;
 
@@ -983,7 +994,7 @@ pub const Compiler = struct {
         child.proto.local_count = @intCast(child.scope.locals.items.len);
 
         // Stash the child proto as a sub-proto of self.
-        const sub_idx: u16 = @intCast(self.proto.sub_protos.items.len);
+        const sub_idx = std.math.cast(u16, self.proto.sub_protos.items.len) orelse return ElzError.TooManyLocals;
         try self.proto.sub_protos.append(self.proto.allocator, child.proto);
         // Ownership transferred to sub_protos; don't let deinit free it.
         child.proto = try self.allocator.create(FuncProto);
@@ -1178,7 +1189,7 @@ pub const Compiler = struct {
             }
             child.proto.local_count = @intCast(child.scope.locals.items.len);
 
-            const sub_idx: u16 = @intCast(self.proto.sub_protos.items.len);
+            const sub_idx = std.math.cast(u16, self.proto.sub_protos.items.len) orelse return ElzError.TooManyLocals;
             try self.proto.sub_protos.append(self.proto.allocator, child.proto);
             child.proto = try self.allocator.create(FuncProto);
             child.proto.* = FuncProto.init(self.allocator, "<unreachable>");
@@ -1276,7 +1287,7 @@ pub const Compiler = struct {
         }
         wrapper.proto.local_count = @intCast(wrapper.scope.locals.items.len);
 
-        const sub_idx: u16 = @intCast(self.proto.sub_protos.items.len);
+        const sub_idx = std.math.cast(u16, self.proto.sub_protos.items.len) orelse return ElzError.TooManyLocals;
         try self.proto.sub_protos.append(self.proto.allocator, wrapper.proto);
         wrapper.proto = try self.allocator.create(FuncProto);
         wrapper.proto.* = FuncProto.init(self.allocator, "<unreachable>");
@@ -1332,7 +1343,7 @@ pub const Compiler = struct {
             var set_form: Value = .nil;
             set_form = try makePair(self.allocator, inits.items[i], set_form);
             set_form = try makePair(self.allocator, names.items[i], set_form);
-            set_form = try makePair(self.allocator, Value{ .symbol = "set!" }, set_form);
+            set_form = try makePair(self.allocator, Value{ .symbol = "%%set!%%" }, set_form);
             new_body = try makePair(self.allocator, set_form, new_body);
         }
 
@@ -1375,10 +1386,10 @@ pub const Compiler = struct {
         // Patch all short-circuit jumps to here.
         const jmp_past = try self.emitJump(.jump); // jump past #f emission
         for (jumps.items) |jidx| {
-            self.patchJump(jidx);
+            try self.patchJump(jidx);
         }
         _ = try self.emitOp(.load_false);
-        self.patchJump(jmp_past);
+        try self.patchJump(jmp_past);
     }
 
     fn compileOr(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
@@ -1399,13 +1410,13 @@ pub const Compiler = struct {
                 _ = try self.emitOp(.dup);
                 const jt = try self.emitJump(.jump_if_false); // jump over the jmp-to-end if false
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump)); // jump to end (truthy)
-                self.patchJump(jt); // false: fall through, pop dup
+                try self.patchJump(jt); // false: fall through, pop dup
                 _ = try self.emitOp(.pop);
             }
             cur = cur.pair.cdr;
         }
         for (jumps_to_end.items) |j| {
-            self.patchJump(j);
+            try self.patchJump(j);
         }
     }
 
@@ -1430,6 +1441,7 @@ pub const Compiler = struct {
 
             // else clause — compile body, break.
             if (try self.isKeyword(test_expr, "else")) {
+                if (!is_last) return self.badForm("cond");
                 found_else = true;
                 try self.compileBegin(clause_body, env, tail and is_last, fuel);
                 break;
@@ -1440,6 +1452,7 @@ pub const Compiler = struct {
             const arrow_not_bound = clause_body != .nil and try self.isKeyword(clause_body.pair.car, "=>");
             if (arrow_not_bound) {
                 const arrow_rest = try self.requirePair("cond", clause_body.pair.cdr);
+                if (arrow_rest.cdr != .nil) return self.badForm("cond");
                 const proc_expr = arrow_rest.car;
                 // Keep the test value on the stack (no temp local: a local slot
                 // allocated here is wrong when cond appears in argument position).
@@ -1449,9 +1462,9 @@ pub const Compiler = struct {
                 // Truthy: [test]; call proc with it.
                 try self.compileExpr(proc_expr, env, false, fuel);
                 _ = try self.emitOp(.swap);
-                _ = try self.emitA(.call, 1);
+                _ = try self.emitA(if (tail) .tail_call else .call, 1);
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
-                self.patchJump(jif);
+                try self.patchJump(jif);
                 // False: discard the test value.
                 _ = try self.emitOp(.pop);
                 continue;
@@ -1465,7 +1478,7 @@ pub const Compiler = struct {
                 const jif = try self.emitJump(.jump_if_false);
                 // Truthy: test value is on stack (the original, not the dup that was popped).
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
-                self.patchJump(jif);
+                try self.patchJump(jif);
                 // False path: pop the dup (test was false, test value still on stack).
                 _ = try self.emitOp(.pop);
             } else {
@@ -1473,7 +1486,7 @@ pub const Compiler = struct {
                 const jif = try self.emitJump(.jump_if_false);
                 try self.compileBegin(clause_body, env, tail and is_last, fuel);
                 try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
-                self.patchJump(jif);
+                try self.patchJump(jif);
             }
         }
 
@@ -1482,7 +1495,7 @@ pub const Compiler = struct {
         if (!found_else) _ = try self.emitOp(.load_unspecified);
 
         for (jumps_to_end.items) |j| {
-            self.patchJump(j);
+            try self.patchJump(j);
         }
     }
 
@@ -1518,6 +1531,7 @@ pub const Compiler = struct {
             const body = clause.cdr;
 
             if (try self.isKeyword(datums, "else")) {
+                if (!is_last) return self.badForm("case");
                 // Run else body (key on stack, consumed by the body helper), jump to end.
                 try self.compileCaseBody(body, env, tail and is_last, fuel);
                 // Jump to end (past the "no match" fallthrough code).
@@ -1559,7 +1573,7 @@ pub const Compiler = struct {
                 // bool was true → jump to body.
                 try jumps_to_body.append(self.allocator, try self.emitJump(.jump));
                 // Patch jif_skip to here (next datum or end of datum list).
-                self.patchJump(jif_skip);
+                try self.patchJump(jif_skip);
 
                 datum_cur = datum_cur.pair.cdr;
             }
@@ -1568,14 +1582,14 @@ pub const Compiler = struct {
 
             // Body entry: patch all jumps_to_body here.
             for (jumps_to_body.items) |j| {
-                self.patchJump(j);
+                try self.patchJump(j);
             }
             // Stack: [..., key], consumed by the body helper.
             try self.compileCaseBody(body, env, tail and is_last, fuel);
             try jumps_to_end.append(self.allocator, try self.emitJump(.jump));
 
             // Next clause entry.
-            self.patchJump(jmp_to_next_clause);
+            try self.patchJump(jmp_to_next_clause);
         }
 
         // No clause matched (and no else clause): pop key, push unspecified.
@@ -1583,7 +1597,7 @@ pub const Compiler = struct {
         _ = try self.emitOp(.load_unspecified);
 
         for (jumps_to_end.items) |j| {
-            self.patchJump(j);
+            try self.patchJump(j);
         }
     }
 
@@ -1661,11 +1675,11 @@ pub const Compiler = struct {
     /// body pops the key first; a `(=> proc)` body calls proc with the key.
     fn compileCaseBody(self: *Compiler, body: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
         if (body == .pair and try self.isKeyword(body.pair.car, "=>")) {
-            if (body.pair.cdr != .pair) return ElzError.InvalidArgument;
+            if (body.pair.cdr != .pair or body.pair.cdr.pair.cdr != .nil) return self.badForm("case");
             const proc_expr = body.pair.cdr.pair.car;
             try self.compileExpr(proc_expr, env, false, fuel);
             _ = try self.emitOp(.swap);
-            _ = try self.emitA(.call, 1);
+            _ = try self.emitA(if (tail) .tail_call else .call, 1);
             return;
         }
         _ = try self.emitOp(.pop);
@@ -1683,9 +1697,9 @@ pub const Compiler = struct {
         const jif = try self.emitJump(.jump_if_false);
         try self.compileBegin(body, env, tail, fuel);
         const jmp = try self.emitJump(.jump);
-        self.patchJump(jif);
+        try self.patchJump(jif);
         _ = try self.emitOp(.load_unspecified);
-        self.patchJump(jmp);
+        try self.patchJump(jmp);
     }
 
     fn compileUnless(self: *Compiler, args: Value, env: *core.Environment, tail: bool, fuel: *u64) ElzError!void {
@@ -1695,9 +1709,9 @@ pub const Compiler = struct {
         const jif = try self.emitJump(.jump_if_false);
         _ = try self.emitOp(.load_unspecified);
         const jmp = try self.emitJump(.jump);
-        self.patchJump(jif);
+        try self.patchJump(jif);
         try self.compileBegin(body, env, tail, fuel);
-        self.patchJump(jmp);
+        try self.patchJump(jmp);
     }
 
     // -----------------------------------------------------------------------
@@ -1784,7 +1798,7 @@ pub const Compiler = struct {
         }
         // Wrap in begin: (begin ...) — but compileBegin just iterates, so pass list directly.
         // Actually the if-false branch needs a single expression, so use begin.
-        const begin_sym = Value{ .symbol = "begin" };
+        const begin_sym = Value{ .symbol = "%%begin%%" };
         const false_branch = try makePair(self.allocator, begin_sym, loop_body);
 
         // Build the if test:
@@ -1797,7 +1811,7 @@ pub const Compiler = struct {
             break :blk begin_result;
         };
 
-        const if_sym = Value{ .symbol = "if" };
+        const if_sym = Value{ .symbol = "%%if%%" };
         var if_args = try makePair(self.allocator, false_branch, Value.nil);
         if_args = try makePair(self.allocator, true_branch, if_args);
         if_args = try makePair(self.allocator, test_expr, if_args);
