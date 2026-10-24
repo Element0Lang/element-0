@@ -87,4 +87,32 @@
 (test-case "roundtrip list"
   (equal? (json-deserialize (json-serialize '(1 2 3))) '(1 2 3)))
 
+(test-case "serialization rejects excessive nesting"
+  (let ((nested (let loop ((n 10000) (v 0))
+                  (if (= n 0) v (loop (- n 1) (vector v))))))
+    (try (json-serialize nested) #f (catch err #t))))
+
+(test-case "serialization accepts the nesting limit"
+  (let ((nested (let loop ((n 512) (v 0))
+                  (if (= n 0) v (loop (- n 1) (vector v))))))
+    (= (string-length (json-serialize nested)) 1025)))
+
+(test-case "deserialize rejects an unclosed array"
+  (try (json-deserialize "[") #f (catch err #t)))
+
+(test-case "deserialize rejects EOF after an array comma"
+  (try (json-deserialize "[1,") #f (catch err #t)))
+
+(test-case "deserialize rejects an unclosed object"
+  (try (json-deserialize "{") #f (catch err #t)))
+
+(test-case "deserialize rejects EOF after an object comma"
+  (try (json-deserialize "{\"a\":1,") #f (catch err #t)))
+
+(test-case "deserialize accepts an empty object"
+  (= (hash-map-count (json-deserialize "{}")) 0))
+
+(test-case "deserialize accepts a closed object"
+  (= (hash-map-ref (json-deserialize "{\"a\":1}") "a") 1))
+
 (report-summary)

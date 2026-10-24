@@ -3,6 +3,33 @@ const elz = @import("elz");
 
 const testing = std.testing;
 
+fn invoke_callback(callback: elz.ffi.ElzCallback) !elz.Value {
+    return callback.call(&.{});
+}
+
+test "FFI callbacks share the caller's fuel through direct and apply calls" {
+    var interp = try elz.Interpreter.init(.{});
+    defer interp.deinit();
+    try elz.define_foreign_func(interp.root_env, "invoke", invoke_callback);
+
+    for ([_][]const u8{
+        "(invoke (lambda () (let loop () (loop))))",
+        "(apply invoke (list (lambda () (let loop () (loop)))))",
+        "(invoke (lambda () (invoke (lambda () (let loop () (loop))))))",
+    }) |source| {
+        var fuel: u64 = 1000;
+        try testing.expectError(elz.ElzError.ExecutionBudgetExceeded, interp.evalString(source, &fuel));
+        try testing.expectEqual(@as(u64, 0), fuel);
+        try testing.expect(elz.ffi.active_interp == null);
+        try testing.expect(elz.ffi.active_fuel == null);
+        interp.last_error.clear();
+    }
+
+    var fuel: u64 = 1000;
+    const value = try interp.evalString("(invoke (lambda () 42))", &fuel);
+    try testing.expectEqual(@as(i64, 42), value.exact_integer);
+}
+
 // ---------------------------------------------------------------------------
 // Interpreter initialization and lifecycle
 // ---------------------------------------------------------------------------

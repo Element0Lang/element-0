@@ -46,10 +46,11 @@ fn writeJsonString(s: []const u8, w: *std.Io.Writer) !void {
 fn serializeValue(value: Value, w: *std.Io.Writer) !void {
     var path: PathSet = .empty;
     defer path.deinit(std.heap.page_allocator);
-    try serializeInner(value, w, &path);
+    try serializeInner(value, w, &path, 0);
 }
 
-fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
+fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet, depth: usize) !void {
+    if (depth > MAX_JSON_DEPTH) return error.OutOfMemory;
     const ptr_opt = containerPtr(value);
     if (ptr_opt) |ptr| {
         const entry = try path.getOrPut(std.heap.page_allocator, ptr);
@@ -91,7 +92,7 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
             while (current == .pair) {
                 if (!first) try w.writeByte(',');
                 first = false;
-                try serializeInner(current.pair.car, w, path);
+                try serializeInner(current.pair.car, w, path, depth + 1);
                 current = current.pair.cdr;
                 // A cdr cycle never reaches the end of the list.
                 if (current == .pair) {
@@ -104,7 +105,7 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
             // If improper list, serialize the cdr too
             if (current != .nil) {
                 if (!first) try w.writeByte(',');
-                try serializeInner(current, w, path);
+                try serializeInner(current, w, path, depth + 1);
             }
             try w.writeByte(']');
         },
@@ -112,7 +113,7 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
             try w.writeByte('[');
             for (v.items, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
-                try serializeInner(item, w, path);
+                try serializeInner(item, w, path, depth + 1);
             }
             try w.writeByte(']');
         },
@@ -126,7 +127,7 @@ fn serializeInner(value: Value, w: *std.Io.Writer, path: *PathSet) !void {
                 // Key is always a string in Element 0 hash maps
                 try writeJsonString(entry.key_ptr.*, w);
                 try w.writeByte(':');
-                try serializeInner(entry.value_ptr.*, w, path);
+                try serializeInner(entry.value_ptr.*, w, path, depth + 1);
             }
             try w.writeByte('}');
         },
@@ -213,7 +214,7 @@ fn parseHex4(json: []const u8, at: usize) !u16 {
     return std.fmt.parseInt(u16, json[at .. at + 4], 16) catch return error.OutOfMemory;
 }
 
-/// Deepest nesting of arrays and objects accepted, so hostile input cannot
+/// Deepest nesting of arrays and objects handled, so hostile input cannot
 /// exhaust the native stack.
 const MAX_JSON_DEPTH: usize = 512;
 
@@ -268,7 +269,7 @@ fn parseJsonValueDepth(json: []const u8, start: usize, allocator: std.mem.Alloca
                 return .{ .value = Value.nil, .pos = i + 1 };
             }
 
-            while (i < json.len) {
+            while (true) {
                 const elem = try parseJsonValueDepth(json, i, allocator, depth + 1);
                 try elements.append(allocator, elem.value);
                 i = skipWhitespace(json, elem.pos);
@@ -306,7 +307,7 @@ fn parseJsonValueDepth(json: []const u8, start: usize, allocator: std.mem.Alloca
                 return .{ .value = Value{ .hash_map = hm }, .pos = i + 1 };
             }
 
-            while (i < json.len) {
+            while (true) {
                 i = skipWhitespace(json, i);
                 const key = try parseJsonString(json, i, allocator);
                 i = skipWhitespace(json, key.pos);

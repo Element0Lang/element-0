@@ -11,6 +11,8 @@ const vm_mod = @import("vm.zig");
 /// Set by eval before each foreign procedure call so that ElzCallback can
 /// call back into the interpreter without requiring a separate parameter.
 pub threadlocal var active_interp: ?*interpreter.Interpreter = null;
+/// Fuel shared with callbacks during the current foreign call.
+pub threadlocal var active_fuel: ?*u64 = null;
 
 /// A wrapper around an Elz procedure value that can be called from Zig.
 /// This type enables passing Elz closures and procedures to host Zig code as callbacks.
@@ -28,8 +30,7 @@ pub const ElzCallback = struct {
         var arg_list = core.ValueList.init(interp.allocator);
         defer arg_list.deinit();
         for (args) |a| try arg_list.append(a);
-        var fuel: u64 = std.math.maxInt(u64);
-        return vm_mod.callProc(interp, self.proc, arg_list, &fuel);
+        return vm_mod.callProc(interp, self.proc, arg_list, active_fuel);
     }
 };
 
