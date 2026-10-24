@@ -225,6 +225,8 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
     var seen_content = false;
     var in_string = false;
     var in_bars = false;
+    var expect_datum = false;
+    var datum_start: usize = 0;
 
     while (true) {
         const c_opt = port.readChar() catch null;
@@ -265,7 +267,7 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
             continue;
         }
 
-        if (!seen_content) {
+        if (!seen_content or (depth == 0 and expect_datum)) {
             if (is_whitespace_byte(c)) continue;
             if (c == ';') {
                 while (true) {
@@ -308,12 +310,14 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
                 const cc = port.readChar() catch null;
                 if (cc == null or cc.? == '\n') break;
             }
-            if (depth == 0 and seen_content) break;
+            if (depth == 0 and seen_content and !expect_datum) break;
             continue;
         }
 
+        if (depth == 0 and expect_datum) datum_start = buf.items.len;
         try buf.append(allocator, c);
         seen_content = true;
+        expect_datum = false;
 
         if (c == '#') {
             const nx = port.peekChar() catch null;
@@ -369,19 +373,33 @@ fn slurp_one_datum(port: *core.Port, allocator: std.mem.Allocator) !?[]u8 {
             if (depth <= 0) break;
             continue;
         }
-        if (c == '\'' or c == '`') continue;
+        if (c == '\'' or c == '`') {
+            expect_datum = true;
+            continue;
+        }
         if (c == ',') {
             if ((port.peekChar() catch null) == @as(?u8, '@')) {
                 _ = port.readChar() catch null;
                 try buf.append(allocator, '@');
             }
+            expect_datum = true;
             continue;
         }
 
         if (depth == 0) {
+            const token = buf.items[datum_start..];
+            if (c == '=' and token.len >= 3 and token[0] == '#') {
+                const is_label = for (token[1 .. token.len - 1]) |digit| {
+                    if (!std.ascii.isDigit(digit)) break false;
+                } else true;
+                if (is_label) {
+                    expect_datum = true;
+                    continue;
+                }
+            }
             const peek_opt = port.peekChar() catch null;
             if (peek_opt == null) break;
-            if (peek_opt.? == '(' and (std.mem.eql(u8, buf.items, "#") or std.mem.eql(u8, buf.items, "#u8"))) {
+            if (peek_opt.? == '(' and (std.mem.eql(u8, token, "#") or std.mem.eql(u8, token, "#u8"))) {
                 continue;
             }
             if (is_atom_delimiter(peek_opt.?)) break;

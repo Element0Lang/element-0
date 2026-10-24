@@ -396,4 +396,32 @@
     (call/ec (lambda (k) (set! stale-k k) 42))
     (eq? (try (stale-k 99) (catch e 'caught)) 'caught)))
 
+(test-case "file read keeps the datum after a quote prefix"
+  (call-with-input-file "tests/fixtures/read-prefixes.scm"
+    (lambda (port) (equal? (read port) '(quote (a))))))
+
+(test-case "file read keeps the datum after a label prefix"
+  (call-with-input-file "tests/fixtures/read-prefixes.scm"
+    (lambda (port)
+      (read port)
+      (let ((datum (read port))) (eq? datum (cdr datum))))))
+
+(test-case "file read leaves the next datum available"
+  (call-with-input-file "tests/fixtures/read-prefixes.scm"
+    (lambda (port)
+      (read port)
+      (read port)
+      (= (read port) 99))))
+
+(test-case "file read handles vector prefixes and symbols containing a hash"
+  (call-with-input-file "tests/fixtures/read-prefixes.scm"
+    (lambda (port)
+      (read port)
+      (read port)
+      (read port)
+      (and (equal? (read port) '(quote #(1)))
+           (equal? (read port) #(2))
+           (eq? (read port) 'name#1=)
+           (equal? (read port) '(next))))))
+
 (report-summary)

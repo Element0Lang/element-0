@@ -135,6 +135,8 @@ fn apply_twice(cb: elz.ffi.ElzCallback, x: elz.Value) !elz.Value {
 }
 ```
 
+Callbacks share the calling evaluation's instruction budget. Fuel exhaustion and time limits propagate through foreign calls as `ExecutionBudgetExceeded` and `TimeLimitExceeded`.
+
 Scripts can also receive opaque Zig pointers (`Value.opaque_pointer`) and hand them back unchanged, which is how a host exposes handles to its own objects.
 
 ## Sandboxing

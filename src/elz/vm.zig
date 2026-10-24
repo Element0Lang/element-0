@@ -282,10 +282,15 @@ pub const VM = struct {
                 defer self.interp.gc_state.paused -= 1;
                 const ffi_mod = @import("ffi.zig");
                 const prev = ffi_mod.active_interp;
+                const prev_fuel = ffi_mod.active_fuel;
                 ffi_mod.active_interp = self.interp;
+                ffi_mod.active_fuel = self.fuel;
                 defer ffi_mod.active_interp = prev;
-                const result = ff(self.interp.root_env, args) catch |err|
-                    return self.interp.failWith(ElzError.ForeignFunctionError, @errorName(err));
+                defer ffi_mod.active_fuel = prev_fuel;
+                const result = ff(self.interp.root_env, args) catch |err| switch (err) {
+                    ElzError.ExecutionBudgetExceeded, ElzError.TimeLimitExceeded => return @errorCast(err),
+                    else => return self.interp.failWith(ElzError.ForeignFunctionError, @errorName(err)),
+                };
                 try self.push(result);
             },
             .continuation => |cont| {
@@ -1007,10 +1012,15 @@ pub fn callProc(interp: *@import("interpreter.zig").Interpreter, proc: Value, ar
         .foreign_procedure => |ff| {
             const ffi_mod = @import("ffi.zig");
             const prev = ffi_mod.active_interp;
+            const prev_fuel = ffi_mod.active_fuel;
             ffi_mod.active_interp = interp;
+            ffi_mod.active_fuel = fuel;
             defer ffi_mod.active_interp = prev;
-            return ff(interp.root_env, args) catch |err|
-                return interp.failWith(ElzError.ForeignFunctionError, @errorName(err));
+            defer ffi_mod.active_fuel = prev_fuel;
+            return ff(interp.root_env, args) catch |err| switch (err) {
+                ElzError.ExecutionBudgetExceeded, ElzError.TimeLimitExceeded => return @errorCast(err),
+                else => return interp.failWith(ElzError.ForeignFunctionError, @errorName(err)),
+            };
         },
         else => {},
     }

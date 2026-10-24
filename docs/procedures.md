@@ -92,6 +92,8 @@ Strings are UTF-8 and every index counts characters. Procedures that take `start
 
 File-backed ports need `enable_filesystem`.
 
+`read` accepts quote and datum label prefixes on file and string ports, including whitespace and comments before the following datum.
+
 ## Records
 
 `define-record-type` creates a constructor, a predicate, accessors, and modifiers. The underlying primitives `%make-record-type`, `%make-record`, `%record-of-type?`, `%record-ref`, and `%record-set!` are internal.
@@ -107,6 +109,8 @@ Keys are strings or symbols.
 `format` (directives `~a`, `~s`, `~%`, `~~`) `value->string`
 `json-serialize` `json-deserialize` (objects become hash maps, arrays become lists, `null` becomes the empty list)
 `regex-match?` `regex-search` `regex-replace` `regex-split`
+
+JSON parsing and serialization reject nesting deeper than 512 levels. Parsing requires a closing bracket or brace for every array or object.
 
 ## System (`enable_process`, `enable_filesystem`)
 
